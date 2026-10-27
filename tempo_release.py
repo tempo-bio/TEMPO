@@ -336,16 +336,21 @@ def probe_action(name):
                 widget.destroyed.connect(lambda: destroyed.append(True))
                 def close_dashboard():
                     try:
-                        widget.close()
+                        # Close guards may defer while a background outcome is
+                        # applied. Keep the event loop alive until they accept.
+                        if not widget.close():
+                            close_retry.start(10)
+                            return
                         disposal.update(dispose_closed_views(widget))
                     except BaseException as error:
                         shutdown_errors.append(str(error))
-                    finally:
-                        application.quit()
+                    application.quit()
+                close_retry = QTimer(application); close_retry.setSingleShot(True)
+                close_retry.timeout.connect(close_dashboard)
                 deadline = QTimer(application); deadline.setSingleShot(True)
                 deadline.timeout.connect(lambda: application.exit(1)); deadline.start(5000)
                 QTimer.singleShot(0,close_dashboard)
-                exit_code = application.exec(); deadline.stop()
+                exit_code = application.exec(); deadline.stop(); close_retry.stop()
                 if exit_code or shutdown_errors or not destroyed:
                     raise RuntimeError(f'Dashboard shutdown did not complete: {shutdown_errors}')
             result = {'platform':application.platformName(),'fonts':fonts,'dashboard_pages':pages,

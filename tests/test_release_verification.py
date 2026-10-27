@@ -1,5 +1,9 @@
 """Prevent the Windows packaging check from launching macOS GUI fixtures."""
 import json
+import os
+import platform
+import subprocess
+import sys
 from pathlib import Path
 import tempfile
 import unittest
@@ -10,7 +14,78 @@ import tempo_release
 from tempo_release import verify_installation
 
 
+def deferred_dashboard_probe(release_worker):
+    """Exercise the release probe in an isolated Qt process with real close guards."""
+    import threading
+    import time
+    from PyQt6 import sip
+    from PyQt6.QtCore import QTimer
+    from PyQt6.QtWidgets import QApplication
+    from tempo_tasks import dispose_closed_views, dispose_application
+    with patch('platform.machine',return_value='x86_64'):
+        import tempo_gui as gui
+    gate=threading.Event();entered=threading.Event();views=[];accepted=[];scheduled=[];close_started=[]
+    original=gui.TempoDashboard
+    class DeferredDashboard(original):
+        def __init__(self):
+            super().__init__();views.append(self)
+            controls=self.tab_capture.capture_controls
+            controls._profile_loaded=True
+            def work():
+                entered.set();gate.wait(10)
+            controls._async(work)
+            assert entered.wait(1)
+        def closeEvent(self,event):
+            if not close_started:close_started.append(time.monotonic())
+            super().closeEvent(event)
+            accepted.append(event.isAccepted())
+            if not event.isAccepted() and release_worker and not scheduled:
+                scheduled.append(True);QTimer.singleShot(100,gate.set)
+    try:
+        with patch.object(gui,'TempoDashboard',DeferredDashboard):
+            if release_worker:
+                result=tempo_release.probe_action('offscreen Qt startup and close')
+                assert result['application_disposed']
+                assert accepted[0] is False and accepted[-1] is True
+                assert QApplication.instance() is None
+            else:
+                try:tempo_release.probe_action('offscreen Qt startup and close')
+                except RuntimeError as error:assert 'shutdown did not complete' in str(error)
+                else:raise AssertionError('A pending worker must prevent certification.')
+                assert close_started and time.monotonic()-close_started[0]>=4.5
+    finally:
+        # The failure path must release its simulated worker before Qt teardown.
+        gate.set();application=QApplication.instance()
+        if application is not None:
+            for view in views:
+                if sip.isdeleted(view):continue
+                task=view.tab_capture.capture_controls._task
+                if task is not None:assert task.wait(2000)
+                for _ in range(20):application.processEvents()
+                assert not sip.isdeleted(view), 'Probe retry continued after the deadline.'
+                assert view.close();dispose_closed_views(view)
+            dispose_application(application)
+    print('DEFERRED DASHBOARD PROBE PASSED')
+
+
 class ReleaseVerificationTests(unittest.TestCase):
+    def run_deferred_dashboard(self,release_worker):
+        command=[sys.executable,'-X','utf8','-c',
+                 'from tests.test_release_verification import deferred_dashboard_probe; '
+                 f'deferred_dashboard_probe({release_worker!r})']
+        if sys.platform=='darwin':command=['arch','-'+platform.machine(),*command]
+        result=subprocess.run(command,cwd=Path(__file__).resolve().parents[1],
+                              env=dict(os.environ,QT_QPA_PLATFORM='offscreen',HF_HUB_OFFLINE='1'),
+                              text=True,encoding='utf-8',capture_output=True,timeout=40)
+        self.assertEqual(result.returncode,0,result.stdout+'\n'+result.stderr)
+        self.assertIn('DEFERRED DASHBOARD PROBE PASSED',result.stdout)
+
+    def test_dashboard_probe_waits_for_guarded_worker_before_disposal(self):
+        self.run_deferred_dashboard(True)
+
+    def test_dashboard_probe_keeps_deadline_when_worker_does_not_settle(self):
+        self.run_deferred_dashboard(False)
+
     def test_secure_credential_store_failure_prevents_windows_release_certification(self):
         def probe(name, destination):
             return dict(check=name, success=name != 'keyring', error='Native credential storage unavailable', details={})
