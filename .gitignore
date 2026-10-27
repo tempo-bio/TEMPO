@@ -1,0 +1,104 @@
+# Mac OS
+.DS_Store
+
+# Historical Colab notebooks are local artifacts. Keep the maintained trainer.
+notebooks/*.ipynb
+!notebooks/TEMPO_Colab_Trainer.ipynb
+
+# Local test files
+ArchTest*
+
+# Python Virtual Environments & Caches
+__pycache__/
+*.pyc
+.venv/
+/.venv
+.venv_x86/
+.venv_build/
+venv/
+.cache/
+.pytest_cache/
+.agent-artifacts/
+# Personal preferences from older source installations (migrated to user storage).
+config/tempo_preferences.json
+Output/
+build/
+dist/
+
+# TEMPO Raw & Processed Data
+Assays/
+annotation_recovery/
+pending_queue.json
+pending_queue.json.lock
+pending_queue.json.results.json
+pending_queue.json.results.json.lock
+pending_queue.json.active/
+
+# YOLO / Machine Learning Data & Models
+datasets/
+runs/
+TEMPO_Models/
+*.pt
+# Private bootstrap runtime and native StarDist champion
+.runtime/
+stardist_cardio.zip
+/stardist_nuclei.zip
+
+# Agent Audits, UI Screenshots & Remediation Logs
+docs/*-screens/
+docs/visual-audit/
+docs/*AUDIT*.md
+docs/*TRACKER*.md
+docs/*audit*.md
+docs/*tracker*.md
+docs/implementation_*_review.md
+docs/*REVIEW*.md
+docs/*VERIFICATION*.md
+docs/RECOVERY_*.md
+docs/recovery-live/
+docs/ACCOUNT_PAGE_REPAIR.md
+docs/GUI_FIX_LIST.md
+docs/GUI_RECOVERY_MAP.md
+docs/VISUAL_FOLLOWUP_RECONCILIATION.md
+docs/annotation_identity_repair.md
+docs/windows-release-failures.md
+
+# Local instructions and protocols for the current evaluation.
+/local_evaluations/
+/docs/MODEL_EVALUATION_GUI.md
+/docs/GUI_NUCLEAR_PILOT.md
+/docs/NUCLEAR_TRAINING_EXPERIMENT.md
+
+# Retired local experiments and development-session material.
+/FANTASY_FEATURES.md
+/README_INTEGRATION.md
+/SOFTWARE_AUDIT.md
+/TWO_TIER_AI_AND_AMPLITUDE_STRATEGY.md
+/ZERO_DISK_SINGLE_CELL_ARCHITECTURE.md
+/MUSCLEMOTION v1.0.ijm
+/refactor_to_seg.py
+/test_arch.sh
+/test_argv.py
+/test_relaunch.py
+/convert_for_fiji.py
+/generate_calibration_video.py
+/generate_realistic_calibration.py
+/generate_synthetic_master.py
+/synthetic_cell_engine.py
+/vk_validation.py
+/notebooks/build_colab_notebooks.py
+/tests/account_security_preview.py
+/tests/gui_repair_preview.py
+/tests/presentation_preview.py
+/scripts/prepare_independent_collaboration.py
+/scripts/verify_recovery_cloud.py
+
+# Credentials and local environment files.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Retired personal crop experiment; local copy retained.
+/crop_engine.py

@@ -1,0 +1,25 @@
+name: Repository privacy and file checks
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check-repository:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out proposed files
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.13.16'
+      - name: Install checksum-pinned secret scanner
+        run: python -m scripts.check_repository --install-scanner "$RUNNER_TEMP/tempo-security"
+      - name: Check intended commit and secret fixtures
+        run: python -m scripts.check_repository --staged --scanner "$RUNNER_TEMP/tempo-security/gitleaks"

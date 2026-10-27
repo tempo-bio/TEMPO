@@ -1,0 +1,12 @@
+{
+    "python.defaultInterpreterPath": "${workspaceFolder}/.venv_x86/bin/python",
+    "python.analysis.ignore": [
+        "**/*.ipynb"
+    ],
+    "python.analysis.typeCheckingMode": "off",
+    "python.pyrefly.typeCheckingMode": "off",
+    "python.analysis.extraPaths": [
+        "${workspaceFolder}"
+    ]
+}
+

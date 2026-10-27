@@ -1,0 +1,13 @@
+# Keep training source bundles identical across Windows and macOS checkouts.
+*.py text eol=lf
+*.ipynb text eol=lf
+requirements*.txt text eol=lf
+requirements-windows.lock text eol=lf
+installer/dependency-sources.json text eol=lf
+
+# Upstream notices are checksum-verified as original bytes.
+assets/licenses/** -text
+/LICENSE -text
+
+# Archived repair fixtures must retain their registered source hashes.
+tests/fixtures/legacy_training/*.txt -text

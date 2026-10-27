@@ -1,0 +1,291 @@
+name: Build & Package Windows Release
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  QT_QPA_PLATFORM: offscreen
+  MPLBACKEND: Agg
+  PYTHONUNBUFFERED: '1'
+  PYTHONUTF8: '1'
+  PYTHONIOENCODING: 'utf-8:backslashreplace'
+  HF_HUB_DISABLE_PROGRESS_BARS: '1'
+  QT_API: pyqt6
+  YOLO_AUTOINSTALL: 'false'
+
+jobs:
+  build-windows:
+    name: Test and build Windows payload
+    runs-on: windows-2025
+    timeout-minutes: 180
+    outputs:
+      installer: ${{ steps.installer.outcome }}
+    steps:
+      - name: Check out tested revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Python 3.13.16 x64 without dependency caches
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.13.16'
+          architecture: x64
+      - name: Install checksummed Windows wheels
+        id: runtime
+        timeout-minutes: 12
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force Output | Out-Null
+          python -m venv .venv_build
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & .\.venv_build\Scripts\python.exe -m pip install --no-cache-dir --no-deps --require-hashes -r requirements-windows.lock 2>&1 | Tee-Object Output/runtime-install.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & .\.venv_build\Scripts\python.exe -m scripts.windows_native_bundle 2>&1 | Tee-Object Output/native-environment.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & .\.venv_build\Scripts\python.exe -m pip check 2>&1 | Tee-Object Output/pip-check.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & .\.venv_build\Scripts\python.exe -m scripts.windows_release_checks provenance --output Output
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Check repository privacy and file boundaries
+        id: repository_checks
+        if: ${{ !cancelled() && steps.runtime.outcome == 'success' }}
+        timeout-minutes: 6
+        run: |
+          & .\.venv_build\Scripts\python.exe -m scripts.check_repository --install-scanner "$env:RUNNER_TEMP\tempo-security"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & .\.venv_build\Scripts\python.exe -m scripts.check_repository --staged --scanner "$env:RUNNER_TEMP\tempo-security\gitleaks.exe" --report Output/repository-privacy.json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Regenerate Colab notebook from the tested revision
+        id: notebook
+        if: ${{ !cancelled() && steps.runtime.outcome == 'success' }}
+        timeout-minutes: 2
+        run: |
+          & .\.venv_build\Scripts\python.exe -m scripts.windows_release_checks run --log Output/colab-notebook.log --timeout 60 -- .\.venv_build\Scripts\python.exe -m notebooks.build_staged_colab_notebook
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Retain generated Colab notebook
+        id: notebook_artifact
+        if: ${{ !cancelled() && steps.notebook.outcome == 'success' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: TEMPO_Colab_Trainer
+          retention-days: 7
+          path: notebooks/TEMPO_Colab_Trainer.ipynb
+          if-no-files-found: error
+      - name: Run complete regression and scientific suites
+        id: regressions
+        if: ${{ !cancelled() && steps.runtime.outcome == 'success' && steps.notebook.outcome == 'success' }}
+        timeout-minutes: 22
+        run: |
+          & .\.venv_build\Scripts\python.exe -m scripts.windows_release_checks regressions --output Output
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Retain test evidence before remaining diagnostics
+        id: test_evidence
+        if: ${{ !cancelled() && steps.runtime.outcome == 'success' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: Windows_test_evidence
+          retention-days: 3
+          path: |
+            Output/regressions.log
+            Output/*results.json
+            Output/test-fonts.json
+          if-no-files-found: error
+      - name: Run installer failure injections
+        id: installer_tests
+        if: ${{ !cancelled() && steps.runtime.outcome == 'success' }}
+        run: ./scripts/test_windows_installer.ps1
+      - name: Render isolated Windows fixtures
+        id: presentation
+        if: ${{ !cancelled() && steps.runtime.outcome == 'success' }}
+        timeout-minutes: 12
+        run: |
+          $failed = $false
+          foreach ($profile in @(@{name='ordinary';scale='1';font='10'},@{name='scaled';scale='1.5';font='14'},@{name='large';scale='2';font='24'})) {
+            $env:QT_SCALE_FACTOR=$profile.scale
+            & .\.venv_build\Scripts\python.exe -m scripts.windows_release_checks run --log "Output/screens-$($profile.name).log" --timeout 180 -- .\.venv_build\Scripts\python.exe -m scripts.render_ui_screens --output "Output/screens/$($profile.name)" --font-size $profile.font
+            if ($LASTEXITCODE -ne 0) { $failed = $true }
+          }
+          if ($failed) { exit 1 }
+      - name: Verify source runtime
+        id: source
+        if: ${{ !cancelled() && steps.runtime.outcome == 'success' }}
+        timeout-minutes: 16
+        run: |
+          & .\.venv_build\Scripts\python.exe -m scripts.windows_release_checks run --log Output/source-verification.log --timeout 900 -- .\.venv_build\Scripts\python.exe tempo_gui.py --verify-installation Output/source-verification.json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Retain prebuild diagnostics immediately
+        id: prebuild_evidence
+        if: ${{ !cancelled() && steps.runtime.outcome == 'success' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: Windows_prebuild_evidence
+          retention-days: 3
+          path: |
+            Output/**/*.json
+            Output/**/*.log
+            Output/**/*.png
+            Output/*.txt
+          if-no-files-found: error
+      - name: Build actual executable
+        id: portable
+        if: ${{ !cancelled() && steps.runtime.outcome == 'success' }}
+        timeout-minutes: 46
+        run: |
+          & .\.venv_build\Scripts\python.exe -m scripts.windows_release_checks run --log Output/pyinstaller.log --timeout 2700 -- .\.venv_build\Scripts\python.exe -m scripts.windows_packager tempo.spec --clean --noconfirm
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Check packaged application file boundaries
+        id: payload_privacy
+        if: ${{ !cancelled() && steps.portable.outcome == 'success' }}
+        timeout-minutes: 4
+        run: |
+          & .\.venv_build\Scripts\python.exe -m scripts.check_repository --payload dist/TEMPO --report Output/payload-privacy.json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Verify version-matched dependency source index
+        id: dependency_sources
+        if: ${{ !cancelled() && steps.portable.outcome == 'success' }}
+        timeout-minutes: 2
+        run: |
+          & .\.venv_build\Scripts\python.exe -m scripts.prepare_dependency_sources --inventory Output/third-party-licenses/index.json --output Output/dependency-sources
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Verify actual portable executable
+        id: portable_check
+        if: ${{ !cancelled() && steps.portable.outcome == 'success' }}
+        timeout-minutes: 16
+        run: |
+          & .\.venv_build\Scripts\python.exe -m scripts.windows_release_checks verify --executable dist/TEMPO/TEMPO.exe --report Output/portable-verification.json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Retain bundle diagnostics before installer compilation
+        id: bundle_evidence
+        if: ${{ !cancelled() && steps.runtime.outcome == 'success' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: Windows_bundle_evidence
+          retention-days: 3
+          path: |
+            Output/**/*.json
+            Output/**/*.log
+            build/TEMPO/warn-TEMPO.txt
+          if-no-files-found: error
+      - name: Install checksummed Inno Setup 7.1.0 x64
+        id: inno
+        if: ${{ !cancelled() && steps.portable.outcome == 'success' }}
+        run: |
+          $compilerInstaller = Join-Path $env:RUNNER_TEMP 'innosetup-7.1.0-x64.exe'
+          Invoke-WebRequest 'https://github.com/jrsoftware/issrc/releases/download/is-7_1_0/innosetup-7.1.0-x64.exe' -OutFile $compilerInstaller
+          if ((Get-FileHash $compilerInstaller -Algorithm SHA256).Hash.ToLower() -ne '0362a383ed217d4c4239b5933866dd96d3eb2102737da92f80f6057a4b40df2f') { throw 'Compiler checksum mismatch' }
+          $process = Start-Process $compilerInstaller -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/SP-' -PassThru
+          if (-not $process.WaitForExit(180000)) { Stop-Process -Id $process.Id -Force; throw 'Compiler installation timed out' }
+          if ($process.ExitCode -ne 0) { throw "Compiler installation failed: $($process.ExitCode)" }
+          'C:\Program Files\Inno Setup 7' >> $env:GITHUB_PATH
+      - name: Compile installer and identify payload
+        id: installer
+        if: ${{ !cancelled() && steps.portable.outcome == 'success' && steps.inno.outcome == 'success' }}
+        timeout-minutes: 16
+        run: |
+          & .\.venv_build\Scripts\python.exe -m scripts.windows_release_checks run --log Output/inno-setup.log --timeout 900 -- iscc installer/tempo_setup.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $hash = (Get-FileHash Output/TEMPO_Setup_v1.0.0.exe -Algorithm SHA256).Hash.ToLower()
+          "$hash  TEMPO_Setup_v1.0.0.exe" | Set-Content Output/SHA256SUMS.txt -Encoding utf8NoBOM
+          Copy-Item scripts/verify_windows_install.ps1,scripts/windows_installer_helpers.ps1 Output
+      - name: Transfer installer even if an independent diagnostic failed
+        id: payload
+        if: ${{ !cancelled() && steps.installer.outcome == 'success' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: Windows_install_payload
+          retention-days: 3
+          compression-level: 0
+          path: |
+            Output/TEMPO_Setup_v1.0.0.exe
+            Output/SHA256SUMS.txt
+            Output/verification-contract.json
+            Output/build-provenance.json
+            Output/verify_windows_install.ps1
+            Output/windows_installer_helpers.ps1
+            Output/dependency-sources/dependency-sources.json
+            Output/dependency-sources/DEPENDENCY_SOURCES.md
+            Output/dependency-sources/SHA256SUMS.txt
+            Output/dependency-sources/source-verification.json
+          if-no-files-found: error
+      - name: Aggregate required build gates
+        id: build_gates
+        if: ${{ always() }}
+        env:
+          GATE_OUTCOMES: ${{ toJSON(steps) }}
+        run: |
+          & .\.venv_build\Scripts\python.exe -m scripts.windows_gates --output Output/build-gates.json runtime repository_checks notebook notebook_artifact regressions test_evidence installer_tests presentation source prebuild_evidence portable payload_privacy dependency_sources portable_check bundle_evidence inno installer payload
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Retain all build evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: Windows_build_evidence
+          retention-days: 7
+          path: |
+            Output/**/*.json
+            Output/**/*.log
+            Output/**/*.png
+            Output/*.txt
+            build/**/warn-*.txt
+            build/**/xref-*.html
+          if-no-files-found: error
+
+  verify-installed:
+    name: Verify installer on a fresh Windows runner
+    needs: build-windows
+    if: ${{ !cancelled() && needs.build-windows.outputs.installer == 'success' }}
+    runs-on: windows-2025
+    timeout-minutes: 30
+    steps:
+      # Deliberately no source checkout, setup-python, or runtime installation.
+      - name: Download the exact built payload
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: Windows_install_payload
+          path: payload
+      - name: Install in a path containing spaces
+        id: install
+        run: ./payload/verify_windows_install.ps1 -Mode install -Payload payload -Evidence evidence -Target "$env:RUNNER_TEMP\TEMPO installed verification"
+      - name: Verify offline installed application with isolated environment
+        id: verify
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        timeout-minutes: 16
+        run: ./payload/verify_windows_install.ps1 -Mode verify -Payload payload -Evidence evidence -Target "$env:RUNNER_TEMP\TEMPO installed verification"
+      - name: Remove application even after verification failure
+        id: uninstall
+        if: ${{ !cancelled() && steps.install.outcome != 'skipped' }}
+        run: ./payload/verify_windows_install.ps1 -Mode uninstall -Payload payload -Evidence evidence -Target "$env:RUNNER_TEMP\TEMPO installed verification"
+      - name: Aggregate installation gates
+        if: ${{ always() }}
+        env:
+          GATE_OUTCOMES: ${{ toJSON(steps) }}
+        run: |
+          New-Item -ItemType Directory -Force evidence | Out-Null
+          $steps = $env:GATE_OUTCOMES | ConvertFrom-Json
+          $gates = @{}
+          foreach ($name in @('install','verify','uninstall')) { $gates[$name]=$steps.$name.outcome }
+          $gates | ConvertTo-Json | Set-Content evidence/installation-gates.json -Encoding utf8NoBOM
+          if (@($gates.Values | Where-Object { $_ -ne 'success' }).Count) { throw 'Required installation gates did not pass' }
+      - name: Retain fresh-runner evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: Windows_install_evidence
+          retention-days: 7
+          path: evidence/**
+          if-no-files-found: error
+
+  certify:
+    name: Certify every required Windows gate
+    needs: [build-windows, verify-installed]
+    if: ${{ always() }}
+    runs-on: windows-2025
+    steps:
+      - name: Require complete build and clean installation success
+        env:
+          BUILD_RESULT: ${{ needs.build-windows.result }}
+          INSTALL_RESULT: ${{ needs.verify-installed.result }}
+        run: |
+          if ($env:BUILD_RESULT -ne 'success' -or $env:INSTALL_RESULT -ne 'success') { throw 'Windows certification failed or required checks were skipped' }
+          "Certified revision: $env:GITHUB_SHA" >> $env:GITHUB_STEP_SUMMARY

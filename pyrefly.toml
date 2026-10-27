@@ -1,0 +1,6 @@
+preset = "off"
+python-interpreter-path = ".venv_x86/bin/python"
+search-path = ["."]
+
+[errors]
+missing-import = "error"

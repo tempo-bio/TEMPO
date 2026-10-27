@@ -1,0 +1,107 @@
+"""Centroid scouting with partial supervision inside unresolved groups."""
+import json
+from pathlib import Path
+import cv2
+import numpy as np
+import torch
+from ultralytics.data.dataset import YOLODataset
+from ultralytics.models.yolo.detect import DetectionTrainer
+from ultralytics.nn.tasks import DetectionModel
+from ultralytics.utils.loss import v8DetectionLoss, E2ELoss
+from ultralytics.utils.tal import make_anchors
+
+
+def classification_weights(target, inside):
+    weights = torch.ones_like(target)
+    weights[..., :2] = (~inside[..., None] | (target[..., :2] > 0)).to(target.dtype)
+    return weights
+
+
+class ScoutLoss(v8DetectionLoss):
+    def get_assigned_targets_and_loss(self, preds, batch):
+        anchors, strides = make_anchors(preds['feats'], self.stride, .5)
+        points = anchors * strides
+        masks = batch.get('unknown_cells')
+        if masks is None:
+            return super().get_assigned_targets_and_loss(preds, batch)
+        masks = masks.to(self.device)
+        yy = points[:, 1].long().clamp(0, masks.shape[-2] - 1)
+        xx = points[:, 0].long().clamp(0, masks.shape[-1] - 1)
+        inside = masks[:, yy, xx].bool()
+        original = self.bce
+        # Scope the reduction mask to this branch and call. Positive labels win.
+        self.bce = lambda scores, target: original(scores, target) * classification_weights(target, inside)
+        try:
+            return super().get_assigned_targets_and_loss(preds, batch)
+        finally:
+            self.bce = original
+
+
+class ScoutModel(DetectionModel):
+    def init_criterion(self):
+        return E2ELoss(self, loss_fn=ScoutLoss) if self.end2end else ScoutLoss(self)
+
+
+class ScoutDataset(YOLODataset):
+    @staticmethod
+    def collate_fn(batch):
+        result = YOLODataset.collate_fn(batch)
+        result['unknown_cells'] = torch.stack([sample['unknown_cells'] for sample in batch])
+        return result
+
+    def __getitem__(self, index):
+        sample = super().__getitem__(index)
+        height, width = sample['img'].shape[-2:]
+        source = Path(sample['im_file'])
+        sidecar = source.parents[2] / 'unknown' / source.parent.name / (source.stem + '.json')
+        if not sidecar.is_file():
+            raise ValueError('Rebuild scout data: unknown-region supervision is missing.')
+        record = json.loads(sidecar.read_text())
+        oh, ow = record['shape']
+        gain = min(width / ow, height / oh)
+        # Match Ultralytics letterbox integer rounding.
+        left = round((width - round(ow * gain)) / 2 - .1)
+        top = round((height - round(oh * gain)) / 2 - .1)
+        mask = np.zeros((height, width), np.uint8)
+        for polygon in record['groups']:
+            points = np.rint(np.asarray(polygon) * [ow - 1, oh - 1] * gain + [left, top]).astype(np.int32)
+            cv2.fillPoly(mask, [points], 1)
+        if self.augment:
+            # The native geometry is disabled; these transformations move all targets together.
+            if np.random.random() < .5:
+                sample['img'] = sample['img'].flip(-1)
+                sample['bboxes'][:, 0] = 1 - sample['bboxes'][:, 0]
+                mask = np.fliplr(mask)
+            if np.random.random() < .5:
+                sample['img'] = sample['img'].flip(-2)
+                sample['bboxes'][:, 1] = 1 - sample['bboxes'][:, 1]
+                mask = np.flipud(mask)
+            turns = int(np.random.randint(4)) if height == width else 0
+            for _ in range(turns):
+                sample['img'] = sample['img'].rot90(1, (-2, -1))
+                old = sample['bboxes'].clone()
+                sample['bboxes'][:, 0] = old[:, 1]
+                sample['bboxes'][:, 1] = 1 - old[:, 0]
+                sample['bboxes'][:, 2] = old[:, 3]
+                sample['bboxes'][:, 3] = old[:, 2]
+                mask = np.rot90(mask)
+        sample['unknown_cells'] = torch.from_numpy(mask.copy())
+        return sample
+
+
+class CentroidDetectionTrainer(DetectionTrainer):
+    def get_model(self, cfg=None, weights=None, verbose=True):
+        model = ScoutModel(cfg, nc=self.data['nc'], ch=self.data['channels'], verbose=verbose)
+        if weights:
+            model.load(weights)
+        return model
+
+    def build_dataset(self, img_path, mode='train', batch=None):
+        if mode != 'train':
+            return super().build_dataset(img_path, mode, batch)
+        for key in ('mosaic', 'mixup', 'cutmix', 'copy_paste', 'degrees', 'translate', 'scale',
+                    'shear', 'perspective', 'fliplr', 'flipud', 'hsv_h', 'hsv_s', 'hsv_v'):
+            setattr(self.args, key, 0.)
+        return ScoutDataset(img_path=img_path, imgsz=self.args.imgsz, batch_size=batch,
+                            augment=True, hyp=self.args, rect=False, cache=False, single_cls=False,
+                            stride=32, pad=0., prefix='scout: ', task='detect', data=self.data)

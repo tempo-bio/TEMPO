@@ -1,0 +1,13 @@
+[tool.pyrefly]
+preset = "off"
+python-interpreter-path = ".venv_x86/bin/python"
+search-path = ["."]
+
+[tool.pyrefly.errors]
+missing-import = "error"
+
+[tool.pyright]
+typeCheckingMode = "off"
+venvPath = "."
+venv = ".venv_x86"
+extraPaths = ["."]

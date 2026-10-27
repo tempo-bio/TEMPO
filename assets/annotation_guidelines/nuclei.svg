@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="250" viewBox="0 0 1000 250">
+<defs><pattern id="stripes" width="14" height="14" patternUnits="userSpaceOnUse"><path d="M5 0V14" stroke="#9ba9b6" stroke-width="2"/></pattern></defs>
+<rect width="1000" height="250" fill="#171e27"/>
+<text x="28" y="34" fill="#eef2f6" font-family="sans-serif" font-size="23">Several nuclei can belong to one cell</text>
+<path d="M55 93L101 79L148 83L195 76L375 85L437 100L428 159L390 174L200 167L142 174L58 157Z" fill="url(#stripes)" stroke="#7ce4ba" stroke-width="5"/>
+<g fill="#584367" stroke="#BA83F3" stroke-width="3"><ellipse cx="158" cy="125" rx="24" ry="16"/><ellipse cx="254" cy="125" rx="24" ry="16"/><ellipse cx="350" cy="125" rx="24" ry="16"/></g>
+<g fill="#eef2f6" font-family="sans-serif" font-size="23"><text x="500" y="100">Keep one complete cell outline.</text><text x="500" y="140">Outline visible nuclei in purple.</text><text x="500" y="180">Leave uncertain nuclei unmarked.</text></g>
+<text x="28" y="228" fill="#aebac7" font-family="sans-serif" font-size="18">Diagram · Nuclear annotations never determine the cell count.</text></svg>

@@ -1,0 +1,13 @@
+PyQt6>=6.0.0
+qtpy>=2.4.0
+opencv-python>=4.5.0
+matplotlib>=3.3.0
+pandas>=1.2.0
+numpy>=1.20.0
+pyqtgraph>=0.13.0
+scipy>=1.6.0
+tifffile>=2024.8.30
+huggingface_hub>=1.8.0
+certifi
+keyring==25.7.0
+pyserial==3.5

@@ -1,0 +1,23 @@
+# Native model runtimes; supports Python 3.12-3.13 for the complete training stack.
+torch>=2.6
+ultralytics>=8.4
+stardist>=0.9.1
+csbdeep>=0.8
+tensorflow>=2.16
+tensorboard>=2.16
+cellpose>=4.2
+
+# CPDINO backbone. Python 3.11+; immutable upstream source revision.
+dinov3 @ https://github.com/facebookresearch/dinov3/archive/6876159a11b4df116f30f667f8c9888617df0751.zip ; python_version >= "3.11"
+ftfy==6.3.1; python_version >= "3.11"
+wcwidth==0.2.13; python_version >= "3.11"
+omegaconf==2.3.0; python_version >= "3.11"
+antlr4-python3-runtime==4.9.3; python_version >= "3.11"
+regex==2024.11.6; python_version >= "3.11"
+scikit-learn==1.6.1; python_version >= "3.11"
+joblib==1.4.2; python_version >= "3.11"
+threadpoolctl==3.5.0; python_version >= "3.11"
+submitit==1.5.2; python_version >= "3.11"
+cloudpickle==3.1.1; python_version >= "3.11"
+torchmetrics==1.7.1; python_version >= "3.11"
+lightning-utilities==0.14.3; python_version >= "3.11"

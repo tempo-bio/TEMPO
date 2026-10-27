@@ -1,0 +1,20 @@
+===================================================================
+TEMPO
+Hardware & Driver Prerequisites
+===================================================================
+
+TEMPO connects natively to standard USB/UVC webcams out of the box.
+
+For high-speed scientific microscope cameras:
+1. Ensure your camera's vendor SDK/device driver is installed on Windows:
+   - Hamamatsu: DCAM-API
+   - Teledyne FLIR: Spinnaker SDK
+   - Photometrics: PVCAM
+   - Basler: Pylon Camera Software Suite
+2. If using Micro-Manager hardware devices (shutters, filter wheels, stages),
+   ensure Micro-Manager 2.0 gamma is installed in standard paths:
+   (e.g., C:\Program Files\Micro-Manager-2.0gamma)
+
+You can configure and test your camera connection anytime inside TEMPO
+under the Acquisition tab or using the Guided Setup Wizard.
+===================================================================

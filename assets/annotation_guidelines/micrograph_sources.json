@@ -1,0 +1,46 @@
+[
+  {
+    "file": "adult_mouse_ventricular_micrographs.jpg",
+    "title": "A simple antegrade perfusion method for isolating viable single cardiomyocytes from neonatal to aged mice",
+    "authors": [
+      "Mariko Omatsu-Kanbe",
+      "Kengo Yoshioka",
+      "Ryo Fukunaga",
+      "Hironori Sagawa",
+      "Hiroshi Matsuura"
+    ],
+    "year": 2018,
+    "doi": "10.14814/phy2.13688",
+    "article": "https://pmc.ncbi.nlm.nih.gov/articles/PMC5917088/",
+    "figure": "Figure 2",
+    "license": "CC-BY-4.0",
+    "license_url": "https://creativecommons.org/licenses/by/4.0/",
+    "copyright": "© 2018 The Authors. Physiological Reports published by Wiley Periodicals, Inc. on behalf of The Physiological Society and the American Physiological Society.",
+    "download": "https://pmc-oa-opendata.s3.amazonaws.com/PMC5917088.1/PHY2-6-e13688-g002.jpg",
+    "sha256": "89a92e558599dbf6fada6eac7262b210f546233377336498d23f4b5a015c5b5c",
+    "retrieved": "2026-10-20",
+    "adaptations": "Original figure retained unchanged. The helper displays panel A and the 1 h / 5 h images from panel E as cropped views; original scale bars retained.",
+    "panels": [
+      {
+        "name": "A",
+        "rectangle": [
+          0,
+          0,
+          123,
+          119
+        ],
+        "scale_bar_um": 50
+      },
+      {
+        "name": "E, 1 h and 5 h",
+        "rectangle": [
+          0,
+          263,
+          226,
+          123
+        ],
+        "scale_bar_um": 150
+      }
+    ]
+  }
+]

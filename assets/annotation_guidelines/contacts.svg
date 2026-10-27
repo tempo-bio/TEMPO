@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="300" viewBox="0 0 1000 300">
+<defs><pattern id="stripes" width="14" height="14" patternUnits="userSpaceOnUse"><path d="M5 0V14" stroke="#9ba9b6" stroke-width="2"/></pattern></defs>
+<rect width="1000" height="300" fill="#171e27"/>
+<g fill="#eef2f6" font-family="sans-serif" font-size="23"><text x="28" y="34">Visible shared boundary</text><text x="530" y="34">Inseparable clump</text></g>
+<g fill="url(#stripes)" stroke-width="4"><path d="M55 87L108 74L393 82L431 100L425 144L80 143L55 128Z" stroke="#7ce4ba"/><path d="M80 143L425 144L440 167L431 211L112 219L77 203Z" stroke="#a5c4ff"/>
+<path d="M555 87L608 74L893 82L931 100L925 144L940 167L931 211L612 219L577 203L580 143L555 128Z" stroke="#7ce4ba"/></g>
+<g fill="#eef2f6" font-family="sans-serif" font-size="21"><text x="28" y="259">Two cells: two outlines</text><text x="530" y="259">One outer outline</text></g>
+<text x="28" y="286" fill="#aebac7" font-family="sans-serif" font-size="17">Diagram · Do not invent a dividing line where it cannot be seen.</text></svg>

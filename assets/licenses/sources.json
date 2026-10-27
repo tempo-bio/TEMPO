@@ -1,0 +1,64 @@
+[
+  {
+    "package": "flatbuffers",
+    "version": "25.12.19",
+    "path": "assets/licenses/flatbuffers/LICENSE",
+    "source": "https://raw.githubusercontent.com/google/flatbuffers/v25.12.19/LICENSE",
+    "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+  },
+  {
+    "package": "pymmcore",
+    "version": "12.5.1.75.0",
+    "path": "assets/licenses/pymmcore/LICENSE",
+    "source": "https://raw.githubusercontent.com/micro-manager/pymmcore/v12.5.1.75.0/LICENSE.txt",
+    "sha256": "dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551"
+  },
+  {
+    "package": "tensorboard-data-server",
+    "version": "0.7.2",
+    "path": "assets/licenses/tensorboard-data-server/LICENSE",
+    "source": "https://raw.githubusercontent.com/tensorflow/tensorboard/2.20.0/LICENSE",
+    "sha256": "d7c9068d896188264b60827b8cd1e25fdb9f5b5cad0b1589e90b96c87729c404",
+    "note": "TensorBoard 2.20.0 root Apache-2.0 notice; its data-server package declares Apache 2.0."
+  },
+  {
+    "package": "fastremap",
+    "version": "1.21.0",
+    "path": "assets/licenses/fastremap/LICENSE",
+    "source": "https://files.pythonhosted.org/packages/17/6f/dfc151ff33cc6a916e89e561a7e502b5d97251d1bb3fe853a97fdfbecaf3/fastremap-1.21.0.tar.gz",
+    "sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118",
+    "note": "fastremap-1.21.0/LICENSE, reproduced verbatim. Source archive SHA-256: 69c14cc36ffff240ad1f14dcb031f5419b022512e4c5000b648f325416f92551"
+  },
+  {
+    "package": "nvidia-ml-py",
+    "version": "13.615.71",
+    "path": "assets/licenses/nvidia-ml-py/LICENSE",
+    "source": "https://files.pythonhosted.org/packages/fd/30/b25216758be3d3e2834825d8193609e2d71c770a8bd7984438c058c90268/nvidia_ml_py-13.615.71.tar.gz",
+    "sha256": "4301ef224f42c6de47aa65fbf172f4006891c7ddc333c824dd9ee254453cd38a",
+    "note": "nvidia_ml_py-13.615.71/pynvml.py initial copyright/license comment block, reproduced verbatim. Source archive SHA-256: bebe4e48f51b1dc75028c0815cb7bfa14a31a5bb80be70c9d980c6036953fc3d"
+  },
+  {
+    "package": "antlr4-python3-runtime",
+    "version": "4.9.3",
+    "source": "https://raw.githubusercontent.com/antlr/antlr4/4.9.3/LICENSE.txt",
+    "sha256": "b1b379fcaf3219593a4c433feb1b35c780bed23fafaae440b1ae2771a9521e3a",
+    "path": "assets/licenses/antlr4-python3-runtime/LICENSE",
+    "note": "Verbatim upstream release-tag notice; the matching PyPI source archive omits a standalone notice."
+  },
+  {
+    "package": "cloudpickle",
+    "version": "3.1.1",
+    "source": "https://raw.githubusercontent.com/cloudpipe/cloudpickle/v3.1.1/LICENSE",
+    "sha256": "3029ea34173e9fdc233ad315dc6b100bd1ea71f529b1c1af97664a272fdc55f5",
+    "path": "assets/licenses/cloudpickle/LICENSE",
+    "note": "Verbatim upstream release-tag notice; the matching PyPI source archive omits a standalone notice."
+  },
+  {
+    "package": "pyserial",
+    "version": "3.5",
+    "path": "assets/licenses/pyserial/LICENSE",
+    "source": "https://files.pythonhosted.org/packages/1e/7d/ae3f0a63f41e4d2f6cb66a5b57197850f919f59e558159a4dd3a818f5082/pyserial-3.5.tar.gz",
+    "sha256": "f91cb9813de6a5b142b8f7f2dede630b5134160aedaeaf55f4d6a7e2593ca3f3",
+    "note": "pyserial-3.5/LICENSE.txt, reproduced verbatim. Source archive SHA-256: 3c77e014170dfffbd816e6ffc205e9842efb10be9f58ec16d3e8675b4925cddb"
+  }
+]

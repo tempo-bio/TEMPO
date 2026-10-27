@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="250" viewBox="0 0 1000 250">
+<defs><pattern id="stripes" width="14" height="14" patternUnits="userSpaceOnUse"><path d="M5 0V14" stroke="#b4bfc9" stroke-width="2"/></pattern></defs>
+<rect width="1000" height="250" fill="#171e27"/>
+<g fill="#eef2f6" font-family="sans-serif" font-size="23"><text x="28" y="34">Follow the full outer edge</text><text x="530" y="34">Do not cut off the ends</text></g>
+<g fill="url(#stripes)" stroke="#9ba9b6" stroke-width="3"><path d="M55 93L101 79L148 83L195 76L375 85L437 100L428 159L390 174L200 167L142 174L58 157Z"/><path d="M555 93L601 79L648 83L695 76L875 85L937 100L928 159L890 174L700 167L642 174L558 157Z"/></g>
+<path d="M55 93L101 79L148 83L195 76L375 85L437 100L428 159L390 174L200 167L142 174L58 157Z" fill="none" stroke="#7ce4ba" stroke-width="5"/>
+<path d="M630 94L862 95L861 155L632 157Z" fill="none" stroke="#ef7777" stroke-width="5" stroke-dasharray="10 6"/>
+<text x="28" y="228" fill="#aebac7" font-family="sans-serif" font-size="18">Diagram · Green: complete outline. Red: incomplete outline.</text></svg>

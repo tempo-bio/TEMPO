@@ -1,0 +1,352 @@
+import os
+import sys
+import json
+import platform
+import subprocess
+import argparse
+import warnings
+import threading
+import queue
+import time
+import shutil
+import glob
+from contextlib import contextmanager
+import torch
+import torch.nn.functional as F
+from ultralytics import YOLO
+from ultralytics.models.yolo.segment import SegmentationTrainer
+from ultralytics.nn.tasks import SegmentationModel
+from ultralytics.utils import RANK
+import ultralytics.utils.loss as loss_module
+from ultralytics.utils.ops import crop_mask
+
+# Dynamically resolve active Ultralytics segmentation loss base class (v26 / base)
+BaseSegmentationLoss = getattr(loss_module, "v26SegmentationLoss", getattr(loss_module, "v8SegmentationLoss", None))
+
+# Suppress spurious numpy 2.x matmul warnings on Apple Silicon
+warnings.filterwarnings("ignore", message="divide by zero encountered in matmul")
+warnings.filterwarnings("ignore", message="invalid value encountered in matmul")
+warnings.filterwarnings("ignore", message="overflow encountered in matmul")
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
+@contextmanager
+def local_yolo_settings():
+    """Keep model training local without changing saved third-party preferences."""
+    from ultralytics.utils import SETTINGS
+    overrides = {'tensorboard': False, 'sync': False, 'api_key': ''}
+    previous = {key: SETTINGS[key] for key in overrides if key in SETTINGS}
+    api_key = os.environ.pop('ULTRALYTICS_API_KEY', None)
+    for key, value in overrides.items():
+        dict.__setitem__(SETTINGS, key, value)
+    try:
+        yield
+    finally:
+        for key in overrides:
+            if key in previous:
+                dict.__setitem__(SETTINGS, key, previous[key])
+            else:
+                dict.__delitem__(SETTINGS, key)
+        if api_key is not None:
+            os.environ['ULTRALYTICS_API_KEY'] = api_key
+
+
+class BoundaryAwareSegmentationLoss(BaseSegmentationLoss):
+    """
+    Boundary-Aware Segmentation Loss:
+    Augments standard Binary Cross-Entropy (BCE) with on-the-fly 2D Laplacian
+    morphological boundary extraction. Penalizes contour/perimeter discrepancies
+    to eliminate under-segmentation of thin cardiomyocyte projections.
+    """
+    @staticmethod
+    def single_mask_loss(gt_mask: torch.Tensor, pred: torch.Tensor, proto: torch.Tensor, xyxy: torch.Tensor, area: torch.Tensor) -> torch.Tensor:
+        # Casting only the final BCE is too late: the mask projection and edge
+        # convolution can already overflow under AMP or half-precision validation.
+        with torch.autocast(device_type=proto.device.type, enabled=False):
+            pred = pred.float()
+            proto = proto.float()
+            gt_mask = gt_mask.float()
+            xyxy = xyxy.float()
+            area = area.float()
+            if not torch.all(torch.isfinite(area) & (area > 0)):
+                raise ValueError("Boundary loss received a non-finite or zero-area box.")
+            if not torch.all(torch.isfinite(gt_mask) & (gt_mask >= 0) & (gt_mask <= 1)):
+                raise ValueError("Boundary loss masks must contain finite values in [0, 1].")
+            pred_mask = torch.einsum("in,nhw->ihw", pred, proto)
+            if not torch.isfinite(pred_mask).all():
+                raise FloatingPointError("Non-finite segmentation logits before boundary loss; training stopped.")
+            bce_loss = F.binary_cross_entropy_with_logits(pred_mask, gt_mask, reduction="none")
+            base_loss = (crop_mask(bce_loss, xyxy).mean(dim=(1, 2)) / area).sum()
+            if gt_mask.numel() == 0:
+                return base_loss
+            pred_prob = torch.sigmoid(pred_mask).unsqueeze(1)
+            target = gt_mask.unsqueeze(1)
+            kernel = torch.tensor(
+                [[[[0.0, 1.0, 0.0],
+                   [1.0, -4.0, 1.0],
+                   [0.0, 1.0, 0.0]]]], 
+                device=proto.device, dtype=proto.dtype
+            )
+            pred_boundary = F.conv2d(pred_prob, kernel, padding=1).abs().clamp(0.0, 1.0).squeeze(1)
+            target_boundary = F.conv2d(target, kernel, padding=1).abs().clamp(0.0, 1.0).squeeze(1)
+            p_b = pred_boundary.clamp(1e-6, 1.0 - 1e-6)
+            boundary_bce = F.binary_cross_entropy(p_b, target_boundary, reduction="none")
+            boundary_loss = (crop_mask(boundary_bce, xyxy).mean(dim=(1, 2)) / area).sum()
+            total = base_loss + 0.5 * boundary_loss
+            if not torch.isfinite(total):
+                raise FloatingPointError("Boundary loss became non-finite; training stopped.")
+            return total
+
+class BoundaryAwareSegmentationModel(SegmentationModel):
+    """Create the loss lazily, after the trainer attaches model hyperparameters."""
+
+    def init_criterion(self):
+        if getattr(self.model[-1], "one2one_cv2", None) is not None:
+            return loss_module.E2ELoss(self, BoundaryAwareSegmentationLoss)
+        return BoundaryAwareSegmentationLoss(self)
+
+
+class BoundaryAwareSegmentationTrainer(SegmentationTrainer):
+    """Custom trainer enforcing boundary-aware loss on the segmentation head."""
+    def get_model(self, cfg=None, weights=None, verbose=True):
+        model = BoundaryAwareSegmentationModel(
+            cfg, nc=self.data["nc"], ch=self.data["channels"],
+            verbose=verbose and RANK == -1,
+        )
+        if weights:
+            model.load(weights)
+        return model
+
+def get_dynamic_workers():
+    """Dynamic Dataloader Throttling based on system platform and memory pressure."""
+    if platform.system() != "Darwin" or platform.machine() != "arm64":
+        return 4 # Balanced default for Windows / CUDA / Intel
+        
+    # FORCE WORKERS TO 0 FOR APPLE SILICON
+    # PyTorch DataLoader multiprocessing causes memory leaks and lockups on Mac MPS
+    return 0
+
+def ensure_model_dependencies(models=None):
+    import importlib.util
+    packages = {
+        'stardist': [('csbdeep', 'csbdeep>=0.8'), ('stardist', 'stardist>=0.9.1'), ('tensorflow', 'tensorflow>=2.16'), ('tensorboard', 'tensorboard>=2.16')],
+        'cellpose': [('cellpose', 'cellpose>=4.2')],
+    }
+    target_models = models if isinstance(models, (list, tuple, set)) else ([models] if models else ['stardist', 'cellpose', 'nano_scout'])
+    to_install = []
+    for m in target_models:
+        for mod_name, pip_name in packages.get(m, []):
+            if importlib.util.find_spec(mod_name) is None:
+                to_install.append((mod_name, pip_name))
+    if to_install:
+        raise RuntimeError('Missing training dependencies: ' + ', '.join(name for name, requirement in to_install) +
+                           '. Rerun notebook environment setup and diagnostics before training. '
+                           'The verified environment was not modified.')
+
+def train_single_model(model_type, data_yaml_path=None, epochs=150, batch=4, workers=0, device="cpu", output_queue=None, dataset=None, output=None, tf_memory_mb=None, training_check=False):
+    from tempo_progress import report as progress
+    progress(model_type, 'starting', total=epochs)
+    from pathlib import Path
+    from tempo_training import train_native, MODEL_FILES, benchmark, validate_training_dataset
+    import hashlib
+    dataset = Path(dataset or os.path.join(BASE_DIR, "datasets", "compiled"))
+    dataset_info = validate_training_dataset(dataset, allow_training_check=training_check)
+    if model_type=='nano_scout':
+        dataset_info=dict(dataset_info,preprocessing=dataset_info.get('scout_preprocessing',dataset_info['preprocessing']))
+    output = Path(output or os.path.join(BASE_DIR, "runs", "candidates", model_type))
+    output.mkdir(parents=True, exist_ok=True)
+    if model_type not in MODEL_FILES:
+        raise ValueError("Retired or unknown model role.")
+    seed = dataset_info.get("seed", 17)
+    torch.manual_seed(seed)
+    import numpy as np
+    np.random.seed(seed)
+    ensure_model_dependencies([model_type])
+    # Snapshot the identified champion before YOLO downloads starting weights.
+    # In cloud runs the pinned release, rather than a coincidentally named file,
+    # determines whether a previous TEMPO model exists.
+    baseline = Path(BASE_DIR)/MODEL_FILES[model_type]
+    baseline_hash = hashlib.sha256(baseline.read_bytes()).hexdigest() if baseline.is_file() and dataset_info.get('origin') != 'experiment' else None
+    baseline_file = Path(BASE_DIR)/'runs/champion_baselines.json'
+    if baseline_file.is_file() and dataset_info.get('origin') != 'experiment':
+        expected = json.loads(baseline_file.read_text()).get(MODEL_FILES[model_type])
+        if expected is not None and baseline_hash != expected:
+            raise ValueError(f'{model_type}: downloaded model differs from the recorded release.')
+        baseline_hash = expected
+    from tempo_training_runtime import resume_scout_candidate, record_scout_candidate
+    completed_scout = resume_scout_candidate(output, dataset, dataset_info, epochs, batch, baseline_hash) if model_type == 'nano_scout' else None
+    if completed_scout:
+        print('Reusing completed scout training; scoring saved weights.', flush=True)
+        artifact = completed_scout
+    elif model_type in ("stardist", "cellpose"):
+        artifact = train_native(model_type, dataset, output, epochs, batch, device, tf_memory_mb,
+                                validation_split='train' if training_check else dataset_info.get('validation_partition', 'val'))
+    else:
+        task = "detect"
+        # Always use the actual architecture, never substitute segmentation for detection.
+        arch_name = "yolo26n.pt"
+        if os.path.exists(arch_name):
+            arch = arch_name
+        elif (Path(BASE_DIR)/arch_name).exists():
+            arch = str(Path(BASE_DIR)/arch_name)
+        else:
+            # Ultralytics downloads this exact architecture when it is not local.
+            # A fresh cloud runtime must not silently train a different family.
+            arch = arch_name
+        model = YOLO(arch)
+        if hasattr(model, 'add_callback'):
+            model.add_callback('on_train_epoch_end', lambda trainer: progress(model_type, 'training', trainer.epoch+1, epochs))
+        kwargs = dict(data=str(dataset/task/"data.yaml"), epochs=epochs, batch=batch, workers=workers,
+                      device=device, project=str(output), name="training", exist_ok=True,
+                      imgsz=640, patience=30, seed=seed)
+        from tempo_scout_training import CentroidDetectionTrainer
+        kwargs["trainer"] = CentroidDetectionTrainer
+        if task == "segment":
+            kwargs["trainer"] = BoundaryAwareSegmentationTrainer
+            # Also keeps Ultralytics' in-training validator out of float16.
+            kwargs["amp"] = False
+        # TensorBoard is required by StarDist, but its optional YOLO integration
+        # can import TensorFlow into a Torch/Triton worker. Keep the workers separate.
+        # Change only this process's setting, without writing the user's settings file.
+        with local_yolo_settings():
+            result = model.train(**kwargs)
+        save_dir = getattr(result, "save_dir", None) or getattr(model.trainer, "save_dir", None) or (Path(output)/"training")
+        artifact = str(Path(save_dir)/"weights/best.pt")
+        if not Path(artifact).is_file():
+            last_pt = Path(save_dir)/"weights/last.pt"
+            if last_pt.is_file():
+                artifact = str(last_pt)
+    if not Path(artifact).is_file():
+        raise RuntimeError(f"{model_type}: training produced no artifact.")
+    if model_type == 'nano_scout' and not completed_scout:
+        from tempo_training import export_yolo_for_inference
+        artifact = export_yolo_for_inference(artifact, output/MODEL_FILES[model_type], metadata=dict(
+            role='scout', format='centroid-v1', preprocessing=dataset_info['preprocessing'], box_width=dataset_info['box_width']))
+        record_scout_candidate(artifact, output, dataset, dataset_info, epochs, batch, baseline_hash)
+    progress(model_type, 'validating')
+    evaluation = 'train' if training_check else dataset_info.get('evaluation_partition', 'test')
+    metrics = benchmark(model_type, artifact, dataset, device, split=evaluation)
+    previous = None
+    if baseline_hash is not None and not training_check:
+        if not baseline.is_file() or hashlib.sha256(baseline.read_bytes()).hexdigest() != baseline_hash:
+            raise ValueError(f'{model_type}: published model changed during training; comparison was not recorded.')
+        previous = benchmark(model_type, baseline, dataset, device, split=evaluation)
+    import math
+    if not math.isfinite(metrics['score']) or previous and not math.isfinite(previous['score']):
+        raise ValueError('Benchmark returned a non-finite score.')
+    result = dict(artifact=str(Path(artifact).resolve()), sha256=hashlib.sha256(Path(artifact).read_bytes()).hexdigest(),
+                  baseline_sha256=baseline_hash, metrics=metrics, baseline_metrics=previous,
+                  promote=(not training_check and (baseline_hash is None or
+                           evaluation == 'test' and previous['score'] < metrics['score'])),
+                  publishable=not training_check and dataset_info.get('origin') != 'experiment', evaluation_partition=evaluation)
+    if model_type == 'nano_scout':
+        result['scout_metadata']=dict(preprocessing=dataset_info['preprocessing'],box_width=dataset_info['box_width'])
+    details_file = output/'training_details.json'
+    if model_type == 'cellpose' and details_file.is_file():
+        result['training_details'] = json.loads(details_file.read_text())
+    (output/'result.json').write_text(json.dumps(result, indent=2))
+    progress(model_type, 'completed')
+    return result
+
+
+def ensure_yolo_dataset(base_dir=BASE_DIR):
+    from tempo_training import build_dataset
+    return build_dataset(base_dir)
+
+
+def train_parallel_pipeline(override_workers=None, epochs=150, models=None, compiled_dataset=None, sequential=False):
+    from pathlib import Path
+    from concurrent.futures import ThreadPoolExecutor
+    from tempo_training import MODEL_FILES, validate_training_dataset
+    import uuid
+    run_id = uuid.uuid4().hex
+    report_path = Path(BASE_DIR)/'runs/training_report.json'
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report = dict(success=False, run_id=run_id, results={}, errors={})
+    baseline_file = Path(BASE_DIR)/'runs/champion_baselines.json'
+    if baseline_file.exists():
+        report['remote_baselines'] = json.loads(baseline_file.read_text())
+    else:
+        report['remote_baselines'] = {}
+    report_path.write_text(json.dumps(report))  # invalidate stale success before any work
+    try:
+        selected = models or ['stardist','cellpose','nano_scout']
+        if not selected or any(m not in MODEL_FILES for m in selected) or len(set(selected)) != len(selected):
+            raise ValueError('Select unique models: ' + ', '.join(MODEL_FILES))
+        ensure_model_dependencies(selected)
+        dataset = Path(compiled_dataset) if compiled_dataset else ensure_yolo_dataset()
+        dataset_info = validate_training_dataset(dataset)
+        batch_sizes=dataset_info.get('architecture_validation',{}).get('batch_sizes',{})
+        if (not isinstance(batch_sizes,dict) or not set(batch_sizes)<=set(MODEL_FILES) or
+                any(type(value) is not int or not 1<=value<=64 for value in batch_sizes.values())):
+            raise ValueError('Published model batch sizes must be integers from 1 to 64.')
+        report['architecture_validation'] = dataset_info.get('architecture_validation',{})
+        report['approval_policy'] = dataset_info['approval_policy']
+        report['split_policy'] = dataset_info['split_policy']
+        report['purpose'] = dataset_info.get('purpose', 'training')
+        report['evaluation_partition'] = dataset_info.get('evaluation_partition', 'test')
+        report['evaluation_basis'] = dataset_info.get('evaluation_basis', 'held-out-images')
+        workers = get_dynamic_workers() if override_workers is None else override_workers
+        device = 'cuda' if torch.cuda.is_available() else 'mps' if torch.backends.mps.is_available() else 'cpu'
+        vram = torch.cuda.get_device_properties(0).total_memory / 1024**3 if torch.cuda.is_available() else 0
+        parallel = False  # StarDist helpers must finish before Cellpose consumes them.
+        print(f"Training on {device}; {'parallel' if parallel else 'sequential'}; VRAM {vram:.1f} GB", flush=True)
+        def launch(model_type):
+            output = Path(BASE_DIR)/'runs/candidates'/run_id/model_type
+            batch = (8 if model_type == 'nano_scout' else 4) if parallel else (4 if model_type == 'nano_scout' else 2)
+            batch = batch_sizes.get(model_type,batch)
+            proc_workers = 2 if parallel and override_workers is None else workers
+            command = [sys.executable, os.path.abspath(__file__), '--worker', model_type, '--epochs', str(epochs), '--batch', str(batch),
+                       '--workers', str(proc_workers), '--device', device, '--dataset', str(dataset), '--output', str(output)]
+            if parallel:
+                command += ['--tf-memory-mb', '6144']
+            print(f'START MODEL: {model_type}; epochs={epochs}, batch={batch}, workers={proc_workers}', flush=True)
+            process = subprocess.run(command, cwd=BASE_DIR)
+            if process.returncode:
+                raise RuntimeError(f'{model_type} training or validation failed (exit {process.returncode}).')
+            print(f'PASS MODEL: {model_type} training and validation completed.', flush=True)
+            return json.loads((output/'result.json').read_text())
+        for model_type in sorted(selected, key=lambda role: ['stardist','cellpose','nano_scout'].index(role)):
+            try:
+                report['results'][model_type] = launch(model_type)
+            except Exception as exc:
+                report['errors'][model_type] = str(exc)
+                break
+        dataset_info = json.loads((Path(dataset)/'dataset.json').read_text())
+        report['test_fingerprint'] = dataset_info['test_fingerprint']
+        report['origin'] = dataset_info.get('origin', 'local')
+        report['success'] = not report['errors'] and len(report['results']) == len(selected)
+    except Exception as exc:
+        report['errors']['pipeline'] = str(exc)
+    report_path.write_text(json.dumps(report, indent=2))
+    print(json.dumps(report, indent=2), flush=True)
+    return report['success']
+
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description='Train and benchmark native TEMPO architectures')
+    parser.add_argument('--epochs', type=int, default=150)
+    parser.add_argument('--workers', type=int, default=None)
+    parser.add_argument('--models', nargs='+')
+    parser.add_argument('--worker', choices=['nano_scout','stardist','cellpose'])
+    parser.add_argument('--batch', type=int, default=4)
+    parser.add_argument('--device', default='cpu')
+    parser.add_argument('--dataset')
+    parser.add_argument('--output')
+    parser.add_argument('--tf-memory-mb', type=int)
+    parser.add_argument('--training-check', action='store_true', help='Run a nonpublishing worker check; scores use training images.')
+    parser.add_argument('--sequential', action='store_true', help='Train one model at a time to reduce GPU memory contention.')
+    args = parser.parse_args()
+    if args.epochs < 1:
+        parser.error('epochs must be positive')
+    if args.worker:
+        train_single_model(args.worker, epochs=args.epochs, batch=args.batch, workers=args.workers or 0,
+                           device=args.device, dataset=args.dataset, output=args.output, tf_memory_mb=args.tf_memory_mb,
+                           training_check=args.training_check)
+    else:
+        if args.training_check:
+            parser.error('--training-check requires --worker and cannot publish a training run')
+        if os.name != 'nt' and os.getpgrp() != os.getpid():
+            os.setsid()  # GUI pause/stop targets this entire training process group.
+        sys.exit(0 if train_parallel_pipeline(args.workers,args.epochs,args.models,args.dataset,args.sequential) else 1)

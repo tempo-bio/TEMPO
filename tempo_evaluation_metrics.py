@@ -1,0 +1,166 @@
+"""Shared model matching, benchmark metrics and release-receipt validation."""
+import json
+import time
+from pathlib import Path
+import cv2
+import numpy as np
+from scipy.optimize import linear_sum_assignment
+
+def center_counts(truth, predicted, radius=12):
+    if not truth or not predicted:
+        return 0,len(predicted),len(truth)
+    target = np.asarray([item['center'] for item in truth])
+    found = np.asarray([item['center'] for item in predicted])
+    distances = np.linalg.norm(target[:,None]-found[None,:],axis=-1)
+    compatible = np.asarray([item['class_id'] for item in truth])[:,None] == np.asarray([item['class_id'] for item in predicted])[None,:]
+    allowed = (distances <= radius) & compatible
+    rows, columns = linear_sum_assignment(np.where(allowed,distances/(radius+1),1e6))
+    tp = int(allowed[rows,columns].sum())
+    return tp,len(predicted)-tp,len(truth)-tp
+
+def f1(counts):
+    tp,fp,fn = counts
+    return 2*tp/max(1,2*tp+fp+fn)
+
+def split_merge_rates(truth, predicted):
+    targets,ti=np.unique(truth,return_inverse=True);found,pi=np.unique(predicted,return_inverse=True)
+    table=np.bincount(ti.ravel()*len(found)+pi.ravel(),minlength=len(targets)*len(found)).reshape(len(targets),len(found))
+    areas=np.minimum(table.sum(axis=1)[:,None],table.sum(axis=0)[None,:])
+    graph=(table/np.maximum(1,areas)>=.25)[targets>0][:,found>0]
+    return float(np.count_nonzero(graph.sum(axis=1)>1)/max(1,graph.shape[0])), float(np.count_nonzero(graph.sum(axis=0)>1)/max(1,graph.shape[1]))
+
+def subset_scores(shapes, size, instances, *, class_id=0):
+    from tempo_cellpose import instance_image
+    from tempo_nuclei import raster_polygon
+    from tempo_training import instance_counts
+    scores = {}
+    for tag in sorted({tag for shape in shapes for tag in shape.get('experiment_subsets',[])}):
+        selected = [shape for shape in shapes if tag in shape.get('experiment_subsets',[]) and shape['model_class'] == class_id]
+        if not selected:
+            scores[tag] = None
+            continue
+        truth = np.zeros(size, np.int32)
+        for index, shape in enumerate(selected, 1):
+            truth[raster_polygon(shape, size) > 0] = index
+        found = [instance for instance in instances if np.any(truth[instance.bounds][instance.mask > 0] > 0)]
+        correct = [instance for instance in found if instance.class_id == class_id]
+        tp, fp, fn = instance_counts(truth, instance_image(correct, size))
+        scores[tag] = f1((tp, fp + len(found) - len(correct), fn))
+    return scores
+
+def paired_class_scores(rows):
+    """An empty class is perfect only when its paired arm predicts that class.
+
+    Leave classes absent from both arms unavailable. If only one arm is empty,
+    its missing F1 represents zero targets and zero errors, so compare it as 1
+    against the other arm's false positives instead of dropping the field.
+    """
+    result = []
+    for row in rows:
+        row = dict(row, candidate=dict(row['candidate']), control=dict(row['control']))
+        for key in ('healthy','dead','healthy_group','dead_group'):
+            for arm,other in (('candidate','control'),('control','candidate')):
+                if row[arm].get(key) is None and row[other].get(key) is not None:
+                    row[arm][key] = 1.
+        result.append(row)
+    return result
+
+def bootstrap_difference(rows, key, repeats=5000):
+    rows=paired_class_scores(rows)
+    rows=[row for row in rows if row['candidate'].get(key) is not None and row['control'].get(key) is not None]
+    groups = sorted({row['preparation'] for row in rows})
+    if not groups:
+        return dict(mean=0.,low=None,high=None,preparations=0,reason='No paired evaluation fields')
+    differences = np.asarray([np.mean([row['candidate'][key]-row['control'][key] for row in rows if row['preparation']==group]) for group in groups])
+    if len(groups)<2:
+        return dict(mean=float(differences.mean()),low=None,high=None,preparations=len(groups),reason='At least two evaluation units are needed for an interval')
+    rng = np.random.default_rng(17)
+    samples = differences[rng.integers(0,len(groups),(repeats,len(groups)))].mean(axis=1)
+    return dict(mean=float(differences.mean()), low=float(np.quantile(samples,.025)),high=float(np.quantile(samples,.975)),preparations=len(groups))
+
+def group_matches(truth,predicted):
+    if not truth or not predicted:return 0
+    scores=np.zeros((len(truth),len(predicted)))
+    for row,target in enumerate(truth):
+        a=np.asarray(target['box'])
+        for col,found in enumerate(predicted):
+            if target['class_id']!=found['class_id']:continue
+            b=np.asarray(found['box']);overlap=np.maximum(0,np.minimum(a[2:],b[2:])-np.maximum(a[:2],b[:2])).prod()
+            union=(a[2:]-a[:2]).prod()+(b[2:]-b[:2]).prod()-overlap
+            scores[row,col]=overlap/max(1e-9,union)
+    rows,cols=linear_sum_assignment(1-scores)
+    return int(np.count_nonzero(scores[rows,cols]>=.5))
+
+def benchmark_scout(path, dataset, split, device):
+    from ultralytics import YOLO
+    from tempo_training import read_image_plane
+    model = YOLO(str(path)); info = json.loads((Path(dataset)/'dataset.json').read_text())
+    counts = {radius:np.zeros(3,int) for radius in (6,12,18)}
+    errors,rows = [],[]
+    for image_path in sorted((Path(dataset)/'detect/images'/split).glob('*.png')):
+        sidecar = json.loads((Path(dataset)/'detect/unknown'/split/(image_path.stem+'.json')).read_text())
+        original=Path(dataset)/'raw/images'/split/image_path.name
+        image=read_image_plane(original if original.exists() else image_path)
+        metadata=getattr(model.model,'tempo_metadata',{})
+        if original.exists() and metadata.get('preprocessing'):
+            from tempo_preprocessing import preprocess
+            image=np.rint(preprocess(image,metadata['preprocessing']['profile'])*255).astype(np.uint8)
+        start = time.perf_counter()
+        result = model.predict(cv2.cvtColor(image,cv2.COLOR_GRAY2BGR),device=device,conf=info.get('scout_confidence',.15),verbose=False)[0]
+        elapsed = (time.perf_counter()-start)*1000
+        detections,groups = [],[]
+        for box in result.boxes:
+            cid = int(box.cls.item()); x0,y0,x1,y1 = box.xyxy[0].tolist()
+            record = dict(class_id=cid,center=[(x0+x1)/2,(y0+y1)/2],box=[x0,y0,x1,y1])
+            if cid>=2: groups.append(record); continue
+            # Unresolved interiors have no exhaustive individual-cell targets.
+            point = tuple(record['center'])
+            if any(cv2.pointPolygonTest((np.asarray(polygon,np.float32)*[image.shape[1]-1,image.shape[0]-1]).astype(np.float32),point,False)>=0 for polygon in sidecar['groups']):
+                if not any(item['class_id']==cid and np.linalg.norm(np.asarray(item['center'])-record['center'])*640/max(image.shape)<=12 for item in sidecar['centers']):
+                    continue
+            detections.append(record)
+        scale = 640/max(image.shape)
+        truth = [dict(item,center=(np.asarray(item['center'])*scale).tolist()) for item in sidecar['centers']]
+        predicted = [dict(item,center=(np.asarray(item['center'])*scale).tolist()) for item in detections]
+        per = center_counts(truth,predicted)
+        for radius in counts: counts[radius] += center_counts(truth,predicted,radius)
+        if not sidecar['groups']: errors.append(abs(len(truth)-len(predicted)))
+        record = next(r for r in info['records'] if r['stem']==image_path.stem)
+        target_groups = []
+        for line in (Path(dataset)/'detect/labels'/split/(image_path.stem+'.txt')).read_text().splitlines():
+            cid,cx,cy,bw,bh = map(float,line.split())
+            if cid>=2:
+                target_groups.append(dict(class_id=int(cid),box=[(cx-bw/2)*image.shape[1],(cy-bh/2)*image.shape[0],(cx+bw/2)*image.shape[1],(cy+bh/2)*image.shape[0]]))
+        groups_recalled = group_matches(target_groups,groups)
+        healthy_truth=sum(item['class_id']==0 for item in truth)
+        healthy_predicted=sum(item['class_id']==0 for item in predicted)
+        individual_qualification=info.get('scout_individual_qualification',False)
+        minimum_healthy=info.get('scout_min_healthy',3)
+        rows.append(dict(name=record['name'],preparation=record['preparation'],counts=list(map(int,per)),
+            center_f1=f1(per), count_error=None if sidecar['groups'] else abs(len(truth)-len(predicted)),
+            healthy_count_error=None if sidecar['groups'] else abs(healthy_predicted-healthy_truth),
+            healthy_count_bias=None if sidecar['groups'] else healthy_predicted-healthy_truth,
+            target_groups=len(target_groups),predicted_groups=len(groups), group_matches=groups_recalled,
+            target_qualifies=healthy_truth>=minimum_healthy or (not individual_qualification and any(g['class_id']==2 for g in target_groups)),
+            predicted_qualifies=healthy_predicted>=minimum_healthy or (not individual_qualification and any(g['class_id']==2 for g in groups)),latency_ms=elapsed))
+    positives=sum(row['target_qualifies'] for row in rows)
+    true_positive=sum(row['target_qualifies'] and row['predicted_qualifies'] for row in rows)
+    total_groups=sum(row['target_groups'] for row in rows)
+    tp,fp,fn=map(int,counts[12])
+    return dict(precision=tp/max(1,tp+fp),recall=tp/max(1,tp+fn),matches=dict(tp=tp,fp=fp,fn=fn),
+                group_recall=sum(row['group_matches'] for row in rows)/max(1,total_groups), field_sensitivity=true_positive/max(1,positives), metric='center_class_F1_radius12',score=f1(counts[12]),
+                radius_scores={str(radius):f1(value) for radius,value in counts.items()},
+                healthy_count_mae=float(np.mean([row['healthy_count_error'] for row in rows if row['healthy_count_error'] is not None])) if errors else None,
+                count_mae=float(np.mean(errors)) if errors else None, per_image=rows)
+
+def validation_allows(receipt, profile, role, box_width=None):
+    if not isinstance(receipt,dict) or receipt.get('format') != 'tempo-experiment-validation-v1':
+        return False
+    expected=receipt.get('scout_profile',receipt.get('profile')) if role=='nano_scout' else receipt.get('profile')
+    if expected != profile:
+        return False
+    digest=receipt.get('confirmation_sha256','')
+    if len(digest)!=64 or any(letter not in '0123456789abcdef' for letter in digest):
+        return False
+    return (receipt.get('nuclear_assistance_passed') is True if role=='cellpose' else
+            receipt.get('centroid_scout_passed') is True and receipt.get('box_width')==box_width)

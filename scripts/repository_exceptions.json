@@ -1,0 +1,116 @@
+[
+  {
+    "path": "scripts/render_ui_screens.py",
+    "rule": "colab_drive_link",
+    "sha256": "7c1265ba9a5ccbf49149474895e60624f5037c2e552b82cb599bb2b960d447d6",
+    "reason": "Reviewed synthetic credential or notebook-link fixture; not a live account secret or private notebook."
+  },
+  {
+    "path": "scripts/render_ui_screens.py",
+    "rule": "colab_drive_link",
+    "sha256": "74878051938cb2de59954f6c38dedc10d7a78933c193d5e23402f0938641cdae",
+    "reason": "Reviewed synthetic credential or notebook-link fixture; not a live account secret or private notebook."
+  },
+  {
+    "path": "tests/test_account_security.py",
+    "rule": "huggingface_token",
+    "sha256": "83df66b1b3bf878a616bb74c91258bc7a3cf6098a259d67997dea6d7516568a9",
+    "reason": "Reviewed synthetic credential or notebook-link fixture; not a live account secret or private notebook."
+  },
+  {
+    "path": "tests/test_account_security.py",
+    "rule": "huggingface_token",
+    "sha256": "b5d8549626c393f799f058aab85ac3350706859d467f6c22d3339e130baa0ad6",
+    "reason": "Reviewed synthetic credential or notebook-link fixture; not a live account secret or private notebook."
+  },
+  {
+    "path": "tests/test_account_security.py",
+    "rule": "huggingface_token",
+    "sha256": "477c2db213e53bb5bc0e24a8efcde443f3905be33ba2545d44efa1b67aa8292f",
+    "reason": "Reviewed synthetic credential or notebook-link fixture; not a live account secret or private notebook."
+  },
+  {
+    "path": "tests/test_account_security.py",
+    "rule": "huggingface_token",
+    "sha256": "dda770e722e48c67322128f76476ef14fabafd224f0b51e77aacbfc6452016ae",
+    "reason": "Reviewed synthetic credential or notebook-link fixture; not a live account secret or private notebook."
+  },
+  {
+    "path": "tests/test_maintainer_workspace.py",
+    "rule": "colab_drive_link",
+    "sha256": "a3a7839a06e4c38ea59c3440d22662eb287efccbf210cbbb3be1aa98d14c7eeb",
+    "reason": "Reviewed synthetic credential or notebook-link fixture; not a live account secret or private notebook."
+  },
+  {
+    "path": "tests/test_quit_lifecycle.py",
+    "rule": "huggingface_token",
+    "sha256": "8a243426a51f7b1510894bba684cacae2a2b6162e462bc71a6fd5d3f51e07812",
+    "reason": "Reviewed synthetic credential or notebook-link fixture; not a live account secret or private notebook."
+  },
+  {
+    "path": "tests/test_secure_store.py",
+    "rule": "huggingface_token",
+    "sha256": "d344f5225aaa9d8cfb185be5bcde4a5c7cde47cea25547da0b0f59de9cf1b034",
+    "reason": "Reviewed synthetic credential or notebook-link fixture; not a live account secret or private notebook."
+  },
+  {
+    "path": "tests/test_secure_store.py",
+    "rule": "huggingface_token",
+    "sha256": "477c2db213e53bb5bc0e24a8efcde443f3905be33ba2545d44efa1b67aa8292f",
+    "reason": "Reviewed synthetic credential or notebook-link fixture; not a live account secret or private notebook."
+  },
+  {
+    "path": "tests/test_secure_store.py",
+    "rule": "huggingface_token",
+    "sha256": "8b57350089430fc0b1b9af95857b2bf69d1026e142f3955488861d7d1a23a2b2",
+    "reason": "Reviewed synthetic credential or notebook-link fixture; not a live account secret or private notebook."
+  },
+  {
+    "path": "tests/test_workspace_usability.py",
+    "rule": "huggingface_token",
+    "sha256": "f8f421caf3d63fb5f5b74514355aacbec89319cc84fb501584bce5a5ff422fa8",
+    "reason": "Reviewed synthetic credential or notebook-link fixture; not a live account secret or private notebook."
+  },
+  {
+    "path": "tests/test_workspace_usability.py",
+    "rule": "colab_drive_link",
+    "sha256": "88df7976d9f31a9a93850b0d911f9475e62b0b13a99fc4b2c370e41ccd164465",
+    "reason": "Reviewed synthetic credential or notebook-link fixture; not a live account secret or private notebook."
+  },
+  {
+    "path": "tests/test_workspace_usability.py",
+    "rule": "colab_drive_link",
+    "sha256": "d067d9bc91e74ff16cfed243c76e99efd6ecd5dd92ce6839d6a819a49f0ac9b7",
+    "reason": "Reviewed synthetic credential or notebook-link fixture; not a live account secret or private notebook."
+  },
+  {
+    "path": "tests/test_workspace_usability.py",
+    "rule": "colab_drive_link",
+    "sha256": "dc2abea0a6612753dd1482f9ca991e2da1925b119c8993292c533922c56188bc",
+    "reason": "Reviewed synthetic credential or notebook-link fixture; not a live account secret or private notebook."
+  },
+  {
+    "path": "tests/test_workspace_usability.py",
+    "rule": "colab_drive_link",
+    "sha256": "7a661777cbd8a6c4969ca5c00d1da9399c00757e10534db238264582b7e16082",
+    "reason": "Reviewed synthetic credential or notebook-link fixture; not a live account secret or private notebook."
+  },
+  {
+    "path": "tests/test_workspace_usability.py",
+    "rule": "colab_drive_link",
+    "sha256": "35cdba3739c53a7f706d61c7e35809a3f4c1e660a353e28f7a5af2e276fbc367",
+    "reason": "Reviewed synthetic credential or notebook-link fixture; not a live account secret or private notebook."
+  },
+  {
+    "path": "tests/test_software_update_paths.py",
+    "rule": "email",
+    "sha256": "cc6d96611cffa9f02c3626f0b9ee897dc171e2d540a5cae349d4ec316104997b",
+    "reason": "Synthetic Git author address on a reserved test domain for isolated updater repositories."
+  },
+  {
+    "path": "assets/licenses/pyserial/LICENSE",
+    "rule": "email",
+    "sha256": "c8b9bfbb62628f1dc90a8c365e9334d966e429688ca762ca19bcaa97ad023381",
+    "reason": "Public upstream pyserial copyright-holder address, preserved verbatim in the checksum-verified 3.5 license notice."
+  }
+]
