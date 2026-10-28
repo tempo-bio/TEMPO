@@ -298,6 +298,20 @@ class SegmentationInitializationTests(unittest.TestCase):
                 self.assertEqual(dict(settings), original)
                 self.assertEqual(os.environ['ULTRALYTICS_API_KEY'], 'synthetic-environment-key')
 
+    def test_cached_analytics_sender_stays_disabled_after_training_settings_restore(self):
+        import importlib
+        import train_yolo
+        analytics = importlib.import_module('ultralytics.utils.events')
+        sender = analytics.events
+        cfg = types.SimpleNamespace(mode='predict', task='detect', model='synthetic.pt')
+        with patch.object(sender, 'enabled', True), patch.object(sender, 't', 0), \
+             patch.object(sender, 'events', []), patch.object(analytics, 'Thread') as transport:
+            with train_yolo.local_yolo_settings():
+                sender(cfg)
+            sender(cfg)
+            transport.assert_not_called()
+            self.assertFalse(sender.events)
+
     def test_segmentation_training_loss_backpropagates_for_both_heads(self):
         import train_yolo
         from ultralytics.cfg import DEFAULT_CFG_DICT

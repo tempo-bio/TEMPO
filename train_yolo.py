@@ -35,6 +35,10 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 def local_yolo_settings():
     """Keep model training local without changing saved third-party preferences."""
     from ultralytics.utils import SETTINGS
+    from tempo_training_runtime import disable_ultralytics_analytics
+    # The sender caches its enabled state; changing SETTINGS['sync'] alone
+    # cannot disable a sender created before this context was entered.
+    disable_ultralytics_analytics()
     overrides = {'tensorboard': False, 'sync': False, 'api_key': ''}
     previous = {key: SETTINGS[key] for key in overrides if key in SETTINGS}
     api_key = os.environ.pop('ULTRALYTICS_API_KEY', None)

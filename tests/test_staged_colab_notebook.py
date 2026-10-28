@@ -118,7 +118,7 @@ class StagedColabNotebookTests(unittest.TestCase):
         self.assertEqual(parameters,['MAXIMUM_EPOCHS','REQUIRED_GPU'])
 
     def test_setup_uses_real_logger_in_kernel_without_workspace_imports(self):
-        from tests.test_model_evaluation import protocol
+        from tests.evaluation_fixtures import protocol
         from tempo_evaluation_protocol import read_package
         import zipfile
         for legacy in (False,True):
@@ -174,7 +174,7 @@ class StagedColabNotebookTests(unittest.TestCase):
                     data += b'\n# Frozen source before the checkpoint persistence repair.\n'
                 archive.writestr(name, data)
         bundle = frozen.getvalue()
-        from tests.test_model_evaluation import protocol
+        from tests.evaluation_fixtures import protocol
         from tempo_evaluation_protocol import read_package
         import tempfile
         with tempfile.TemporaryDirectory() as directory:

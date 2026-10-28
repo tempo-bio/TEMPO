@@ -10,6 +10,12 @@ from pathlib import Path
 import zipfile
 
 
+def disable_ultralytics_analytics():
+    """Disable the process's cached sender without changing saved preferences."""
+    from ultralytics.utils.events import events
+    events.enabled = False
+
+
 def clear_runtime_environment(environment):
     """Discard only import paths owned by earlier generated TEMPO notebook runs."""
     import os

@@ -31,6 +31,12 @@ class ImmediateFailures(unittest.TextTestResult):
         self.stream.writeln('\nERROR DETAILS: '+test.id())
         self.stream.writeln(self._exc_info_to_string(error, test))
 
+    def addSubTest(self, test, subtest, error):
+        super().addSubTest(test, subtest, error)
+        if error is not None:
+            self.stream.writeln('\nSUBTEST DETAILS: '+subtest.id())
+            self.stream.writeln(self._exc_info_to_string(error, subtest))
+
 
 def main():
     parser = argparse.ArgumentParser()

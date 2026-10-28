@@ -21,6 +21,14 @@ from tempo_training_runtime import check_scout_training
 
 class ScoutTrainingTests(unittest.TestCase):
     def setUp(self):
+        from tempo_training_runtime import disable_ultralytics_analytics
+        disable_ultralytics_analytics()
+        settings_folder = tempfile.TemporaryDirectory(); self.addCleanup(settings_folder.cleanup)
+        settings_file = patch.object(SETTINGS, 'file_path', Path(settings_folder.name)/'settings.json')
+        settings_file.start(); self.addCleanup(settings_file.stop)
+        # These fixtures fit local weights; package-version queries are unrelated.
+        updates = patch('ultralytics.utils.checks.check_pip_update_available', return_value=False)
+        updates.start(); self.addCleanup(updates.stop)
         previous = torch.get_num_threads(); torch.set_num_threads(2)
         self.addCleanup(torch.set_num_threads, previous)
 

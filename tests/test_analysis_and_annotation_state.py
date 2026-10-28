@@ -10,11 +10,12 @@ from unittest.mock import patch, Mock
 import pandas as pd
 from PyQt6.QtWidgets import QApplication
 from PyQt6.QtTest import QTest
-from PyQt6.QtCore import QTimer, QCoreApplication, QEvent
+from PyQt6.QtCore import QTimer
 APP = QApplication.instance() or QApplication([])
 with patch('platform.machine', return_value='x86_64'):
     import tempo_gui as gui
 from tempo_tasks import ReadTaskDialog
+from tests.qt_lifecycle import close_and_dispose, wait_for_qt
 
 
 class AnalysisStateTests(unittest.TestCase):
@@ -31,10 +32,7 @@ class AnalysisStateTests(unittest.TestCase):
         self.view.load_csv(str(self.path))
 
     def dispose_view(self):
-        self.view.close()
-        self.view.deleteLater()
-        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
-        APP.processEvents()
+        close_and_dispose(self.view)
 
     def test_missing_metric_clears_cache_and_valid_metric_clears_error(self):
         view = self.view
@@ -172,7 +170,7 @@ class AnnotationPresentationTests(unittest.TestCase):
                             QTest.mouseClick(button, Qt.MouseButton.LeftButton)
                     start.assert_not_called()
             finally:
-                view.close(); view.deleteLater(); APP.processEvents()
+                close_and_dispose(view)
 
 
 class BackgroundLifecycleTests(unittest.TestCase):
@@ -180,7 +178,7 @@ class BackgroundLifecycleTests(unittest.TestCase):
     def test_read_timeout_ignores_late_success(self):
         with patch('tempo_tasks.run_background') as background:
             dialog = ReadTaskDialog(None, 'Reading', lambda: 'late success', timeout_ms=10)
-        self.addCleanup(dialog.close)
+        self.addCleanup(close_and_dispose, dialog)
         from time import monotonic
         deadline = monotonic() + 2
         while not dialog.settled and monotonic() < deadline:
@@ -200,14 +198,30 @@ class BackgroundLifecycleTests(unittest.TestCase):
         self.assertIn('cancelled', states[-1])
 
     def test_stalled_hardware_release_keeps_gui_responsive(self):
-        gate = threading.Event()
-        view = gui.CaptureTab(); self.addCleanup(view.close)
-        view.core = Mock(); view.core.unloadAllDevices.side_effect = lambda: gate.wait(2)
+        gate = threading.Event(); entered = threading.Event(); released = threading.Event()
+        view = gui.CaptureTab(); view.capture_controls._profile_loaded = True
+        view.core = Mock(); release_threads = []
+        def release():
+            release_threads.append(threading.get_ident()); entered.set()
+            if not gate.wait(5):
+                raise TimeoutError('Fixture hardware release was not resumed.')
+            released.set()
+        view.core.unloadAllDevices.side_effect = release
         ticks = []
-        self.assertFalse(view.cleanup())
-        QTimer.singleShot(5, lambda: ticks.append(True))
-        QTest.qWait(30)
-        self.assertEqual(ticks, [True])
-        self.assertFalse(getattr(view, '_cleanup_done', False))
-        gate.set(); self.assertTrue(view._cleanup_worker.wait(3000)); QTest.qWait(20)
-        self.assertTrue(view._cleanup_done)
+        try:
+            self.assertFalse(view.cleanup())
+            self.assertTrue(entered.wait(1))
+            self.assertNotEqual(release_threads, [threading.get_ident()])
+            QTimer.singleShot(5, lambda: ticks.append((threading.get_ident(), released.is_set())))
+            self.assertTrue(wait_for_qt(lambda: ticks, timeout=1), 'The GUI did not deliver its timer event.')
+            self.assertEqual(ticks, [(threading.get_ident(), False)])
+            self.assertFalse(getattr(view, '_cleanup_done', False))
+        finally:
+            gate.set()
+            worker = getattr(view, '_cleanup_worker', None)
+            if worker is not None:
+                self.assertTrue(worker.wait(3000))
+            self.assertTrue(wait_for_qt(lambda: getattr(view, '_cleanup_done', False)))
+            self.assertTrue(view.close())
+            from tempo_tasks import dispose_closed_views
+            dispose_closed_views(view)

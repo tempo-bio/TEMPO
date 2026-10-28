@@ -64,6 +64,10 @@ def populated_review(directory):
         view.sub_list.setCurrentRow(0)
         pending.pop(0)({'review-image.png':copy.deepcopy(record)},None)
         pending.pop(0)(str(path),None)
+    # This is a fixed presentation snapshot. Showing it later must not start a
+    # live account read after the construction-time transport patch has ended.
+    # Refresh ordering is exercised separately by ReviewInteractionTests.
+    view.request_refresh = lambda: None
     return view
 
 

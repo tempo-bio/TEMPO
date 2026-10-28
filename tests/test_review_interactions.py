@@ -11,8 +11,10 @@ os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 from PyQt6.QtWidgets import QApplication, QCheckBox
 from PyQt6.QtGui import QImage, QFont
 from PyQt6.QtCore import Qt, QPoint, QRect
+from PyQt6 import sip
 from PyQt6.QtTest import QTest
 import annotation_review_dialog as review
+from tests.qt_lifecycle import close_and_dispose
 
 APP = QApplication.instance() or QApplication([])
 
@@ -105,7 +107,7 @@ class ReviewInteractionTests(unittest.TestCase):
         self.assertIsInstance(results[0][1], TimeoutError)
 
     def test_readonly_preview_fits_when_first_shown(self):
-        canvas = review.ReviewCanvas(editable=False); self.addCleanup(canvas.close)
+        canvas = review.ReviewCanvas(editable=False); self.addCleanup(close_and_dispose, canvas)
         canvas.set_image_and_masks(str(self.path), self.record)
         canvas.resize(400, 220); canvas.show(); APP.processEvents()
         bounds = canvas.mapFromScene(canvas.sceneRect()).boundingRect()
@@ -125,7 +127,42 @@ class ReviewInteractionTests(unittest.TestCase):
         patcher = patch.object(review, 'run_background', side_effect=lambda action, done:self.pending.append((action,done)))
         patcher.start(); self.addCleanup(patcher.stop)
         self.view = review.AnnotationReviewDialog(verified=True)
-        self.addCleanup(self.view.deleteLater)
+        self.addCleanup(self.dispose_review)
+
+    def dispose_review(self):
+        if sip.isdeleted(self.view):
+            return
+        # Settle fake requests without executing their network actions. A retry
+        # left pending by a test must receive an outcome before close can succeed.
+        for _ in range(20):
+            if not self.pending:
+                break
+            self.pending.pop(0)[1](None, ConnectionError('Fixture request cancelled.'))
+        self.assertFalse(self.pending, 'Fixture reads kept restarting during teardown.')
+        self.assertFalse(self.view._operation, 'A fixture write did not settle.')
+        with patch.object(review, 'confirm_action', return_value=True):
+            close_and_dispose(self.view)
+
+    def test_presentation_snapshot_never_starts_a_remote_read_when_shown_again(self):
+        from tests.presentation_fixtures import populated_review
+        view = populated_review(self.tmp.name)
+        self.addCleanup(close_and_dispose, view)
+        with patch.object(review, 'run_background', side_effect=AssertionError('Unexpected remote read')) as read:
+            view.show(); APP.processEvents()
+            view.hide(); view.show(); APP.processEvents()
+        read.assert_not_called()
+        self.assertFalse(view._loading)
+        self.assertEqual(view.current_image_filename, 'review-image.png')
+
+    def test_fixture_disposal_removes_read_deadlines_before_the_next_test(self):
+        from PyQt6.QtCore import QTimer
+        timers = self.view.findChildren(QTimer)
+        self.assertTrue(any(timer.isActive() for timer in timers))
+        self.view.show(); APP.processEvents()
+        self.dispose_review()
+        self.assertTrue(sip.isdeleted(self.view))
+        self.assertTrue(all(sip.isdeleted(timer) for timer in timers))
+        self.assertFalse(self.pending)
 
     def load_submission(self):
         self.pending.pop()[1]([{'submission_id':'one','collaborator_id':'Researcher','image_count':1}],None)

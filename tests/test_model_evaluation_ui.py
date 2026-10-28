@@ -143,7 +143,7 @@ class ModelEvaluationUiTests(unittest.TestCase):
             maintainer_tab.TrainingWorkflowDialog(source_name='MODEL_EVALUATION.md')
 
     def test_user_selection_updates_visible_settings_and_stage_preview(self):
-        from tests.test_model_evaluation import protocol
+        from tests.evaluation_fixtures import protocol
         import json
         path=protocol(self.root/'conditional');descriptor=json.loads(path.read_text())
         descriptor['parameters']=[dict(name='test',label='Test',type='choice',choices=['speed','quality'],default='speed'),

@@ -267,6 +267,8 @@ def run_inference(image_or_video_path, model_path_or_type=None, conf=0.15, iou=0
             print(json.dumps(response))
             return response
         from ultralytics import YOLO
+        from tempo_training_runtime import disable_ultralytics_analytics
+        disable_ultralytics_analytics()
         model = YOLO(model_path)
         
         metadata = getattr(getattr(model,'model',None), 'tempo_metadata', {})

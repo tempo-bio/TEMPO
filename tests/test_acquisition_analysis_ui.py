@@ -6,6 +6,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
 from PyQt6.QtWidgets import QApplication, QPushButton
+from tests.qt_lifecycle import close_and_dispose, wait_for_qt
 from tempo_processing import ProcessingResult
 from tests.presentation_fixtures import application_style_name, set_application_style
 APP = QApplication.instance() or QApplication([])
@@ -21,7 +22,7 @@ class AcquisitionAnalysisTests(unittest.TestCase):
             patcher.start();self.addCleanup(patcher.stop)
 
     def test_advanced_properties_only_appear_after_discovery(self):
-        view = gui.CaptureTab(); self.addCleanup(view.close)
+        view = gui.CaptureTab(); self.addCleanup(close_and_dispose, view)
         self.assertTrue(view.prop_group.isHidden())
         core = Mock()
         core.getCameraDevice.return_value = 'Camera'
@@ -42,7 +43,7 @@ class AcquisitionAnalysisTests(unittest.TestCase):
     def test_property_read_failure_clears_stale_value_and_disables_apply(self):
         from types import SimpleNamespace
         from PyQt6.QtWidgets import QLineEdit, QPushButton
-        view = gui.CaptureTab(); self.addCleanup(view.close)
+        view = gui.CaptureTab(); self.addCleanup(close_and_dispose, view)
         view.core = Mock(); view.camera_device = 'Camera'
         view.prop_val_input.setText('old value')
         view.core.getProperty.side_effect = OSError('camera disconnected')
@@ -130,12 +131,13 @@ class AcquisitionAnalysisTests(unittest.TestCase):
                 device = Mock()
                 device.getRemainingImageCount.side_effect = RuntimeError('camera disconnected')
                 device.read.return_value = (False, None)
-                view = gui.CaptureTab(); self.addCleanup(view.close)
+                view = gui.CaptureTab(); self.addCleanup(close_and_dispose, view)
+                view.capture_controls._profile_loaded = True
                 view.core = device if hardware == 'core' else None
                 view.cv_cap = device if hardware == 'usb' else None
                 view.timer.start(1000)
                 view.update_frame()
-                QTest.qWait(60)
+                self.assertTrue(wait_for_qt(lambda: not view._preview_pending), 'Preview failure was not delivered.')
                 self.assertFalse(view.btn_snap.isEnabled())
                 self.assertFalse(view.btn_record.isEnabled())
                 self.assertFalse(view.camera_error.isHidden())
@@ -146,7 +148,7 @@ class AcquisitionAnalysisTests(unittest.TestCase):
         from types import SimpleNamespace
         from PyQt6.QtWidgets import QLabel
         cap = Mock(); cap.read.return_value = (False, None)
-        view = gui.CaptureTab(); self.addCleanup(view.close)
+        view = gui.CaptureTab(); self.addCleanup(close_and_dispose, view)
         view.cv_cap = cap
         initial_fov = view.fov_id.value()
         with patch.object(gui.cv2, 'imwrite') as write:
@@ -160,7 +162,7 @@ class AcquisitionAnalysisTests(unittest.TestCase):
         import threading
         with patch.object(gui.QTimer, 'singleShot'):
             view = gui.HardwareWizardDialog()
-        self.addCleanup(view.close)
+        self.addCleanup(close_and_dispose, view)
         threads = []
         core = Mock()
         core.getDeviceAdapterNames.side_effect = lambda: (threads.append(threading.get_ident()) or [])
@@ -181,7 +183,7 @@ class AcquisitionAnalysisTests(unittest.TestCase):
             for style in styles:
                 with self.subTest(style=style):
                     set_application_style(APP, style)
-                    view = gui.AnalyzerTab(); self.addCleanup(view.close)
+                    view = gui.AnalyzerTab(); self.addCleanup(close_and_dispose, view)
                     view.resize(1100, 760); view.stats_tabs.show(); view.show()
                     for show_trace in (False, True):
                         view.grp_wave.setVisible(show_trace)
@@ -201,7 +203,7 @@ class AcquisitionAnalysisTests(unittest.TestCase):
     def test_hardware_adapter_failure_is_inline_and_reload_recovers(self):
         with patch.object(gui.QTimer, 'singleShot'):
             view = gui.HardwareWizardDialog()
-        self.addCleanup(view.close)
+        self.addCleanup(close_and_dispose, view)
         with patch.object(gui, 'HAS_MMCORE', True), patch.object(gui, 'get_configured_core', side_effect=RuntimeError('driver missing')):
             view.load_adapters()
         self.assertIn('driver missing', view.hardware_error.details.toPlainText())
@@ -214,7 +216,7 @@ class AcquisitionAnalysisTests(unittest.TestCase):
     def test_hardware_connection_failure_keeps_dialog_retryable(self):
         with patch.object(gui.QTimer, 'singleShot'):
             view = gui.HardwareWizardDialog()
-        self.addCleanup(view.close)
+        self.addCleanup(close_and_dispose, view)
         view.adapter_combo.blockSignals(True); view.adapter_combo.addItem('Adapter')
         view.device_combo.addItem('Camera')
         core = Mock(); core.initializeAllDevices.side_effect = RuntimeError('camera unplugged')
@@ -226,7 +228,7 @@ class AcquisitionAnalysisTests(unittest.TestCase):
         self.assertEqual(core.unloadAllDevices.call_count, 2)
 
     def test_camera_scan_runs_in_background_and_prevents_duplicate_scan(self):
-        view = gui.CameraIndexDialog(); self.addCleanup(view.close)
+        view = gui.CameraIndexDialog(); self.addCleanup(close_and_dispose, view)
         missing = Mock(); missing.isOpened.return_value = False
         available = Mock(); available.isOpened.return_value = True
         with patch.object(gui, 'TaskThread') as worker:
@@ -245,7 +247,7 @@ class AcquisitionAnalysisTests(unittest.TestCase):
         self.assertTrue(view.btn_connect.isEnabled())
 
     def test_camera_scan_releases_failed_probe_and_allows_retry(self):
-        view = gui.CameraIndexDialog(); self.addCleanup(view.close)
+        view = gui.CameraIndexDialog(); self.addCleanup(close_and_dispose, view)
         camera = Mock(); camera.isOpened.side_effect = RuntimeError('driver unavailable')
         with patch.object(gui, 'TaskThread') as worker:
             view.autodetect_cameras()
@@ -271,7 +273,7 @@ class AcquisitionAnalysisTests(unittest.TestCase):
         from tempo_ui import ErrorDetails
         core = Mock(); core.isSequenceRunning.return_value = True
         core.stopSequenceAcquisition.side_effect = RuntimeError('stop failed')
-        view = gui.CaptureTab(); self.addCleanup(view.close)
+        view = gui.CaptureTab(); self.addCleanup(close_and_dispose, view)
         view.core = core
         gui.CaptureTab.change_exposure(view, 10)
         gui.CaptureTab.change_exposure(view, 20)
@@ -285,7 +287,7 @@ class AcquisitionAnalysisTests(unittest.TestCase):
         from PyQt6.QtWidgets import QPushButton, QLabel
         from tempo_ui import ErrorDetails
         core = Mock(); core.stopSequenceAcquisition.side_effect = [RuntimeError('driver busy'), None]
-        view = gui.CaptureTab(); self.addCleanup(view.close)
+        view = gui.CaptureTab(); self.addCleanup(close_and_dispose, view)
         view.core = core; view.timer.start(1000)
         gui.CaptureTab.toggle_camera(view)
         self.assertEqual(view.btn_cam.text(), 'Retry Stop Feed')
@@ -301,7 +303,7 @@ class AcquisitionAnalysisTests(unittest.TestCase):
         from tempo_ui import ErrorDetails
         core = Mock(); core.isSequenceRunning.return_value = True
         core.setExposure.side_effect = RuntimeError('outside camera limits')
-        view = gui.CaptureTab(); self.addCleanup(view.close)
+        view = gui.CaptureTab(); self.addCleanup(close_and_dispose, view)
         view.core = core
         gui.CaptureTab.change_exposure(view, 100)
         core.stopSequenceAcquisition.assert_called_once()
@@ -313,7 +315,7 @@ class AcquisitionAnalysisTests(unittest.TestCase):
         from PyQt6.QtWidgets import QPushButton
         from tempo_ui import ErrorDetails
         core = Mock(); core.startContinuousSequenceAcquisition.side_effect = RuntimeError('disconnected')
-        view = gui.CaptureTab(); self.addCleanup(view.close)
+        view = gui.CaptureTab(); self.addCleanup(close_and_dispose, view)
         view.core = core; view.timer.start(1000)
         gui.CaptureTab.resume_camera_after_setting(view)
         self.assertFalse(view.timer.isActive())
@@ -403,7 +405,7 @@ class AcquisitionAnalysisTests(unittest.TestCase):
             'fixture.pt',.15,acquisition_factory=gui.CameraAcquisitionWorker,enqueue=Mock())
 
     def test_invalid_csv_is_reported_without_replacing_existing_results(self):
-        view=gui.AnalyzerTab(); self.addCleanup(view.close)
+        view=gui.AnalyzerTab(); self.addCleanup(close_and_dispose, view)
         previous=object(); view.df=previous
         with tempfile.TemporaryDirectory() as directory:
             path=Path(directory)/'invalid.csv'; path.write_text('wrong,column\n1,2\n')
@@ -414,7 +416,7 @@ class AcquisitionAnalysisTests(unittest.TestCase):
         self.assertIn('previously loaded results are unchanged',view.analysis_error.summary.text())
 
     def test_measurements_have_readable_names_and_stable_data_keys(self):
-        view=gui.AnalyzerTab(); self.addCleanup(view.close)
+        view=gui.AnalyzerTab(); self.addCleanup(close_and_dispose, view)
         self.assertNotIn('_',view.metric_combo.currentText())
         self.assertEqual(view.metric_combo.currentData(),gui.tempo_preferences.get('analyzer','default_metric'))
         self.assertTrue(view.lbl_target.wordWrap())
@@ -489,7 +491,8 @@ class AcquisitionAnalysisTests(unittest.TestCase):
         worker=Mock(); worker.isRunning.return_value=True
         release = threading.Event()
         worker.wait.side_effect = lambda: release.wait(2)
-        view = gui.CaptureTab(); self.addCleanup(view.close)
+        view = gui.CaptureTab(); self.addCleanup(close_and_dispose, view)
+        view.capture_controls._profile_loaded = True
         view.acq_worker = worker; view.core = Mock()
         core = view.core
         self.assertFalse(view.cleanup())
@@ -497,12 +500,12 @@ class AcquisitionAnalysisTests(unittest.TestCase):
         core.unloadAllDevices.assert_not_called()
         release.set()
         self.assertTrue(view._cleanup_worker.wait(3000))
-        QTest.qWait(20)
+        self.assertTrue(wait_for_qt(lambda: getattr(view, '_cleanup_done', False)))
         core.unloadAllDevices.assert_called_once()
         self.assertTrue(view._cleanup_done)
 
     def test_plate_navigator_does_not_expand_analysis_window(self):
-        view=gui.AnalyzerTab(); self.addCleanup(view.close)
+        view=gui.AnalyzerTab(); self.addCleanup(close_and_dispose, view)
         view.resize(1100,760); view.show(); APP.processEvents(); before=view.size()
         view.plate_toggle.setEnabled(True); view.plate_toggle.setChecked(True); APP.processEvents()
         self.assertEqual(view.size(),before)
@@ -510,13 +513,13 @@ class AcquisitionAnalysisTests(unittest.TestCase):
         self.assertFalse(view.plate_toggle.isChecked())
 
     def test_missing_summary_does_not_generate_zero_duration_waveform(self):
-        view=gui.AnalyzerTab(); self.addCleanup(view.close)
+        view=gui.AnalyzerTab(); self.addCleanup(close_and_dispose, view)
         view.draw_recorded_wave({'Time_to_Peak_ms':100,'Peak_Amplitude_au':4})
         self.assertIn('unavailable', view.wave_note.text())
         self.assertIsNone(view.wave_curve.getData()[0])
 
     def test_analysis_applies_saved_metric_and_palette(self):
-        view=gui.AnalyzerTab(); self.addCleanup(view.close)
+        view=gui.AnalyzerTab(); self.addCleanup(close_and_dispose, view)
         with patch.object(gui.tempo_preferences,'get',side_effect=lambda category,key,default=None: {'default_metric':'Time_to_Peak_ms','colormap_palette':'plasma'}.get(key,default)):
             view.apply_display_preferences()
         self.assertEqual(view.metric_combo.currentData(),'Time_to_Peak_ms')

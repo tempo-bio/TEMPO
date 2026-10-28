@@ -94,11 +94,19 @@ class StimulationTests(unittest.TestCase):
 
     def test_heartbeat_worker_and_ordered_final_discharge(self):
         port=TranscriptPort(); service=PacerService(serial_factory=lambda *a,**k:port)
+        heartbeat = threading.Event()
+        write = port.write
+        def observed_write(payload):
+            result = write(payload)
+            if payload.decode().strip().endswith(' ping'):
+                heartbeat.set()
+            return result
+        port.write = observed_write
         service.connect('fixture').result(3)
         try:
             service.submit(StimulusParameters().command()).result(1)
             service.submit('pace').result(1)
-            time.sleep(.35)
+            self.assertTrue(heartbeat.wait(1), 'The pacing worker did not send its heartbeat.')
             self.assertIn('ping',port.commands)
             self.assertEqual(service.submit('stop').result(1).mode,'REST_DISCHARGE')
         finally:

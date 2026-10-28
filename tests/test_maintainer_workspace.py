@@ -13,6 +13,7 @@ import maintainer_tab
 from tempo_ui import install_ui
 
 from tempo_tasks import dispose_closed_views
+from tests.qt_lifecycle import wait_for_qt
 
 
 def close_fixture(view):
@@ -331,8 +332,20 @@ class MaintainerTests(unittest.TestCase):
     def setUp(self):
         self.addCleanup(patch.stopall)
         patch.object(maintainer_tab.QTimer,'singleShot').start()
+        self.pending_reads = []
+        patch.object(maintainer_tab, 'run_background',
+                     side_effect=lambda action, done: self.pending_reads.append(done)).start()
         self.view=maintainer_tab.MaintainerTab(types.SimpleNamespace(universal_annotations={}))
         self.addCleanup(close_fixture, self.view)
+        self.addCleanup(self.settle_reads)
+
+    def settle_reads(self):
+        for _ in range(20):
+            if not self.pending_reads:
+                break
+            self.pending_reads.pop(0)(None, ConnectionError('Fixture request cancelled.'))
+        self.assertFalse(self.pending_reads, 'Fixture reads kept restarting during teardown.')
+        self.assertFalse(self.view.pending_work(), 'A fixture write did not settle.')
 
     def test_real_epochs_and_completed_models_are_separate_from_publication(self):
         self.view.remote_ready(({'id':'run'},{'phase':'training','gpu':'A100','updated_at':time.time(),
@@ -485,7 +498,7 @@ class MaintainerTests(unittest.TestCase):
             self.view.refresh_remote()
             self.assertTrue(self.view.refresh_spinner.timer.isActive())
             before=self.view.refresh_spinner.grab().toImage()
-            QTest.qWait(180)
+            self.assertTrue(wait_for_qt(lambda: before != self.view.refresh_spinner.grab().toImage()))
             after=self.view.refresh_spinner.grab().toImage()
             self.assertNotEqual(before,after)
             self.assertEqual(self.view.refresh_status.geometry(),button_bounds)

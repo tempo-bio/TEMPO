@@ -27,6 +27,23 @@ def valid_report():
 
 
 class PackagingCommandTests(unittest.TestCase):
+    def test_subtest_failure_is_reported_before_the_next_test_runs(self):
+        from scripts.windows_test_suite import ImmediateFailures
+        output = io.StringIO()
+        observed = []
+        class Fixture(unittest.TestCase):
+            def test_failure(self):
+                with self.subTest(kind='recording'):
+                    self.fail('fixture callback was not delivered')
+            def test_next(self):
+                observed.append(output.getvalue())
+        suite = unittest.TestSuite([Fixture('test_failure'), Fixture('test_next')])
+        result = unittest.TextTestRunner(stream=output, resultclass=ImmediateFailures).run(suite)
+        self.assertFalse(result.wasSuccessful())
+        self.assertEqual(len(result.failures), 1)
+        self.assertIn("kind='recording'", observed[0])
+        self.assertIn('fixture callback was not delivered', observed[0])
+
     def test_test_suite_sampler_stops_if_discovery_raises(self):
         from scripts import windows_test_suite
         stopped,sampler=Mock(),Mock()

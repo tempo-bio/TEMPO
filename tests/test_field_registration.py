@@ -7,7 +7,6 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from PyQt6.QtCore import QCoreApplication, QEvent
 from PyQt6.QtWidgets import QApplication
 import pandas as pd
 import tempo_config as config
@@ -15,6 +14,7 @@ import setup_wizard as setup
 with patch('platform.machine', return_value='x86_64'):
     import tempo_gui as gui
 from tests.presentation_fixtures import write_dataset
+from tests.qt_lifecycle import close_and_dispose
 
 APP = QApplication.instance() or QApplication([])
 
@@ -36,9 +36,7 @@ class FieldRegistrationTests(unittest.TestCase):
         p.start(); self.addCleanup(p.stop)
 
     def dispose(self, view):
-        view.close(); view.deleteLater()
-        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
-        APP.processEvents()
+        close_and_dispose(view)
 
     def test_first_unassociated_cell_does_not_hide_valid_field_registration(self):
         path = write_dataset(self.root, registered=True)

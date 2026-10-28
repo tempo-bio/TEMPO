@@ -93,6 +93,8 @@ def group_matches(truth,predicted):
 
 def benchmark_scout(path, dataset, split, device):
     from ultralytics import YOLO
+    from tempo_training_runtime import disable_ultralytics_analytics
+    disable_ultralytics_analytics()
     from tempo_training import read_image_plane
     model = YOLO(str(path)); info = json.loads((Path(dataset)/'dataset.json').read_text())
     counts = {radius:np.zeros(3,int) for radius in (6,12,18)}

@@ -16,6 +16,7 @@ from PyQt6.QtWidgets import QApplication, QDialog
 from PyQt6 import sip
 from tempo_tasks import (run_background, release_background_signals, run_task,
                          pending_task_titles, dispose_closed_views, TaskThread)
+from tests.qt_lifecycle import close_and_dispose, wait_for_qt
 
 APP = QApplication.instance() or QApplication([])
 with patch('platform.machine', return_value='x86_64'):
@@ -71,6 +72,24 @@ class BackgroundDeliveryTests(unittest.TestCase):
 
 
 class ProtectedTaskTests(unittest.TestCase):
+    def test_fixture_disposal_preserves_a_refused_close(self):
+        class DeferredDialog(QDialog):
+            ready = False
+            def closeEvent(self, event):
+                if self.ready:
+                    event.accept()
+                else:
+                    event.ignore()
+        view = DeferredDialog(); view.show()
+        try:
+            with self.assertRaisesRegex(RuntimeError, 'refused to close'):
+                close_and_dispose(view)
+            self.assertFalse(sip.isdeleted(view))
+            self.assertTrue(view.isVisible())
+        finally:
+            view.ready = True
+            close_and_dispose(view)
+
     def test_modal_write_ignores_quit_and_keeps_event_loop_responsive_until_settled(self):
         gate = threading.Event(); events = []
         def try_quit():
@@ -132,12 +151,13 @@ class PreviewShutdownTests(unittest.TestCase):
                 self.assertEqual(ticks, [True])
                 cap.release.assert_not_called()
             finally:
-                gate.set(); self.assertTrue(dialog._scan_worker.wait(2000)); QTest.qWait(40)
-                dialog.close(); dispose_closed_views(dialog)
+                gate.set(); self.assertTrue(dialog._scan_worker.wait(2000))
+                self.assertTrue(wait_for_qt(lambda: not dialog._scan_busy))
+                close_and_dispose(dialog)
         cap.release.assert_called_once()
 
     def test_camera_setup_tracks_core_before_wizard_and_releases_usb_first(self):
-        view = gui.CaptureTab(); self.addCleanup(view.close)
+        view = gui.CaptureTab(); self.addCleanup(close_and_dispose, view)
         cap, core = Mock(), Mock(); view.cv_cap = cap
         core.isSequenceRunning.return_value = False
         dialog = Mock(); dialog.exec.return_value = gui.QDialog.DialogCode.Rejected
@@ -158,6 +178,7 @@ class PreviewShutdownTests(unittest.TestCase):
     def test_stop_feed_waits_for_preview_off_gui_and_protects_driver_outcome(self):
         gate = threading.Event(); entered = threading.Event(); calls = []
         view = gui.CaptureTab(); core = Mock(); view.core = core
+        self.addCleanup(close_and_dispose, view)
         core.getRemainingImageCount.return_value = 1
         def read():
             entered.set(); gate.wait(2)
@@ -192,6 +213,7 @@ class PreviewShutdownTests(unittest.TestCase):
     def test_snapshot_waits_for_preview_before_reading_camera_again(self):
         gate = threading.Event(); entered = threading.Event(); calls = []
         view = gui.CaptureTab(); cap = Mock(); view.cv_cap = cap
+        self.addCleanup(close_and_dispose, view)
         def read():
             if not calls:
                 calls.append('preview_entered'); entered.set(); gate.wait(2)
@@ -216,7 +238,7 @@ class PreviewShutdownTests(unittest.TestCase):
         self.assertIn('Snapshot saved', view.lbl_acq_status.text())
 
     def test_setting_restart_failure_disables_preview_and_capture(self):
-        view = gui.CaptureTab(); self.addCleanup(view.close)
+        view = gui.CaptureTab(); self.addCleanup(close_and_dispose, view)
         core = Mock(); view.core = core
         core.isSequenceRunning.return_value = True
         core.startContinuousSequenceAcquisition.side_effect = OSError('fixture restart failed')
@@ -315,8 +337,9 @@ class PreviewShutdownTests(unittest.TestCase):
             cap.release.assert_not_called()
             self.assertFalse(getattr(view, '_cleanup_done', False))
         finally:
-            gate.set(); self.assertTrue(view._cleanup_worker.wait(3000)); QTest.qWait(40)
-            view.close()
+            gate.set(); self.assertTrue(view._cleanup_worker.wait(3000))
+            self.assertTrue(wait_for_qt(lambda: getattr(view, '_cleanup_done', False)))
+            view.close(); dispose_closed_views(view)
         cap.release.assert_called_once()
         self.assertTrue(view._cleanup_done)
 
@@ -337,27 +360,52 @@ class PreviewShutdownTests(unittest.TestCase):
             delayed.start.assert_not_called()
             self.assertFalse(view.cleanup())
         finally:
-            gate.set(); self.assertTrue(view._cleanup_worker.wait(3000)); QTest.qWait(40)
-            view.close()
+            gate.set(); self.assertTrue(view._cleanup_worker.wait(3000))
+            self.assertTrue(wait_for_qt(lambda: getattr(view, '_cleanup_done', False)))
+            view.close(); dispose_closed_views(view)
         delayed.stop.assert_called_once()
         delayed.start.assert_not_called()
 
     def test_capture_start_waits_for_preview_callback_before_starting_recording(self):
-        gate = threading.Event(); view = gui.CaptureTab(); cap = Mock(); view.cv_cap = cap
-        cap.read.side_effect = lambda: (gate.wait(2), np.zeros((12, 12, 3), dtype=np.uint8))
-        view.timer.start(1000); view.update_frame()
+        gate = threading.Event(); entered = threading.Event()
+        view = gui.CaptureTab(); cap = Mock(); view.cv_cap = cap
+        view.capture_controls._profile_loaded = True
+        def read():
+            entered.set()
+            if not gate.wait(5):
+                raise TimeoutError('Fixture preview was not released.')
+            return True, np.zeros((12, 12, 3), dtype=np.uint8)
+        def dispatch(action, completed):
+            return run_background(action, lambda value, error:
+                QTimer.singleShot(150, lambda: completed(value, error)))
+        cap.read.side_effect = read
+        view.timer.start(1000)
+        with patch.object(gui, 'run_background', side_effect=dispatch):
+            view.update_frame()
         delayed = Mock(); delayed.is_running = True
         view._pending_camera_worker = delayed
         view.timer.stop(); view.start_pending_camera_worker()
         try:
+            self.assertTrue(entered.wait(1))
             delayed.start.assert_not_called()
-            gate.set(); QTest.qWait(80)
+            gate.set()
+            self.assertTrue(view._preview_task.done_event.wait(2))
+            self.assertTrue(view._preview_pending)
+            delayed.start.assert_not_called()
+            self.assertTrue(wait_for_qt(lambda: delayed.start.called), 'Capture did not start after preview completion.')
+            self.assertFalse(view._preview_pending)
             delayed.start.assert_called_once()
         finally:
             gate.set()
             if view._preview_task is not None:
                 self.assertTrue(view._preview_task.done_event.wait(2))
-            view._preview_wait_timer.stop(); view.close()
+            view.timer.stop(); view._preview_wait_timer.stop()
+            view.cleanup()
+            self.assertTrue(wait_for_qt(lambda: not view._preview_pending and getattr(view, '_cleanup_done', False)))
+            worker = getattr(view, '_cleanup_worker', None)
+            if worker is not None:
+                self.assertTrue(worker.wait(2000))
+            view.close(); dispose_closed_views(view)
 
 
 class DashboardCloseTests(unittest.TestCase):
@@ -462,7 +510,8 @@ class DashboardCloseTests(unittest.TestCase):
         try:
             with patch.object(gui, 'confirm_action', return_value=True):
                 self.assertFalse(self.view.close())
-            self.assertTrue(capture._cleanup_worker.wait(2000)); QTest.qWait(40)
+            self.assertTrue(capture._cleanup_worker.wait(2000))
+            self.assertTrue(wait_for_qt(lambda: not capture._cleanup_pending))
             self.assertTrue(self.view.isVisible())
             self.assertFalse(annotator._shutdown_requested)
             self.assertTrue(annotator._sync_timer.isActive())
@@ -474,7 +523,8 @@ class DashboardCloseTests(unittest.TestCase):
             annotator._sync_timer.stop()
             cap.release.side_effect = None
             capture.cleanup()
-            self.assertTrue(capture._cleanup_worker.wait(2000)); QTest.qWait(40)
+            self.assertTrue(capture._cleanup_worker.wait(2000))
+            self.assertTrue(wait_for_qt(lambda: getattr(capture, '_cleanup_done', False)))
 
 
 if __name__ == '__main__':

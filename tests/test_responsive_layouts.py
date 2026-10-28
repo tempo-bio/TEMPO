@@ -7,6 +7,7 @@ os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 from pathlib import Path
 import tempfile
 import unittest
+from tests.qt_lifecycle import close_and_dispose, wait_for_qt
 from unittest.mock import patch, Mock
 import pandas as pd
 from PyQt6.QtCore import Qt, QPoint, QRect
@@ -38,7 +39,7 @@ class ResponsiveLayoutTests(unittest.TestCase):
         self.root = Path(self.directory.name)
 
     def analyzer(self, registered=False, traces=False):
-        view = gui.AnalyzerTab(); self.addCleanup(view.close)
+        view = gui.AnalyzerTab(); self.addCleanup(close_and_dispose, view)
         view.load_csv(str(write_dataset(self.root, registered, traces)))
         view.metric_combo.setCurrentIndex(view.metric_combo.findData('Peak_Amplitude_au'))
         return view
@@ -58,7 +59,7 @@ class ResponsiveLayoutTests(unittest.TestCase):
                 APP.setFont(QFont('Arial', size))
                 with patch.object(gui.tempo_backend, 'QUEUE_FILE', str(self.root/'queue.json')):
                     view = processing_view(gui)
-                self.addCleanup(view.close)
+                self.addCleanup(close_and_dispose, view)
                 for width in (960, 1100, 1500):
                     settle(view, width, 620)
                     for enabled in (False, True):
@@ -81,7 +82,7 @@ class ResponsiveLayoutTests(unittest.TestCase):
                      patch.object(gui.tempo_hub, 'cached_lock_manifest', return_value={'images': {}}), \
                      patch.object(gui.tempo_hub, 'get_collaborator_id', return_value='Fixture'):
                     view = gui.AnnotatorTab()
-                self.addCleanup(view.close)
+                self.addCleanup(close_and_dispose, view)
                 view.lease_timer.stop(); view._sync_timer.stop()
                 for width in (960, 1100, 1500):
                     for mode in (0, 1):
@@ -125,7 +126,7 @@ class ResponsiveLayoutTests(unittest.TestCase):
         self.assertEqual(view.cell_selector.currentIndex(), 0)
 
     def test_historical_schema_chooses_available_metric_and_every_field_has_points(self):
-        view = gui.AnalyzerTab(); self.addCleanup(view.close)
+        view = gui.AnalyzerTab(); self.addCleanup(close_and_dispose, view)
         view.metric_combo.setCurrentIndex(view.metric_combo.findData('Peak_Amplitude_AreaNorm_au'))
         view.load_csv(str(write_historical_dataset(self.root)))
         self.assertEqual(view.metric_combo.currentData(), 'Peak_Amplitude_au')
@@ -145,7 +146,7 @@ class ResponsiveLayoutTests(unittest.TestCase):
         self.assertFalse(any(label.text().startswith('CT / RT:') for label in view.findChildren(QLabel)))
 
     def test_populated_review_class_selector_applies_edit_and_undo_keeps_approval_separate(self):
-        view = populated_review(self.root); self.addCleanup(view.deleteLater)
+        view = populated_review(self.root); self.addCleanup(close_and_dispose, view)
         view.complete.setChecked(True)
         view.canvas.polygons[0].setSelected(True)
         self.assertTrue(view.classes.isEnabled())
@@ -171,7 +172,7 @@ class ResponsiveLayoutTests(unittest.TestCase):
         for file in files: Path(file).write_bytes(b'synthetic placeholder')
         with patch.object(gui.tempo_backend,'QUEUE_FILE',str(path)):
             path.write_text(json.dumps(files))
-            view = processing_view(gui); self.addCleanup(view.close)
+            view = processing_view(gui); self.addCleanup(close_and_dispose, view)
             settle(view,1100,950)
             tall_height = view.queue_list.height()
             self.assertGreater(tall_height,500)
@@ -194,7 +195,7 @@ class ResponsiveLayoutTests(unittest.TestCase):
                      patch.object(gui.tempo_hub,'cached_lock_manifest',return_value={'images':{}}), \
                      patch.object(gui.tempo_hub,'get_collaborator_id',return_value='Fixture'):
                     view=gui.AnnotatorTab()
-                self.addCleanup(view.close)
+                self.addCleanup(close_and_dispose, view)
                 view.lease_timer.stop(); view._sync_timer.stop(); settle(view,1100,760)
                 buttons=(view.btn_auto_nano,view.btn_auto_stardist,view.btn_auto_cellpose)
                 for enabled in (False,True):
@@ -216,7 +217,7 @@ class ResponsiveLayoutTests(unittest.TestCase):
              patch.object(gui.tempo_hub,'cached_lock_manifest',return_value={'images':{}}), \
              patch.object(gui.tempo_hub,'get_collaborator_id',return_value='Fixture'):
             annotator=gui.AnnotatorTab()
-        self.addCleanup(annotator.close)
+        self.addCleanup(close_and_dispose, annotator)
         annotator.lease_timer.stop(); annotator._sync_timer.stop()
         settle(annotator)
         self.assertTrue(annotator.lbl_auto_status.isHidden())
@@ -227,7 +228,7 @@ class ResponsiveLayoutTests(unittest.TestCase):
         self.assertFalse(annotator.lbl_auto_status.isHidden())
         with patch.object(maintainer_tab,'run_background',return_value=None):
             maintainer=maintainer_tab.MaintainerTab(Mock())
-        self.addCleanup(maintainer.close); maintainer.timer.stop()
+        self.addCleanup(close_and_dispose, maintainer); maintainer.timer.stop()
         maintainer.pages.setEnabled(True)
         maintainer.pages.setTabEnabled(maintainer.pages.indexOf(maintainer.cloud_scroll),True)
         maintainer.pages.setCurrentWidget(maintainer.cloud_scroll)
@@ -242,7 +243,7 @@ class ResponsiveLayoutTests(unittest.TestCase):
         try:
             for size in (12,18):
                 APP.setFont(QFont('Arial',size))
-                view=gui.AnalyzerTab(); self.addCleanup(view.close)
+                view=gui.AnalyzerTab(); self.addCleanup(close_and_dispose, view)
                 view.load_csv(str(write_historical_dataset(self.root)))
                 for width,height in ((960,620),(1100,760),(1700,950)):
                     settle(view,width,height)
@@ -276,7 +277,7 @@ class ResponsiveLayoutTests(unittest.TestCase):
     def test_bad_or_partial_registration_retains_measurements_and_identifies_unplaced_cells(self):
         path = write_dataset(self.root, registered=True)
         (self.root/'recording-2.spatial.json').unlink()
-        view = gui.AnalyzerTab(); self.addCleanup(view.close); view.load_csv(str(path))
+        view = gui.AnalyzerTab(); self.addCleanup(close_and_dispose, view); view.load_csv(str(path))
         view.metric_combo.setCurrentIndex(view.metric_combo.findData('Peak_Amplitude_au'))
         self.assertEqual(len(view.current_x_vals), 0)
         self.assertEqual(view.cell_selector.count(), 13)
@@ -348,7 +349,7 @@ class ResponsiveLayoutTests(unittest.TestCase):
         host=QWidget(); row=QHBoxLayout(host)
         button=InformationButton('Illustrative beat','An illustration <of> summary measurements.')
         row.addWidget(button); row.addStretch()
-        self.addCleanup(host.close); self.addCleanup(help_controller().dismiss)
+        self.addCleanup(close_and_dispose, host); self.addCleanup(help_controller().dismiss)
         for size in (12,18,24):
             host.setFont(QFont('Arial',size)); settle(host,420,180)
             QTest.mouseMove(host,QPoint(400,160)); APP.processEvents()
@@ -363,10 +364,10 @@ class ResponsiveLayoutTests(unittest.TestCase):
             QTest.keyClick(button,Qt.Key.Key_Escape)
             self.assertIsNone(help_controller().bubble)
             QTest.mouseMove(button,button.rect().center()); APP.processEvents()
-            QTest.qWait(180); APP.processEvents()
+            self.assertTrue(wait_for_qt(lambda: help_controller().bubble is not None))
             self.assertIsNotNone(help_controller().bubble)
             QTest.mouseMove(host,QPoint(400,160)); APP.processEvents()
-            QTest.qWait(220)
+            self.assertTrue(wait_for_qt(lambda: help_controller().bubble is None))
             self.assertIsNone(help_controller().bubble)
 
     def test_information_icons_fit_empty_and_populated_analysis(self):
@@ -376,7 +377,7 @@ class ResponsiveLayoutTests(unittest.TestCase):
                 set_application_style(APP, style)
                 for size in (12,18,24):
                     APP.setFont(QFont('Arial',size))
-                    view=gui.AnalyzerTab(); self.addCleanup(view.close)
+                    view=gui.AnalyzerTab(); self.addCleanup(close_and_dispose, view)
                     for populated in (False,True):
                         if populated: view.load_csv(str(write_dataset(self.root)))
                         settle(view,1100,760)
@@ -420,7 +421,7 @@ class ResponsiveLayoutTests(unittest.TestCase):
         try:
             for size in (12,18,24):
                 APP.setFont(QFont('Arial',size))
-                view=gui.CaptureTab(); self.addCleanup(view.close); view.timer.stop()
+                view=gui.CaptureTab(); self.addCleanup(close_and_dispose, view); view.timer.stop()
                 settle(view,1700 if size==24 else 1100,760)
                 self.assertEqual(view.cfg_path.height(),view.btn_load_cfg.height())
                 self.assertEqual(view.cfg_path.y(),view.btn_load_cfg.y())
@@ -432,7 +433,7 @@ class ResponsiveLayoutTests(unittest.TestCase):
         finally: APP.setFont(old_font)
 
     def test_settings_keep_descriptions_and_guidance_without_information_icons(self):
-        view=gui.SettingsTab(); self.addCleanup(view.close)
+        view=gui.SettingsTab(); self.addCleanup(close_and_dispose, view)
         self.assertFalse(view.findChildren(InformationButton))
         labels=[label.text() for label in view.findChildren(QLabel)]
         self.assertIn('Requested frames per second.',labels)
@@ -445,7 +446,7 @@ class ResponsiveLayoutTests(unittest.TestCase):
         with patch.object(maintainer_tab,'run_background',return_value=None), \
              patch.object(maintainer_tab.QTimer,'singleShot',return_value=None):
             maintainer=maintainer_tab.MaintainerTab(Mock())
-        self.addCleanup(maintainer.close); maintainer.timer.stop()
+        self.addCleanup(close_and_dispose, maintainer); maintainer.timer.stop()
         maintainer.pages.setEnabled(True)
         maintainer.pages.setCurrentWidget(maintainer.cloud_scroll)
 
@@ -525,7 +526,7 @@ class ResponsiveLayoutTests(unittest.TestCase):
     def test_settings_precision_round_trip_and_adaptive_rows(self):
         preferences = copy.deepcopy(gui.tempo_preferences.get_all())
         with patch.object(gui.tempo_preferences,'_preferences',preferences), patch.object(gui.tempo_preferences,'save_to_disk',return_value=True):
-            view = gui.SettingsTab(); self.addCleanup(view.close)
+            view = gui.SettingsTab(); self.addCleanup(close_and_dispose, view)
             self.assertNotIn(('cruncher','in_memory_streaming'),view.widgets)
             p = view.widgets[('kinetics','asls_p')]
             self.assertEqual(p.value(),.001)
@@ -547,7 +548,7 @@ class ResponsiveLayoutTests(unittest.TestCase):
         try:
             for font in (12,18):
                 APP.setFont(QFont('Arial',font))
-                view=gui.SettingsTab(); self.addCleanup(view.close)
+                view=gui.SettingsTab(); self.addCleanup(close_and_dispose, view)
                 for width in (960,1100,1700):
                     settle(view,width,760)
                     self.assertEqual(view.width(),width)
@@ -637,7 +638,7 @@ class ResponsiveLayoutTests(unittest.TestCase):
         try:
             for size in (12,18):
                 APP.setFont(QFont('Arial',size))
-                view=gui.CaptureTab(); self.addCleanup(view.close); view.timer.stop()
+                view=gui.CaptureTab(); self.addCleanup(close_and_dispose, view); view.timer.stop()
                 settle(view)
                 starts={w.mapTo(view,QPoint(0,0)).x() for w in (view.spin_exposure,view.exp_id,view.well_id,view.fov_id)}
                 self.assertEqual(len(starts),1)
@@ -656,7 +657,7 @@ class ResponsiveLayoutTests(unittest.TestCase):
         finally: APP.setFont(old_font)
 
     def test_plate_scout_has_one_action_and_waits_for_actual_finish(self):
-        view=gui.CaptureTab(); self.addCleanup(view.close); view.timer.stop()
+        view=gui.CaptureTab(); self.addCleanup(close_and_dispose, view); view.timer.stop()
         tools=view.capture_controls
         view.core=Mock(); tools._stage_present=True
         worker=Mock(); worker.isRunning.return_value=True
@@ -676,7 +677,7 @@ class ResponsiveLayoutTests(unittest.TestCase):
             preferences=copy.deepcopy(gui.tempo_preferences.get_all())
             preferences['kinetics']['asls_p']['value']=saved
             with patch.object(gui.tempo_preferences,'_preferences',preferences), patch.object(gui.tempo_preferences,'save_to_disk',return_value=True) as save:
-                view=gui.SettingsTab(); self.addCleanup(view.close)
+                view=gui.SettingsTab(); self.addCleanup(close_and_dispose, view)
                 self.assertEqual(view.widgets[('kinetics','asls_p')].value(),saved)
                 view.save_preferences()
                 self.assertEqual(gui.tempo_preferences.get('kinetics','asls_p'),saved)
@@ -686,7 +687,7 @@ class ResponsiveLayoutTests(unittest.TestCase):
                 else:save.assert_called_once()
 
     def test_application_details_identify_loaded_checkout_without_contacting_services(self):
-        view=gui.SettingsTab(); self.addCleanup(view.close)
+        view=gui.SettingsTab(); self.addCleanup(close_and_dispose, view)
         with patch('tempo_logo.AboutTempoDialog') as dialog:
             view.show_application_details()
         dialog.assert_called_once_with(view, application_path=gui.__file__)
@@ -697,7 +698,7 @@ class ResponsiveLayoutTests(unittest.TestCase):
         self.queue = self.root/'queue.json'
         self.patcher = patch.object(gui.tempo_backend,'QUEUE_FILE',str(self.queue))
         self.patcher.start(); self.addCleanup(self.patcher.stop)
-        view=processing_view(gui); self.addCleanup(view.close)
+        view=processing_view(gui); self.addCleanup(close_and_dispose, view)
         return view
 
     def test_queue_actions_without_selection_do_not_change_job_status_or_open_picker(self):
@@ -777,7 +778,7 @@ class ResponsiveLayoutTests(unittest.TestCase):
         data['FOV_ID']='FOV001'
         data['Recording_ID']=data['Recording_ID'].map(lambda value: value + '-recording-context-' + 'x'*100)
         data.to_csv(path,index=False)
-        view=gui.AnalyzerTab(); self.addCleanup(view.close); view.load_csv(str(path))
+        view=gui.AnalyzerTab(); self.addCleanup(close_and_dispose, view); view.load_csv(str(path))
         view.field_selector.setCurrentIndex(2); settle(view,960,620)
         self.assertEqual(view.width(),960)
         self.assertIn('x'*100,view.field_selector.itemData(2,Qt.ItemDataRole.ToolTipRole))
