@@ -228,36 +228,67 @@ class PreviewShutdownTests(unittest.TestCase):
         self.assertIn('restart failed', view.camera_error.details.toPlainText())
 
     def test_stopping_pending_recording_or_scan_never_launches_it(self):
-        for kind in ('recording', 'scan'):
-            with self.subTest(kind=kind):
-                gate = threading.Event(); view = gui.CaptureTab(); cap = Mock(); view.cv_cap = cap
+        for kind, delivery_ms in (('recording', 0), ('recording', 150), ('scan', 0), ('scan', 150)):
+            with self.subTest(kind=kind, delivery_ms=delivery_ms):
+                gate = threading.Event(); entered = threading.Event()
+                view = gui.CaptureTab(); cap = Mock(); view.cv_cap = cap
+                view.capture_controls._profile_loaded = True
                 view.btn_cam.setEnabled(True)
-                cap.read.side_effect = lambda: (gate.wait(2), np.zeros((12, 12, 3), dtype=np.uint8))
-                view.timer.start(1000); view.update_frame()
-                view.pause_camera_controls()
+                def read():
+                    entered.set()
+                    if not gate.wait(5):
+                        raise TimeoutError('Fixture preview was not released.')
+                    return True, np.zeros((12, 12, 3), dtype=np.uint8)
+                def dispatch(action, completed):
+                    def received(value, error):
+                        QTimer.singleShot(delivery_ms, lambda: completed(value, error))
+                    return run_background(action, received)
+                cap.read.side_effect = read
                 delayed = Mock(); delayed.isRunning.return_value = False
                 delayed.wait.return_value = True; delayed.stop_confirmed = True
-                if kind == 'recording':
-                    view.acq_worker = delayed
-                else:
-                    view.scout_worker = delayed
-                view._pending_camera_worker = delayed
-                view.start_pending_camera_worker()
                 try:
+                    view.timer.start(1000)
+                    with patch.object(gui, 'run_background', side_effect=dispatch):
+                        view.update_frame()
+                    self.assertTrue(entered.wait(1))
+                    view.pause_camera_controls()
+                    if kind == 'recording':
+                        view.acq_worker = delayed
+                    else:
+                        view.scout_worker = delayed
+                    view._pending_camera_worker = delayed
+                    view.start_pending_camera_worker()
                     if kind == 'recording':
                         view.toggle_recording()
                     else:
                         view.stop_plate_scout()
                     self.assertIsNone(view._pending_camera_worker)
-                    gate.set(); QTest.qWait(100)
+                    QTest.qWait(60)
+                    self.assertTrue(view._preview_pending)
+                    self.assertFalse(view.btn_cam.isEnabled())
+                    delayed.start.assert_not_called()
+                    gate.set()
+                    deadline = time.monotonic() + 2
+                    while (view._preview_pending or not view.btn_cam.isEnabled()) and time.monotonic() < deadline:
+                        QTest.qWait(10)
+                    self.assertFalse(view._preview_pending, 'Preview completion was not delivered.')
                     delayed.stop.assert_called_once()
                     delayed.start.assert_not_called()
                     self.assertTrue(view.btn_cam.isEnabled())
+                    self.assertFalse(view._preview_wait_timer.isActive())
                 finally:
                     gate.set()
                     if view._preview_task is not None:
                         self.assertTrue(view._preview_task.done_event.wait(2))
-                    view.timer.stop(); view._preview_wait_timer.stop(); view.close()
+                    view.timer.stop(); view._preview_wait_timer.stop()
+                    view.cleanup()
+                    deadline = time.monotonic() + 2
+                    while (view._preview_pending or not getattr(view, '_cleanup_done', False)) and time.monotonic() < deadline:
+                        QTest.qWait(10)
+                    self.assertFalse(view._preview_pending, 'Fixture preview callback did not finish.')
+                    self.assertTrue(getattr(view, '_cleanup_done', False), 'Fixture camera cleanup did not finish.')
+                    self.assertTrue(view.close())
+                    dispose_closed_views(view)
 
     def test_stalled_preview_cannot_block_gui_or_release_camera_early(self):
         gate = threading.Event(); entered = threading.Event(); threads = []
