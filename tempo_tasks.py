@@ -295,7 +295,7 @@ class ReadTaskDialog(QDialog):
         self.accept()
 
     def timed_out(self):
-        self.error = TimeoutError('The read did not finish in time. You can retry; late results will be ignored.')
+        self.error = TimeoutError('The request did not finish in time. Try again.')
         self.reject()
 
     def reject(self):

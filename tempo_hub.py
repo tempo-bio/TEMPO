@@ -440,7 +440,7 @@ class TempoHub:
         info = self.api.repo_info(repo_id=self.get_dataset_repo() if repo_type == 'dataset' else self.get_models_repo(), repo_type=repo_type,
                                   expand=['sha', 'private'], token=self.token or False)
         if not info.private:
-            raise RuntimeError('The TEMPO repository must be private.')
+            raise RuntimeError('The shared Hugging Face repository must be private.')
         if not isinstance(info.sha, str) or not info.sha.strip():
             raise ValueError('The dataset revision could not be verified. Retry the request.')
         return info.sha
@@ -1062,7 +1062,7 @@ class TempoHub:
                 from tempo_nuclei import is_nucleus, supplement
                 for name, record in approved.items():
                     if master.get(name, {}).get('status') == 'approved':
-                        raise ValueError(f'{name} is already in the immutable master dataset.')
+                        raise ValueError(f'{name} is already approved; its cell outlines are locked.')
                     record['status'] = 'approved'
                     if manifest['images'][name].get('image_id'):
                         record['image_id'] = manifest['images'][name]['image_id']
@@ -1082,7 +1082,7 @@ class TempoHub:
     def merge_submission_to_master(self, submission_id, edited_annotations=None, expected_annotations=None):
         try:
             self._review(submission_id, edited_annotations=edited_annotations, expected_annotations=expected_annotations)
-            return True, 'Approved masks merged into the remote master dataset.'
+            return True, 'Annotations approved for training.'
         except Exception as exc:
             return False, redact_credentials(exc, self.token)
 

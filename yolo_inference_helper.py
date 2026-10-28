@@ -55,11 +55,10 @@ def resolve_model_path(model_type_or_path=None):
 
 
 class Tier1ScoutEngine:
-    """
-    High-Speed Edge Model Optimization Stack (Milestone 1):
-    Optimized for the Teledyne FLIR BFS-U3-16S2M-CS (1440x1080) and universal cameras.
-    Provides sub-5ms cell counting, viability screening, and gatekeeper triage.
-    Supports Windows DirectML / TensorRT / OpenVINO acceleration and macOS MPS/CoreML.
+    """Load the scout model for cell detection and counting.
+
+    Select an available inference backend; latency depends on the model, image,
+    and hardware. Healthy/dead outputs are model classifications.
     """
     def __init__(self, model_path=None, conf=0.15, iou=0.40):
         self.model_path = resolve_model_path(model_path or "nano")

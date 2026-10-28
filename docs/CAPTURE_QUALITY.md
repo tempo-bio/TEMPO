@@ -29,9 +29,9 @@ Only exported footage is converted.
 
 Compatibility video formats require even frame dimensions. TEMPO pads odd-sized
 images, records the padding and removes it on readback; it does not crop source
-edge pixels. A bounded flushed-write check precedes native acquisition, with
-capacity and overflow checks as well. This estimate does not certify that a
-camera/driver/storage combination can sustain a requested rate.
+edge pixels. Before native capture, TEMPO checks disk writing and available
+space. A short disk check cannot establish the sustained rate of your camera,
+driver and storage; check for dropped frames in actual recordings.
 
 With both options unchecked, a recording still flows through processing.
 Successful results keep source measurement traces, computed measurements,

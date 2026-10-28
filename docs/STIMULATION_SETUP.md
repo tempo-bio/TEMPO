@@ -2,7 +2,6 @@
 
 TEMPO supports the AU26 V2 stimulator: an Uno R4 Minima with the OPA340 buffer,
 CD74HC4053 output switch, and optional CD74HC4051 eight-channel multiplexer.
-The obsolete direct-DAC test sketch is not supported.
 
 ## Install or update the Arduino
 
@@ -65,8 +64,8 @@ not acknowledgments that the requested output state has been reached.
 Pacing stays unchanged between fields. **Stop Recording** finishes one field;
 switching stimulation off between fields stops output and completes that well.
 Switching off during recording interrupts the field. **Stop Stimulation**
-interrupts capture and prioritizes resting discharge. There is no recovery phase
-or pre-pacing of upcoming wells. Leave stimulation off for unstimulated capture.
+interrupts capture and prioritizes resting discharge. Leave stimulation off for
+unstimulated capture.
 
 Nano Scout estimates the current preview field in the background. **Count Field**
 requests a fresh estimate. Healthy individual cells contribute to the target;
@@ -81,8 +80,8 @@ settings, scale examples, trigger choices, and troubleshooting.
 
 ## Automatic field collection
 
-The automatic-collection action appears when TEMPO detects an XY stage. It opens
-a separate setup window so collection parameters do not crowd the inspector.
+Choose **Automatic Collection…** to set the collection area and cell target.
+This action is available when TEMPO detects an XY stage.
 
 1. Enter measured pixel size and camera-to-stage rotation/axis reversals in
    **Field Calibration…** within Automatic Collection, with the intended camera, objective and binning.

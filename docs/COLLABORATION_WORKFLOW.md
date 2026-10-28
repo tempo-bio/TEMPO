@@ -62,13 +62,6 @@ The same guide is maintained in [Training workflow](TRAINING_WORKFLOW.md). It co
 setup, Run all, approved-image selection, held-out evaluation, automatic model comparisons,
 progress, cancellation and retries.
 
-## Verification limits
-
-Automated tests use temporary datasets and simulated cloud services. They cover approval rules,
-concurrent editing, adoption, the cloud handoff, GPU selection guards, cancellation, atomic publication,
-checksum verification, model installation, and GUI controls. These checks do not replace a real
-Colab GPU run. Implementation testing does not start training or publish user artifacts.
-
 ## Packaging
 
 See [Packaging and distribution](PACKAGING_AND_DISTRIBUTION.md) for build and installation instructions.

@@ -3045,7 +3045,7 @@ class AnnotatorTab(QWidget):
         
         # Collaboration & SOP Suite
         self.btn_guidelines = QPushButton("Guidelines && Examples")
-        self.btn_guidelines.setToolTip("View standard operating procedures for boundary delineation, kissing junctions, and dead cell triage")
+        self.btn_guidelines.setToolTip("How to outline and label cells, including touching cells and clumps.")
         self.btn_guidelines.clicked.connect(self.open_guidelines_dialog)
         self.btn_guidelines.hide()
 
@@ -6141,22 +6141,17 @@ class AnalyzerTab(QWidget):
 
 SETTING_GUIDANCE = {
     ('capture', 'target_fps'): 'Start with 100 FPS. Use 200–226 FPS only when the camera and exposure can sustain the higher rate.',
-    ('capture', 'overlap_percentage'): 'Start with the 25% overlap guide; adjust it to suit the field spacing.',
     ('annotator', 'confidence_threshold'): 'Start with 0.15. Increase it if debris is detected as cells; check faint cells before lowering it.',
     ('annotator', 'nms_iou_threshold'): 'Start with 0.40. Increase it only if distinct overlapping cells are being removed.',
     ('scout', 'settle_dwell_ms'): 'Start with 40 ms; increase the wait if images show movement after the stage stops.',
-    ('scout', 'live_threshold'): 'The default is 3 cells. Choose the minimum needed for your recording protocol.',
     ('scout', 'scout_duration_sec'): 'Start with 15 seconds; longer recordings capture more beats and use more storage.',
-    ('scout', 'default_traversal'): 'Use all 96 wells for a complete plate run, or Row A for a short test.',
-    ('cruncher', 'export_debug_avis'): 'Leave this off for production; enable it when testing or inspecting extracted cell videos.',
     ('analyzer', 'default_metric'): 'Start with area-normalized amplitude. Use fractional intensity change when comparing relative brightness changes.',
-    ('analyzer', 'colormap_palette'): 'Viridis is the default; choose another palette when it makes your measurements easier to distinguish.',
     ('kinetics', 'enable_asls_detrending'): 'Keep the default enabled to remove slow baseline drift.',
     ('kinetics', 'asls_lambda'): 'Start with 100,000. Review the recorded signal when changing baseline smoothing.',
     ('kinetics', 'asls_p'): 'Start with 0.001 to keep the estimated baseline close to the resting signal.',
     ('kinetics', 'lowpass_cutoff_hz'): 'Start with 18 Hz; inspect the measured trace before changing the noise cutoff.',
-    ('kinetics', 'savgol_window_pct'): 'Start with the existing 7% smoothing window; check that brief changes remain visible.',
-    ('kinetics', 'peak_prominence_pct'): 'Start with the existing 30% threshold; lower values can count small fluctuations as beats.',
+    ('kinetics', 'savgol_window_pct'): 'Start with a 7% smoothing window; check that brief changes remain visible.',
+    ('kinetics', 'peak_prominence_pct'): 'Start with a 30% threshold; lower values can count small fluctuations as beats.',
 }
 
 class SettingsTab(QWidget):
@@ -7491,7 +7486,7 @@ class TempoDashboard(QMainWindow):
         self.tab_annotator.lease_timer.stop()
         self.tab_maintainer.timer.stop()
         if not self.tab_capture.cleanup():
-            self.statusBar().showMessage('Waiting for acquisition and camera shutdown. The window will close when it is safe.')
+            self.statusBar().showMessage('Waiting for acquisition and camera shutdown. The window will close when shutdown finishes.')
             event.ignore(); return
         # Completed threads may still be running native thread-local destructors.
         # Synchronize without ever blocking the GUI while those finish.

@@ -1,25 +1,41 @@
 # TEMPO
 
-TEMPO is a desktop application for microscopy acquisition and cell-motion analysis. It brings camera and motorized-stage controls, video processing, measurement exploration, and collaborative cell annotation into one application. Shared annotations support training the vision models used to identify and segment cells.
+TEMPO is a desktop application for microscopy acquisition and cell-motion analysis. Use it to annotate cells, process recordings, inspect contraction traces and measurements, and train detection and segmentation models from reviewed annotations.
 
-Camera acquisition and automated plate scouting are implemented through Micro-Manager. Integration with the developing microscope hardware remains in progress; the Windows checks described here do not establish compatibility with a particular camera or stage.
+Camera control supports Micro-Manager and USB cameras; motorized stages use Micro-Manager. Configure and validate acquisition and stimulation with your microscope hardware before collecting experimental data.
 
 Shared images, reservations, annotations, and training records are stored in a private Hugging Face workspace. Access to TEMPO's source code does not grant access to that workspace.
 
 ## Install on Windows
 
-Use the 64-bit Windows installer supplied by the project maintainer: `TEMPO_Setup_v1.0.0.exe`. The first GitHub release has not been published yet. Published installers will be available on the [Releases page](https://github.com/tempo-bio/TEMPO/releases).
+Download `TEMPO_Setup_v1.0.0.exe` from the project's [Releases page](https://github.com/tempo-bio/TEMPO/releases). The installer is for 64-bit Windows and includes Python and the application libraries.
+
+### Unsigned installer
+
+The v1.0.0 installer has no code-signing certificate. Windows cannot verify its publisher from a digital signature and may show **Unknown publisher** or **Windows protected your PC**. Smart App Control or your organization's security policy may block it entirely.
+
+Download only from the TEMPO release page. To check that your download matches the release, compare its SHA-256 value with the installer entry in `SHA256SUMS.txt`. In PowerShell, from the download folder:
+
+```powershell
+Get-FileHash .\TEMPO_Setup_v1.0.0.exe -Algorithm SHA256
+```
+
+If the values differ, do not run the file. The checksum can detect a changed or incomplete download. It cannot verify who published the file or whether it is safe. Proceed only if you trust the source and your device policy permits it. On a managed computer, ask IT if installation is blocked. Do not disable Windows security protections to install TEMPO.
+
+See Microsoft's guidance on [SmartScreen warnings](https://learn.microsoft.com/en-us/windows/apps/package-and-deploy/smartscreen-reputation).
+
+### First launch
 
 1. Run the installer. The default location is `%LOCALAPPDATA%\Programs\TEMPO`.
 2. Open TEMPO from the Start menu or the optional desktop shortcut.
 3. Open **Account Setup** from the account indicator in the top right.
 4. Enter a **Profile / Lab Name** and choose **Sign in with Hugging Face**. Approve access to the workspace organizations in your browser, return to TEMPO, and choose **Save Account**. If browser sign-in is unavailable, choose the personal-token method. Use your own account; do not share tokens between collaborators.
 
-First-run guided setup walks through creating an account, accepting workspace invitations, and signing in, with a numbered progress row. **Skip to sign-in** bypasses the instructions for people who already have access. The standard **Account Setup** dialog opens directly to account controls; **Account setup guide** opens the walkthrough. Browser sign-in requires the maintainer to [register the TEMPO OAuth application](docs/WORKSPACE_ADMINISTRATION.md#browser-sign-in-application) before distributing a configured build.
+Choose **Account setup guide** for help creating an account and accepting workspace invitations. If you already have workspace access, choose **Skip to sign-in**. Maintainers configuring browser sign-in should follow [workspace administration](docs/WORKSPACE_ADMINISTRATION.md#browser-sign-in-application).
 
-The installer includes Python and the application libraries. Collaborators do not need Python or a terminal. Camera acquisition can require separate vendor drivers and Micro-Manager adapters; image annotation does not require a connected camera.
+Camera acquisition requires compatible vendor drivers and Micro-Manager adapters. Image annotation does not require a connected camera.
 
-See [Windows packaging](docs/PACKAGING_AND_DISTRIBUTION.md) for build details and verification limits.
+See [Getting started](docs/GETTING_STARTED.md) for account setup and your first shared annotation.
 
 ## Start annotating
 
@@ -62,7 +78,7 @@ The [training guide](docs/TRAINING_WORKFLOW.md) documents setup, dataset selecti
 
 Windows preferences are stored in `%LOCALAPPDATA%\TEMPO\config\tempo_preferences.json`; tokens use Windows Credential Manager. Local images, drafts, queues, and processing outputs are separate stores. Read [data locations](docs/COLLABORATION_WORKFLOW.md#local-files-and-connectivity) before moving an installation or removing local work.
 
-Cloud collaboration, model downloads, and status refreshes need a network connection. A successful offline startup check does not establish that shared operations work offline.
+Cloud collaboration, model downloads, and status refreshes need a network connection.
 
 ## Problems and development
 

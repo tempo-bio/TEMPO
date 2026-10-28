@@ -1,38 +1,22 @@
 # TEMPO v1.0.0 — unreleased
 
-TEMPO's first planned Windows x64 installer provides shared image annotation, Colab training integration, microscopy acquisition, video processing, and analysis.
+First Windows x64 release of TEMPO, a desktop application for microscopy acquisition and cell-motion analysis.
 
-- Connect your own Hugging Face account through browser sign-in or a personal token, with skippable first-run guidance.
-- Reserve shared images, edit cell outlines and classes, save drafts, and submit complete images for review.
-- Show collaborator profile/lab names while preserving account-based ownership of reservations and submissions.
-- Adopt the last synced draft after a seven-day reservation expires.
-- Review and approve annotations before they become training input; maintainers mark inseparable clumps as groups.
-- Open the configured Colab trainer, follow reported progress, request cancellation, and install verified model updates.
-- Process queued recordings with cooperative cancellation, saved outcomes, and exact output associations.
-- Explore field and full-well measurements, separate cell/group traces and averages, and registered spatial data, with explanations of measured units.
-- Save personal preferences separately from administrator-managed shared settings.
-- Control camera capture, calibrated XY field collection, AU26 V2 stimulation, and pre-pacing, with recorded session metadata.
-- Choose a data folder and optional original/intermediate video retention; native lossless recordings preserve acquired pixel depth and timing evidence.
-- Review recording-quality flags and inclusion decisions, export analysis bundles, correct saved outlines when source footage is available, and reanalyze retained measurement traces.
-- Run versioned model-evaluation protocols and explicitly publish verified proposed models with their regular-training settings.
+- Annotate cells and nuclei, save drafts, and submit images for review.
+- Process recordings, inspect contraction traces and measurements, and export results.
+- Control camera acquisition, XY-stage collection, and AU26 V2 stimulation.
+- Train detection and segmentation models in Colab using reviewed annotations.
 
-## Installation
+## Install
 
-The installer is `TEMPO_Setup_v1.0.0.exe`. Keep it with the SHA-256 checksum and source provenance from its approved build. It includes Python and the runtime libraries; project weights are obtained through the configured private model repository unless explicitly bundled.
+Download **TEMPO_Setup_v1.0.0.exe**. Python and the application libraries are included. Shared annotation and model downloads require access to a Hugging Face workspace. Camera acquisition requires compatible vendor drivers and Micro-Manager adapters.
 
-Camera acquisition requires compatible vendor drivers and Micro-Manager adapters. Existing-image annotation requires no connected camera. Training runs in Colab and has separate runtime and account requirements.
+**The installer is unsigned.** Windows cannot verify TEMPO’s publisher from a digital signature and may display **Unknown publisher** or **Windows protected your PC**. Smart App Control or an organization’s device policy may block installation.
 
-## Verification and limits
+Download only from this project’s release page and compare the installer’s SHA-256 with **SHA256SUMS.txt**. The checksum can detect a changed download. It cannot verify who published the file or whether it is safe. Do not disable Windows security protections to install TEMPO. On a managed computer, ask IT if installation is blocked. [Installation instructions](../README.md#install-on-windows).
 
-The manual Windows workflow checks the source and packaged runtimes, interface fixtures, scientific/regression tests, and installation, offline verification, and uninstall on a separate runner. These checks do not establish compatibility with every physical camera, real collaborator account, or Windows installation.
+## Before collecting data
 
-The following acceptance work is deferred to v1.1 and remains unverified:
+Validate camera timing, stage calibration, and stimulator output on your hardware before experimental use. Focus assistance is Beta and requires a calibrated profile; none is included with this release.
 
-- Focus calibration and validation against operator-reviewed fields. Focus assistance is Beta and ships without a calibrated profile; missing compatible profiles produce Unavailable.
-- Physical camera throughput, stage calibration, acquisition recovery and shutdown, and stimulator waveform/discharge/communication-loss behavior.
-- Native-interface acceptance and hands-on Windows/collaboration checks using independent collaborator credentials.
-- Architectural modularization of `tempo_gui.py` into dedicated viewport, acquisition, and analysis controller delegates (retained as a unified shell for v1.0.0 stability).
-
-Updated Colab GPU execution and scientific model-quality evaluation remain separate deferred checks. Existing synthetic workflow and automated inference checks do not establish scientific accuracy. Code signing is tabled; the planned installer is unsigned.
-
-See [Windows packaging](PACKAGING_AND_DISTRIBUTION.md) and [collaboration](COLLABORATION_WORKFLOW.md) for setup and usage.
+TEMPO is licensed under AGPL-3.0-only. Dependencies retain their included licenses and notices.

@@ -1,20 +1,5 @@
 # TEMPO credential storage
 
-## Repository checks
-
-From the repository root, use `python -m scripts.check_repository` to inspect maintained files and the notebook's embedded sources. Add `--staged` to inspect the Git index instead of working files. For the full credential check, install the checksum-pinned development scanner into an ignored directory, then supply its path:
-
-```sh
-python -m scripts.check_repository --install-scanner .agent-artifacts/security-tools
-python -m scripts.check_repository --scanner .agent-artifacts/security-tools/gitleaks
-```
-
-On Windows the binary is `gitleaks.exe`. The installer supports Windows x64, Linux x64, and macOS arm64. Use the project's Python environment; this does not install system packages.
-
-Checks reject private local configuration, generated data, saved notebook outputs, credential-shaped values, personal paths, and private notebook links. Exceptions identify a reviewed synthetic value by its exact file, rule, and SHA-256 digest, with a reason. They do not exclude whole test directories. Reports contain locations and rule names rather than secret values. Passing a scan does not replace manual privacy review or inspect private GitHub comments and artifacts.
-
-The repository-check workflow runs on pushes and pull requests with read-only permissions. Windows builds also check the intended commit and application-owned packaged files. Neither workflow publishes releases.
-
 ## Account access and token identity
 
 Each collaborator uses their own Hugging Face account, authorizing TEMPO through browser sign-in or supplying their own fine-grained token. The administrator invites that account and grants repository access; the credential authenticates the account and can restrict that access further. Effective access requires both account permission and credential permission. Annotation collaborators need dataset read/write, model read, and read access to the separate `tempo-bio-settings/workspace` repository. See [Hugging Face tokens](https://huggingface.co/docs/hub/security-tokens) and [workspace administration](WORKSPACE_ADMINISTRATION.md).
@@ -31,7 +16,7 @@ Ordinary organization membership management does not issue another user's person
 
 TEMPO's interactive OAuth flow uses a public client, a random state value, and PKCE with `S256`. It opens the system browser to Hugging Face and accepts the authorization response only on a temporary `127.0.0.1` listener with the expected callback path, host, and matching state. Each attempt expires after three minutes. Cancelling, navigating away, closing the dialog, or changing the active account/workspace prevents a late result from being applied. The listener closes when the attempt finishes; callback URLs are not logged.
 
-Authorization codes and PKCE verifiers remain in memory. TEMPO exchanges the code only at Hugging Face's HTTPS token endpoint, rejects redirects, and verifies the returned account, dataset write permission, model read permission, and private settings read access before offering to save. Browser authorization alone does not overwrite the saved account: the user must choose **Save Account** or **Finish Setup**. Closing the dialog discards the pending credential. Tokens are saved through the same native credential store as personal tokens and remain absent from the token-entry field.
+Authorization codes and PKCE verifiers remain in memory. TEMPO exchanges the code only at Hugging Face's HTTPS token endpoint, rejects redirects, and verifies the returned account, dataset write permission, model read permission, and private settings read access before offering to save. Browser authorization alone does not overwrite the saved account: choose **Save Account** in Account Setup or **Save and continue** in the setup guide. Closing the dialog discards the pending credential. Tokens are saved through the same native credential store as personal tokens and remain absent from the token-entry field.
 
 TLS keeps hostname and certificate verification enabled and adds the packaged `certifi` public CA bundle to the runtime's system/custom trust. This supports macOS framework Python installations whose OpenSSL default certificate store is empty.
 
@@ -86,3 +71,18 @@ Source and packaged installations both keep personal preferences outside the app
 An unwritable preferences folder produces a settings error. TEMPO does not save preferences into source or installation directories. macOS/Linux files use owner-only permissions.
 
 The account form shows verification status separately from the saved-token mask. The mask reveals neither the token nor its length. Delete, Backspace, or Clear enables masked replacement entry; leaving the mask unchanged reuses the stored credential. Clearing it without entering a replacement blocks saving. Cancellation retains the stored token, and failed verification or secure saving retains replacement input for retry. Closed forms and changed accounts reject stale verification results.
+
+## Repository checks
+
+From the repository root, use `python -m scripts.check_repository` to inspect maintained files and the notebook's embedded sources. Add `--staged` to inspect the Git index instead of working files. For the full credential check, install the checksum-pinned development scanner into an ignored directory, then supply its path:
+
+```sh
+python -m scripts.check_repository --install-scanner .agent-artifacts/security-tools
+python -m scripts.check_repository --scanner .agent-artifacts/security-tools/gitleaks
+```
+
+On Windows the binary is `gitleaks.exe`. The installer supports Windows x64, Linux x64, and macOS arm64. Use the project's Python environment; this does not install system packages.
+
+Checks reject private local configuration, generated data, saved notebook outputs, credential-shaped values, personal paths, and private notebook links. Exceptions identify a reviewed synthetic value by its exact file, rule, and SHA-256 digest, with a reason. They do not exclude whole test directories. Reports contain locations and rule names rather than secret values. Passing a scan does not replace manual privacy review or inspect private GitHub comments and artifacts.
+
+The repository-check workflow runs on pushes and pull requests with read-only permissions. Windows builds also check the intended commit and application-owned packaged files. Neither workflow publishes releases.

@@ -130,7 +130,7 @@ def install_help(widget, details, panel=None, title=None):
 class ContextHelpPanel(QGroupBox):
     """Keep explanations readable beside the values, including keyboard focus."""
     def __init__(self, parent=None):
-        super().__init__('Tooltips', parent)
+        super().__init__('Measurement details', parent)
         layout = QVBoxLayout(self)
         self.topic = QLabel()
         self.topic.setTextFormat(Qt.TextFormat.PlainText)

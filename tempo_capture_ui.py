@@ -927,7 +927,7 @@ class CaptureTools(QWidget):
             well = well or self.capture.well_id.currentText()
             channels = [int(ch) for ch,name in self.profile.get('channels',{}).items() if name == well]
             if len(channels) != 1:
-                raise ValueError('Assign this well to an output channel in Channels / Fields.')
+                raise ValueError('Assign this well to an output channel in Setup → Output assignments.')
             channel = channels[0]
         return StimulusParameters(self.amplitude.value(),self.frequency.value(),self.width.value(),channel)
 

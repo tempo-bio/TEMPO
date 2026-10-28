@@ -2,6 +2,8 @@
 
 Setup checks this computer, connects your personal Hugging Face account, and installs the published models. You can connect camera and stimulation hardware later in **Acquisition**.
 
+For the Windows download and an explanation of unsigned-installer warnings, see [Install on Windows](../README.md#install-on-windows).
+
 ## Connect your workspace
 
 1. Create your own [Hugging Face account](https://huggingface.co/join), or use your existing personal account. Reservations and submissions belong to that account; do not use a shared login or token.

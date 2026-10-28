@@ -287,7 +287,8 @@ class SetupWizardDialog(QDialog):
         font.setPointSizeF(font.pointSizeF() * 1.7)
         font.setBold(False)
         header.setFont(font)
-        self._add_setup_text(layout, subtitle).setStyleSheet('color: #aab8c8;')
+        if subtitle:
+            self._add_setup_text(layout, subtitle).setStyleSheet('color: #aab8c8;')
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
@@ -370,7 +371,7 @@ class SetupWizardDialog(QDialog):
 
     def _build_page1_welcome(self):
         self.welcome_page, layout = self._new_page(
-            'Get TEMPO ready', 'Prepare TEMPO for cell imaging, annotation, and analysis.')
+            'Set up TEMPO', None)
         for number, title, detail in (
             (1, 'Check this computer', 'Confirm the app has the packages it needs.'),
             (2, 'Connect your workspace', 'Sign in with your own Hugging Face account.'),
@@ -442,7 +443,7 @@ class SetupWizardDialog(QDialog):
     def _on_diag_finished(self, success: bool, details: str):
         self._requirements_ready = success
         self.progress.hide()
-        self.diag_log.setText('This computer is ready.' if success else 'Requirements check failed.')
+        self.diag_log.setText('Required packages are available.' if success else 'Requirements check failed.')
         if success:
             self.summary_box.clear()
         else:
@@ -538,7 +539,7 @@ class SetupWizardDialog(QDialog):
         self.account_error = ErrorDetails()
         layout.addWidget(self.account_error)
         if tempo_hub.credential_error:
-            self.account_error.set_error('Try Save Account again.',
+            self.account_error.set_error('Saved credentials could not be opened.',
                                          RuntimeError(tempo_hub.credential_error))
         self.txt_collab_id.textChanged.connect(self._guard_profile_name)
         self.txt_collab_id.textChanged.connect(self._update_save_action)
@@ -897,7 +898,7 @@ class SetupWizardDialog(QDialog):
             self._refresh_token_status(error)
             self._refresh_account_identity(error)
             if error and not self.account_error.summary.text():
-                message = 'Could not load the saved token. Try Save Account.' if isinstance(error, CredentialStorageError) else 'Could not verify the saved token.'
+                message = 'Saved credentials could not be opened.' if isinstance(error, CredentialStorageError) else 'Could not verify the saved token.'
                 self.account_error.set_error(message, error, secrets=(tempo_hub.token,))
         run_background(check, ready)
 
