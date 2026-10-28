@@ -1,5 +1,6 @@
 """Workspace-guide chrome and optional, bundled onboarding documentation."""
 from pathlib import Path
+import re
 
 from PyQt6.QtCore import Qt, QUrl, pyqtSignal
 from PyQt6.QtGui import QColor, QDesktopServices, QKeySequence, QPalette, QShortcut, QTextCharFormat, QTextCursor
@@ -66,7 +67,9 @@ class SetupGuide(QDialog):
             return
         path = (Path(url.toLocalFile()) if url.isLocalFile()
                 else self.current_path.parent / url.path()).resolve()
-        if path.suffix.lower() != '.md' or not (path.is_relative_to(self.root / 'docs') or path == self.root / 'README.md'):
+        is_license = path == self.root / 'LICENSE'
+        if not is_license and (path.suffix.lower() != '.md' or not (
+                path.is_relative_to(self.root / 'docs') or path == self.root / 'README.md')):
             return
         try:
             content = path.read_text(encoding='utf-8')
@@ -75,7 +78,11 @@ class SetupGuide(QDialog):
             return
         self.current_path = path
         self.browser.document().setBaseUrl(QUrl.fromLocalFile(str(path.parent) + '/'))
-        self.browser.setMarkdown(content)
+        self.browser.setCurrentCharFormat(QTextCharFormat())
+        if is_license:
+            self.browser.setPlainText(content)
+        else:
+            self.browser.setMarkdown(content)
         # Markdown assigns explicit blue foregrounds, ignoring the link palette.
         document = self.browser.document()
         anchors = []
@@ -96,23 +103,34 @@ class SetupGuide(QDialog):
             cursor.setPosition(position)
             cursor.setPosition(position + length, QTextCursor.MoveMode.KeepAnchor)
             cursor.mergeCharFormat(style)
+        # Restyling Markdown links can leave later headings without a layout at
+        # enlarged fonts. Reflow the document before positioning a section.
+        document.markContentsDirty(0, document.characterCount())
         if url.fragment():
             self._scroll_to_section(url.fragment())
 
     def _scroll_to_section(self, fragment):
         # QTextDocument's Markdown reader does not generate HTML heading IDs.
-        cursor = self.browser.textCursor()
-        cursor.movePosition(cursor.MoveOperation.Start)
-        self.browser.setTextCursor(cursor)
-        if self.browser.find(fragment.replace('-', ' ')):
-            cursor = self.browser.textCursor()
-            cursor.clearSelection()
-            self.browser.setTextCursor(cursor)
-            self.browser.ensureCursorVisible()
-            bar = self.browser.verticalScrollBar()
-            bar.setValue(bar.value() + self.browser.cursorRect().top() - 8)
-        else:
-            self.browser.scrollToAnchor(fragment)
+        # Match rendered heading slugs rather than replacing every hyphen with
+        # a space: "sign-in" is part of a heading, as well as an anchor separator.
+        used = set()
+        block = self.browser.document().begin()
+        while block.isValid():
+            if block.blockFormat().headingLevel():
+                base = re.sub(r'[^\w -]', '', block.text().lower()).replace(' ', '-')
+                slug, duplicate = base, 0
+                while slug in used:
+                    duplicate += 1
+                    slug = f'{base}-{duplicate}'
+                used.add(slug)
+                if slug == fragment:
+                    self.browser.setTextCursor(QTextCursor(block))
+                    self.browser.ensureCursorVisible()
+                    bar = self.browser.verticalScrollBar()
+                    bar.setValue(bar.value() + self.browser.cursorRect().top() - 8)
+                    return
+            block = block.next()
+        self.browser.scrollToAnchor(fragment)
 
 
 class WorkspaceGuideShell(QWidget):

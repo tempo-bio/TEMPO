@@ -9,7 +9,7 @@ import unittest
 from unittest.mock import patch
 
 from PyQt6.QtCore import QCoreApplication, QEvent, Qt, QUrl
-from PyQt6.QtGui import QFont
+from PyQt6.QtGui import QFont, QTextCursor
 from PyQt6.QtTest import QTest
 from PyQt6.QtWidgets import QApplication, QPushButton, QStyle, QStyleOptionButton
 
@@ -173,6 +173,63 @@ class WorkspaceGuideTests(unittest.TestCase):
             self.assertEqual(guide.browser.toPlainText(), before)
             guide.follow_link(QUrl('https://huggingface.co/join'))
             external.assert_called_once_with(QUrl('https://huggingface.co/join'))
+
+    def click_guide_link(self, href, guide=None):
+        guide = guide or self.view.guide
+        block = guide.browser.document().begin()
+        while block.isValid():
+            iterator = block.begin()
+            while not iterator.atEnd():
+                fragment = iterator.fragment()
+                if fragment.isValid() and fragment.charFormat().anchorHref() == href:
+                    cursor = QTextCursor(guide.browser.document())
+                    cursor.setPosition(fragment.position() + min(1, fragment.length() - 1))
+                    guide.browser.setTextCursor(cursor)
+                    guide.browser.ensureCursorVisible(); settle()
+                    point = guide.browser.cursorRect(cursor).center()
+                    self.assertTrue(guide.browser.viewport().rect().contains(point))
+                    QTest.mouseMove(guide.browser.viewport(), point)
+                    QTest.mouseClick(guide.browser.viewport(), Qt.MouseButton.LeftButton, pos=point)
+                    settle()
+                    return
+                iterator += 1
+            block = block.next()
+        self.fail('Guide link was not rendered: ' + href)
+
+    def test_license_link_opens_bundled_text_by_pointer(self):
+        guide = self.view.guide
+        guide.follow_link(QUrl.fromLocalFile(str(guide.root/'README.md')))
+        guide.show(); settle()
+        with patch('tempo_onboarding.QDesktopServices.openUrl') as external:
+            self.click_guide_link('LICENSE')
+        self.assertEqual(guide.current_path, guide.root/'LICENSE')
+        self.assertIn('GNU AFFERO GENERAL PUBLIC LICENSE', guide.browser.toPlainText())
+        block = guide.browser.document().begin()
+        while block.isValid():
+            iterator = block.begin()
+            while not iterator.atEnd():
+                fragment = iterator.fragment()
+                if fragment.isValid():
+                    self.assertFalse(fragment.charFormat().isAnchor())
+                iterator += 1
+            block = block.next()
+        external.assert_not_called()
+
+    def test_section_link_preserves_hyphens_in_heading_words(self):
+        original_font = APP.font(); self.addCleanup(APP.setFont, original_font)
+        for points in (12, 24):
+            with self.subTest(points=points):
+                APP.setFont(QFont('Arial', points))
+                guide = setup.SetupGuide(); self.addCleanup(close_and_dispose, guide)
+                guide.resize(620, 540); guide.show(); settle()
+                guide.follow_link(QUrl.fromLocalFile(str(guide.root/'README.md')))
+                self.click_guide_link('docs/WORKSPACE_ADMINISTRATION.md#browser-sign-in-application', guide)
+                cursor = guide.browser.textCursor()
+                self.assertEqual(cursor.blockFormat().headingLevel(), 2)
+                self.assertEqual(cursor.block().text(), 'Browser sign-in application')
+                bounds = guide.browser.document().documentLayout().blockBoundingRect(cursor.block())
+                self.assertGreater(bounds.height(), 0, 'The target heading was omitted from the rendered layout.')
+                self.assertGreaterEqual(guide.browser.cursorRect(cursor).top(), 0)
 
     def test_fixed_footer_and_scrolling_at_ordinary_wide_small_and_large_font_sizes(self):
         view = self.view

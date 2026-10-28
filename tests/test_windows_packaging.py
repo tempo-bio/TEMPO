@@ -231,6 +231,45 @@ print(json.dumps(captured))
 
 
 class RuntimeReportTests(unittest.TestCase):
+    def test_diagnostic_prediction_disables_an_already_enabled_analytics_sender(self):
+        import importlib
+        from types import SimpleNamespace
+        analytics = importlib.import_module('ultralytics.utils.events')
+        cfg = SimpleNamespace(mode='predict', task='detect', model='synthetic.yaml')
+        def predict(*args, **kwargs):
+            analytics.events(cfg)
+            return [object()]
+        model = SimpleNamespace(YOLO=lambda name: SimpleNamespace(predict=predict))
+        with patch.object(analytics.events, 'enabled', True), patch.object(analytics.events, 't', 0), \
+             patch.object(analytics.events, 'events', []), patch.object(analytics, 'Thread') as transport:
+            tempo_release.runtime_operation('ultralytics', model)
+            transport.assert_not_called()
+            self.assertFalse(analytics.events.events)
+
+    def test_both_verification_entry_points_force_offline_environment(self):
+        expected = dict(HF_HUB_OFFLINE='1', HF_HUB_DISABLE_TELEMETRY='1',
+                        YOLO_OFFLINE='true', YOLO_AUTOINSTALL='false')
+        observed = []
+        def inspect(name, *args):
+            observed.append(name)
+            for key, value in expected.items():
+                self.assertEqual(os.environ.get(key), value)
+            return dict(check=name, success=True, details={})
+        with tempfile.TemporaryDirectory() as directory:
+            for mode in ('suite', 'single'):
+                with self.subTest(mode=mode), patch.dict(os.environ, {key:'wrong' for key in expected}), \
+                     patch.object(sys, 'platform', 'win32'), \
+                     patch('faulthandler.dump_traceback_later'), patch('faulthandler.cancel_dump_traceback_later'):
+                    output = Path(directory)/(mode+'.json')
+                    if mode == 'suite':
+                        with patch.object(tempo_release, 'run_probe', side_effect=inspect), patch('sys.stdout', io.StringIO()):
+                            self.assertEqual(tempo_release.verify_installation(output), 0)
+                    else:
+                        with patch.object(tempo_release, 'probe_action', side_effect=inspect):
+                            self.assertEqual(tempo_release.verification_probe('fixture', output), 0)
+        self.assertIn('fixture', observed)
+        self.assertIn('ultralytics', observed)
+
     def test_credential_store_probe_cleans_up_and_returns_runtime_evidence(self):
         backend = Mock()
         backend.get_password.side_effect = [

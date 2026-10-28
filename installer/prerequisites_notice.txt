@@ -15,6 +15,6 @@ For high-speed scientific microscope cameras:
    ensure Micro-Manager 2.0 gamma is installed in standard paths:
    (e.g., C:\Program Files\Micro-Manager-2.0gamma)
 
-You can configure and test your camera connection anytime inside TEMPO
-under the Acquisition tab or using the Guided Setup Wizard.
+After installation, open Camera Settings in Acquisition to configure
+your camera.
 ===================================================================

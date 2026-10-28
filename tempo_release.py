@@ -9,6 +9,13 @@ import traceback
 
 VERSION = '1.0.0'
 
+
+def configure_verification_environment():
+    """Run synthetic diagnostics without downloads, updates, or SDK telemetry."""
+    os.environ.update(QT_QPA_PLATFORM='offscreen', MPLBACKEND='Agg',
+                      HF_HUB_OFFLINE='1', HF_HUB_DISABLE_TELEMETRY='1',
+                      YOLO_OFFLINE='true', YOLO_AUTOINSTALL='false')
+
 RUNTIME_IMPORTS = ('cv2', 'numpy', 'scipy.signal', 'pandas', 'matplotlib', 'pyqtgraph',
                    'torch', 'torchvision', 'ultralytics', 'tensorflow', 'stardist.models',
                    'csbdeep.utils', 'cellpose.models', 'dinov3.hub.backbones', 'huggingface_hub', 'keyring', 'onnxruntime',
@@ -156,6 +163,8 @@ def runtime_operation(name, module):
         if keep.tolist() != [0]: raise RuntimeError('Torchvision native NMS failed.')
     elif name == 'ultralytics':
         # YAML model construction and a tiny random-weight CPU inference are offline.
+        from tempo_training_runtime import disable_ultralytics_analytics
+        disable_ultralytics_analytics()
         model = module.YOLO('yolo11n-seg.yaml')
         prediction = model.predict(np.zeros((64, 64, 3), dtype=np.uint8), imgsz=64, device='cpu', verbose=False)
         if len(prediction) != 1: raise RuntimeError('Ultralytics inference returned no result.')
@@ -398,6 +407,7 @@ def verification_probe(name, report_path):
     result = dict(check=name, success=False)
     try:
         if sys.platform != 'win32': raise RuntimeError('Native installation probes are Windows-only.')
+        configure_verification_environment()
         import faulthandler
         faulthandler.enable(file=sys.stderr)
         faulthandler.dump_traceback_later(60, repeat=True, file=sys.stderr)
@@ -559,7 +569,7 @@ def verify_installation(report_path):
                   required_checks=list(REQUIRED_CHECKS), checks=[], failures=[], runtime_details={})
     try:
         if sys.platform != 'win32': raise RuntimeError('Executable verification is Windows-only; do not launch native macOS fixtures.')
-        os.environ.update(QT_QPA_PLATFORM='offscreen', MPLBACKEND='Agg')
+        configure_verification_environment()
         probe_root = report_path.parent/(report_path.stem+'-probes'); probe_root.mkdir(exist_ok=True)
         for index, name in enumerate(REQUIRED_CHECKS):
             report['active_check'] = name

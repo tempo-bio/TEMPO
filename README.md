@@ -29,9 +29,9 @@ See Microsoft's guidance on [SmartScreen warnings](https://learn.microsoft.com/e
 1. Run the installer. The default location is `%LOCALAPPDATA%\Programs\TEMPO`.
 2. Open TEMPO from the Start menu or the optional desktop shortcut.
 3. Open **Account Setup** from the account indicator in the top right.
-4. Enter a **Profile / Lab Name** and choose **Sign in with Hugging Face**. Approve access to the workspace organizations in your browser, return to TEMPO, and choose **Save Account**. If browser sign-in is unavailable, choose the personal-token method. Use your own account; do not share tokens between collaborators.
+4. Enter **Your name or laboratory** and choose **Sign in with Hugging Face**. Approve access to the workspace organizations in your browser, return to TEMPO, and choose **Save Account**. If browser sign-in is unavailable, choose **Use an access token**. Use your own account; do not share tokens between collaborators.
 
-Choose **Account setup guide** for help creating an account and accepting workspace invitations. If you already have workspace access, choose **Skip to sign-in**. Maintainers configuring browser sign-in should follow [workspace administration](docs/WORKSPACE_ADMINISTRATION.md#browser-sign-in-application).
+Choose **Need an account?** for account creation and workspace access instructions. Maintainers configuring browser sign-in should follow [workspace administration](docs/WORKSPACE_ADMINISTRATION.md#browser-sign-in-application).
 
 Camera acquisition requires compatible vendor drivers and Micro-Manager adapters. Image annotation does not require a connected camera.
 

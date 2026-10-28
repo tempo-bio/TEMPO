@@ -6,7 +6,7 @@ CD74HC4053 output switch, and optional CD74HC4051 eight-channel multiplexer.
 ## Install or update the Arduino
 
 1. Connect the Uno R4 Minima by USB. Finish any active capture or stimulation.
-2. In Acquisition, choose **Firmware…** under **Stimulator Connection**.
+2. In Acquisition's Stimulation panel, choose **Setup… → Install / update firmware…**.
 3. Select its port and choose **Install / Update Firmware**. This replaces the
    Arduino's current sketch. Keep the board connected through verification.
 4. Close setup and choose **Connect**. Connecting leaves the output

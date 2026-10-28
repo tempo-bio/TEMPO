@@ -4,7 +4,7 @@ Third-party licenses and notices remain applicable when distributing TEMPO's sou
 
 | Component | Declared licensing | Reference |
 | --- | --- | --- |
-| PyQt6 | GPLv3 or a Riverbank commercial license | [Riverbank](https://en.riverbankcomputing.com/software/pyqt) |
+| PyQt6 | GPLv3 or a Riverbank commercial license | [Riverbank](https://www.riverbankcomputing.com/software/pyqt/intro) |
 | Ultralytics | AGPL-3.0 or a separate Ultralytics license | [Ultralytics](https://www.ultralytics.com/license) |
 | Ultralytics platform SDK | AGPL-3.0-only | [Package](https://pypi.org/project/ultralytics-platform/0.1.90/) |
 | PyTorch | BSD-style, Apache-2.0 and component notices | [License](https://github.com/pytorch/pytorch/blob/v2.14.1/LICENSE) |
