@@ -3,7 +3,8 @@
     "title": "TEMPO AU26 V2 Stimulator - Compact Prototyping Perfboard",
     "version": "2.1-optimized",
     "targetBoard": "Arduino Uno R4 Minima",
-    "application": "8-Channel 96-Well Plate Cardiac Pacing (Column A-H)",
+    "designStatus": "Proposed layout. Review wiring and physical fit before assembly; measure output and discharge on the assembled board before use.",
+    "application": "8-channel cardiac pacing for rows A–H of a 96-well plate",
     "boardDimensions": {
       "columns": 22,
       "rows": 16,
@@ -14,19 +15,19 @@
   },
   "designRationale": {
     "usability": {
-      "arduinoUnoR4": "Separate 1x3 female header for Power/Analog (5V, GND, A0) on the left edge and 1x6 female header for Digital (D2-D7) on the top edge perfectly mirror the physical pin clusters on the Uno R4.",
-      "plateLayout": "The 8 output channels are arranged in strictly sequential order (Row A / Well 1 down to Row H / Well 8) on a 1x8 female header at Column 18.",
-      "oneHoleGap": "Column 19 is an intentional 1-hole empty gap separating the Well signal header (Col 18) and the Ground return header (Col 20). This prevents accidental shorts when inserting jumper pins, accommodates standard 0.2 inch / 5.08 mm 2-pin keyed electrode plugs, and allows clipping miniature oscilloscope ground probes without bridging live signal pins."
+      "arduinoUnoR4": "A 1x3 header on the left carries 5V, GND and A0. A 1x6 header on the top carries D2–D7. Check cable lengths and connector orientation against the Uno R4 before assembly.",
+      "plateLayout": "The 1x8 output header at Column 18 maps channels 1–8 to rows A–H.",
+      "oneHoleGap": "Column 19 separates the signal header at Column 18 from the ground-return header at Column 20. Check connector and oscilloscope-clip clearance against the parts you will use."
     },
     "circuitProtectionAndPassives": {
-      "decouplingCapacitors": "Three 0.1 uF ceramic capacitors (C1, C2, C3) placed directly adjacent to the power pins of U1 (OPA340), U2 (74HC4053), and U3 (74HC4051) to eliminate switching transients, prevent op-amp oscillation, and ensure rail stability during high-speed pacing edges. One 10 uF bulk capacitor (C4) at the power entry rail dampens supply dips.",
-      "outputCurrentLimiting": "R1 (100 Ohm, 1/4W) is placed in series between U2 switch common (Pin 14) and U3 multiplexer input (Pin 3). It bridges the physical 2-hole gap between the two DIP-16 chips on Row 7. In physiological media, electrode probes can accidentally bridge; R1 limits maximum fault current to ~6 mA at 1V, protecting both the OPA340 buffer and the 74HC switches while introducing negligible voltage drop into biological cell loads.",
-      "failSafeResistors": "R2 (100 kOhm pull-down on D2) ensures U2 defaults to 0V resting discharge if the control line is disconnected or during MCU boot. R3 and R4 (100 kOhm pull-ups on D3 and D4 active-high disable pins) hold U2 isolated and U3 multiplexer disabled if jumper cables are unplugged. R5 (100 kOhm bleeder to GND) prevents charge accumulation on electrodes when isolated."
+      "decouplingCapacitors": "C1, C2 and C3 are 0.1 uF supply-decoupling capacitors for U1, U2 and U3. C4 is a 10 uF capacitor at the power entry. Check supply transients and op-amp stability on the assembled circuit.",
+      "outputCurrentLimiting": "R1 (100 Ohm, 1/4W) connects U2 Pin 14 to U3 Pin 3 along Row 7. Measure output current and voltage under the intended load; this layout does not establish a maximum fault current or component-protection rating.",
+      "failSafeResistors": "R2 is a 100 kOhm pull-down on D2. R3 and R4 are 100 kOhm pull-ups on the D3 and D4 disable lines. R5 is a 100 kOhm output bleeder to GND. Verify startup, disconnection and discharge behavior on the assembled circuit."
     },
     "manufacturingAndSoldering": {
-      "ironClearance": "Every IC socket has at least 1-2 empty holes of clearance on all sides, allowing easy manual soldering without risking heat damage to neighboring plastic sockets.",
-      "railArchitecture": "Continuous 5V rail along Row 3 and continuous GND bus along Row 14. All chip supply and ground pins tap directly into these rails.",
-      "u2_to_u3_bridge": "U2 Pin 14 and U3 Pin 3 sit on Row 7 separated by 2 holes, exactly spanned by protection resistor R1 with zero wire clutter."
+      "ironClearance": "Check soldering access and socket clearance against the actual components before assembly.",
+      "railArchitecture": "The proposed +5V rail runs along Row 3 and the GND bus along Row 14. Review each IC supply and ground connection against its pinout.",
+      "u2_to_u3_bridge": "R1 connects U2 Pin 14 to U3 Pin 3 along Row 7."
     }
   },
   "billOfMaterials": [
@@ -40,19 +41,19 @@
       "refDes": "U2",
       "part": "CD74HC4053E",
       "package": "DIP-16",
-      "desc": "High-speed CMOS triple 2-channel analog switch (pulse / resting discharge selector)"
+      "desc": "Triple 2-channel analog switch for pulse and resting-discharge selection"
     },
     {
       "refDes": "U3",
       "part": "CD74HC4051E",
       "package": "DIP-16",
-      "desc": "High-speed CMOS 8-channel analog multiplexer (96-well column A-H selector)"
+      "desc": "8-channel analog multiplexer"
     },
     {
       "refDes": "C1, C2, C3",
       "part": "0.1 uF (100 nF) 50V",
       "package": "Ceramic disc / MLCC (0.1 in / 2.54 mm pitch)",
-      "desc": "High-frequency power supply decoupling bypass capacitors (one per IC)"
+      "desc": "Supply-decoupling capacitors, one per IC"
     },
     {
       "refDes": "C4",
@@ -64,31 +65,31 @@
       "refDes": "R1",
       "part": "100 Ohm 1/4W 1%",
       "package": "Axial through-hole (0.3 in span)",
-      "desc": "Series output short-circuit protection resistor (between U2.14 and U3.3)"
+      "desc": "Series output resistor between U2 Pin 14 and U3 Pin 3"
     },
     {
       "refDes": "R2",
       "part": "100 kOhm 1/4W",
       "package": "Axial through-hole (0.3 in span)",
-      "desc": "Safety pull-down on D2 (forces default resting discharge 0V if disconnected)"
+      "desc": "100 kOhm pull-down on D2"
     },
     {
       "refDes": "R3",
       "part": "100 kOhm 1/4W",
       "package": "Axial through-hole (0.3 in span)",
-      "desc": "Safety pull-up on D3 / Disable (forces default isolation if disconnected)"
+      "desc": "100 kOhm pull-up on the D3 disable line"
     },
     {
       "refDes": "R4",
       "part": "100 kOhm 1/4W",
       "package": "Axial through-hole (0.3 in span)",
-      "desc": "Safety pull-up on D4 / MUX Disable (forces default open-circuit if disconnected)"
+      "desc": "100 kOhm pull-up on the D4 multiplexer-disable line"
     },
     {
       "refDes": "R5",
       "part": "100 kOhm 1/4W",
       "package": "Axial through-hole (0.3 in span)",
-      "desc": "Output bleed resistor from MUX COM to GND (prevents static charge build-up when isolated)"
+      "desc": "100 kOhm output bleeder to GND"
     },
     {
       "refDes": "J_PWR",
@@ -203,7 +204,7 @@
       "type": "resistor_axial_100_ohm",
       "lead1": { "col": 9, "row": 7, "net": "U2_OUT" },
       "lead2": { "col": 12, "row": 7, "net": "MUX_COM" },
-      "desc": "Series protection resistor directly spanning the 2-hole gap between U2 Pin 14 and U3 Pin 3 on Row 7"
+      "desc": "Series output resistor connecting U2 Pin 14 and U3 Pin 3 on Row 7"
     },
     {
       "refDes": "R2",
