@@ -170,9 +170,11 @@ class SoftwareHistoryTests(unittest.TestCase):
 
     @staticmethod
     def git(root, *arguments):
+        # Allow for Git process startup and local disk contention on Windows CI.
+        # This bounds fixture setup only; updater deadlines remain unchanged.
         result = subprocess.run(['git', '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid',
                                  '-c', 'commit.gpgsign=false', *arguments],
-                                cwd=root, capture_output=True, text=True, check=True, timeout=10)
+                                cwd=root, capture_output=True, text=True, check=True, timeout=30)
         return result.stdout.strip()
 
     def commit(self, root, message):
