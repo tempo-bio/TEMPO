@@ -6,7 +6,7 @@ import threading
 import unittest
 from unittest.mock import patch
 
-from huggingface_hub.utils._http import httpx
+from tests.hub_http_fixture import httpx
 from huggingface_hub.file_download import http_get
 from PyQt6.QtCore import QThread
 from PyQt6.QtWidgets import QApplication

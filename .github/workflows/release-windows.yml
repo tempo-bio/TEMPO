@@ -22,15 +22,18 @@ env:
   YOLO_AUTOINSTALL: 'false'
 
 jobs:
-  build-nvidia-runtime:
-    name: Build optional NVIDIA inference runtime
+  validate-source:
+    name: Validate Windows source before packaging
     runs-on: windows-2025
-    timeout-minutes: 180
-    env:
-      TEMPO_WINDOWS_PROFILE: nvidia-cu126
+    timeout-minutes: 40
     steps:
       - name: Check out tested revision
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Python 3.13.16 x64
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.13.16'
+          architecture: x64
       - name: Check dependency source identities before downloading runtimes
         run: |
           python -c @'
@@ -51,6 +54,48 @@ jobs:
         run: |
           $expected = & python -c "from tempo_release import VERSION; print('v' + VERSION)"
           if ($env:RELEASE_TAG -ne $expected) { throw "Release tag must be $expected" }
+      - name: Install checksummed source-test dependencies
+        timeout-minutes: 12
+        run: |
+          python -m venv .venv_build
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & .\.venv_build\Scripts\python.exe -m pip install --no-cache-dir --no-deps --require-hashes -r requirements-windows.lock
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & .\.venv_build\Scripts\python.exe -m scripts.windows_native_bundle
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & .\.venv_build\Scripts\python.exe -m pip check
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Regenerate Colab notebook for source tests
+        run: |
+          & .\.venv_build\Scripts\python.exe -m notebooks.build_staged_colab_notebook
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Run complete regression and scientific suites
+        timeout-minutes: 22
+        run: |
+          & .\.venv_build\Scripts\python.exe -m scripts.windows_release_checks regressions --output Output
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Retain source-test evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: Windows_test_evidence
+          retention-days: 7
+          path: |
+            Output/regressions.log
+            Output/*results.json
+            Output/test-fonts.json
+          if-no-files-found: error
+
+  build-nvidia-runtime:
+    name: Build optional NVIDIA inference runtime
+    needs: validate-source
+    runs-on: windows-2025
+    timeout-minutes: 180
+    env:
+      TEMPO_WINDOWS_PROFILE: nvidia-cu126
+    steps:
+      - name: Check out tested revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Set up Python 3.13.16 x64
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
@@ -166,25 +211,6 @@ jobs:
           name: TEMPO_Colab_Trainer
           retention-days: 7
           path: notebooks/TEMPO_Colab_Trainer.ipynb
-          if-no-files-found: error
-      - name: Run complete regression and scientific suites
-        id: regressions
-        if: ${{ !cancelled() && steps.runtime.outcome == 'success' && steps.notebook.outcome == 'success' }}
-        timeout-minutes: 22
-        run: |
-          & .\.venv_build\Scripts\python.exe -m scripts.windows_release_checks regressions --output Output
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Retain test evidence before remaining diagnostics
-        id: test_evidence
-        if: ${{ !cancelled() && steps.runtime.outcome == 'success' }}
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: Windows_test_evidence
-          retention-days: 3
-          path: |
-            Output/regressions.log
-            Output/*results.json
-            Output/test-fonts.json
           if-no-files-found: error
       - name: Run installer failure injections
         id: installer_tests
@@ -309,7 +335,7 @@ jobs:
         env:
           GATE_OUTCOMES: ${{ toJSON(steps) }}
         run: |
-          & .\.venv_build\Scripts\python.exe -m scripts.windows_gates --output Output/build-gates.json runtime repository_checks notebook notebook_artifact regressions test_evidence installer_tests presentation source prebuild_evidence portable payload_privacy dependency_sources portable_check bundle_evidence inno installer payload
+          & .\.venv_build\Scripts\python.exe -m scripts.windows_gates --output Output/build-gates.json runtime repository_checks notebook notebook_artifact installer_tests presentation source prebuild_evidence portable payload_privacy dependency_sources portable_check bundle_evidence inno installer payload
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Retain all build evidence
         if: ${{ always() }}
@@ -373,14 +399,15 @@ jobs:
 
   certify:
     name: Certify every required Windows gate
-    needs: [build-windows, verify-installed]
+    needs: [validate-source, build-windows, verify-installed]
     if: ${{ always() }}
     runs-on: windows-2025
     steps:
       - name: Require complete build and clean installation success
         env:
+          SOURCE_RESULT: ${{ needs.validate-source.result }}
           BUILD_RESULT: ${{ needs.build-windows.result }}
           INSTALL_RESULT: ${{ needs.verify-installed.result }}
         run: |
-          if ($env:BUILD_RESULT -ne 'success' -or $env:INSTALL_RESULT -ne 'success') { throw 'Windows certification failed or required checks were skipped' }
+          if ($env:SOURCE_RESULT -ne 'success' -or $env:BUILD_RESULT -ne 'success' -or $env:INSTALL_RESULT -ne 'success') { throw 'Windows certification failed or required checks were skipped' }
           "Certified revision: $env:GITHUB_SHA" >> $env:GITHUB_STEP_SUMMARY

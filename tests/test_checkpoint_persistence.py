@@ -11,7 +11,7 @@ import types
 import unittest
 from unittest.mock import patch
 
-from huggingface_hub.utils._http import httpx
+from tests.hub_http_fixture import httpx
 from huggingface_hub import HfApi, set_client_factory
 from huggingface_hub.utils import _http
 from tempo_cloud import training_transaction,RepositoryWriteBudget
@@ -23,6 +23,10 @@ from tempo_evaluation_protocol import unpack_package
 
 class CheckpointHttpTests(unittest.TestCase):
     def setUp(self):
+        # This suite exercises the legacy HTTP/LFS transaction protocol with
+        # MockTransport. Rust Xet uploads do not use that Python transport.
+        xet = patch.object(_http.constants, 'HF_HUB_DISABLE_XET', True)
+        xet.start(); self.addCleanup(xet.stop)
         temporary = tempfile.TemporaryDirectory(); self.addCleanup(temporary.cleanup)
         self.path = Path(temporary.name)/'model.bin'; self.path.write_bytes(b'completed weights'*100000)
         self.sha = 1; self.blobs = {}; self.files = {}; self.uploads = 0; self.conflicts = 0

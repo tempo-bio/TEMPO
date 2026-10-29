@@ -45,11 +45,10 @@ def _desktop_request_timeout(request):
 
 def _desktop_http_client():
     # Keep the SDK's offline guard, tracing hooks, redirects and TLS defaults.
-    # Hub 1.8's default timeout is None, including for metadata and commits.
-    import httpx
     from huggingface_hub.utils._http import default_client_factory
     client = default_client_factory()
-    client.timeout = httpx.Timeout(30, connect=10)
+    # Use the SDK client's own timeout type: Hub 1 uses httpx, Hub 2 httpx2.
+    client.timeout = type(client.timeout)(30, connect=10)
     client.event_hooks['request'].append(_desktop_request_timeout)
     return client
 

@@ -75,11 +75,16 @@ def _extract_checked(archive, target):
         names = set()
         expanded = 0
         for info in infos:
-            name = info.filename
+            # ZipInfo normalizes host separators and truncates at NUL on read.
+            # Validate the original archive name before trusting that result.
+            name = info.orig_filename
             member = PurePosixPath(name)
-            if (not name or '\\' in name or name.startswith('/') or ':' in name
+            if (not name or name != info.filename or '\\' in name or '\0' in name
+                    or name.startswith('/') or ':' in name
                     or member.is_absolute() or '..' in member.parts or len(member.parts) < 2
-                    or member.parts[0] != 'TEMPO'):
+                    or member.parts[0] != 'TEMPO'
+                    or name.rstrip('/') != member.as_posix()
+                    or any(part.endswith((' ', '.')) for part in member.parts)):
                 raise ValueError('NVIDIA runtime archive has an unsafe path.')
             key = name.rstrip('/').casefold()
             if key in names:

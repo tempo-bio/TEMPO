@@ -97,10 +97,17 @@ class NvidiaSetupTests(unittest.TestCase):
     def test_archive_rejects_traversal_links_and_duplicate_casefolded_members(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
-            for name in ('../escape', 'TEMPO/../../escape', '/TEMPO/TEMPO.exe', 'TEMPO\\bad.exe'):
+            for name in ('../escape', 'TEMPO/../../escape', '/TEMPO/TEMPO.exe', 'TEMPO\\bad.exe',
+                         'TEMPO/./bad.exe', 'TEMPO//bad.exe', 'TEMPO/bad.exe.', 'TEMPO/bad.exe '):
                 file = root/'archive.zip'
                 file.write_bytes(_archive(path=name))
                 with self.subTest(name=name), self.assertRaisesRegex(ValueError, 'unsafe path'):
+                    setup._extract_checked(file, root/'out')
+            # Emulate ZipInfo's Windows read normalization on every test host.
+            info = zipfile.ZipInfo('TEMPO/bad.exe')
+            info.orig_filename = 'TEMPO\\bad.exe'
+            with patch.object(zipfile.ZipFile, 'infolist', return_value=[info]):
+                with self.assertRaisesRegex(ValueError, 'unsafe path'):
                     setup._extract_checked(file, root/'out')
             with zipfile.ZipFile(file, 'w') as out:
                 link = zipfile.ZipInfo('TEMPO/link')

@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from huggingface_hub.utils._http import httpx
+from tests.hub_http_fixture import httpx
 from huggingface_hub import HfApi, set_client_factory
 from huggingface_hub.utils import _http
 from huggingface_hub.errors import OfflineModeIsEnabled
@@ -46,6 +46,8 @@ class DesktopHttpTests(unittest.TestCase):
         hub_module.configure_desktop_http()
         client = _http.get_session()
         self.assertTrue(client.follow_redirects)
+        self.assertEqual(client.timeout.as_dict(),
+                         {'connect': 10, 'read': 30, 'write': 30, 'pool': 30})
         with patch.object(_http.constants, 'HF_HUB_OFFLINE', True):
             with self.assertRaises(OfflineModeIsEnabled):
                 client.get('https://desktop.invalid', timeout=3)
