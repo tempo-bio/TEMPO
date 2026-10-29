@@ -7,9 +7,11 @@ import os
 import sys
 from urllib.parse import urlparse
 
-from huggingface_hub import CommitOperationAdd, hf_hub_download
+from huggingface_hub import CommitOperationAdd, hf_hub_url
 from huggingface_hub.errors import EntryNotFoundError
+from huggingface_hub.utils import build_hf_headers, get_session, hf_raise_for_status
 from tempo_config import tempo_preferences
+from tempo_startup_diagnostics import record as startup_stage
 
 # Discovery must survive an administrator changing the dataset/model destinations.
 # Keep this bootstrap location independent of editable workspace preferences.
@@ -64,29 +66,45 @@ def is_workspace_admin(hub):
 
 
 def _control_revision(hub, token):
+    startup_stage('settings.metadata.started')
     info = hub.api.repo_info(repo_id=CONTROL_REPO, repo_type='model', token=token)
     if info.private is not True:
         raise PermissionError('The shared settings repository must be private. Saved settings were retained.')
     if not isinstance(info.sha, str) or not info.sha:
         raise ValueError('The shared settings repository has no readable revision.')
+    startup_stage('settings.metadata.completed')
     return info.sha
 
 
 def _read(hub, revision, *, missing_ok=False):
     try:
-        path = hf_hub_download(repo_id=CONTROL_REPO, repo_type='model', filename=CONTROL_FILE,
-                               revision=revision, token=hub.token, etag_timeout=3)
-        with open(path, encoding='utf-8') as stream:
-            document = json.load(stream)
+        # This small settings document needs no file download or tqdm progress
+        # bar. Read the pinned revision with the same Hub HTTP client and auth.
+        url = hf_hub_url(repo_id=CONTROL_REPO, repo_type='model',
+                         filename=CONTROL_FILE, revision=revision)
+        startup_stage('settings.download.started')
+        response = get_session().get(url, headers=build_hf_headers(token=hub.token),
+                                     follow_redirects=True)
+        startup_stage('settings.download.response', status=response.status_code, count=len(response.content))
+        hf_raise_for_status(response)
+        if len(response.content) > 65536:
+            raise ValueError('The shared settings file is too large.')
+        document = response.json()
+        startup_stage('settings.json.parsed')
     except EntryNotFoundError:
+        startup_stage('settings.file.missing')
         if missing_ok:
             return None
+        raise
+    except Exception as error:
+        startup_stage('settings.download.failed', error=error)
         raise
     if not isinstance(document, dict) or document.get('schema_version') != 2:
         raise ValueError('The shared settings file has an unsupported format. Saved settings were retained.')
     validate_settings(document.get('settings'))
     if not isinstance(document.get('updated_by'), str) or not re.fullmatch(r'hf:[A-Za-z0-9_-]+', document['updated_by']):
         raise ValueError('The shared settings file has no valid publisher record.')
+    startup_stage('settings.document.validated')
     # The repository ACL is the trust boundary. updated_by is a private audit
     # field, not a claim that can authorize a writer. A data-repository writer
     # must never receive write access to this separate settings organization.

@@ -185,15 +185,71 @@ def predict_maps_isolated(model_path, images):
     """Terminate TensorFlow before a Cellpose network takes GPU ownership."""
     import subprocess
     import sys
+    import os
     with tempfile.TemporaryDirectory(prefix='tempo-nuclear-input-') as folder:
         folder = Path(folder)
         np.savez(folder/'images.npz', **{str(index):image for index,image in enumerate(images)})
-        result = subprocess.run([sys.executable, str(Path(__file__).resolve()), '--predict', str(model_path),
-                                 str(folder/'images.npz'), str(folder/'maps.npz')], capture_output=True,text=True)
+        inputs = [str(model_path), str(folder/'images.npz'), str(folder/'maps.npz')]
+        command = ([sys.executable, '--predict-nuclei', *inputs] if getattr(sys, 'frozen', False)
+                   else [sys.executable, str(Path(__file__).resolve()), '--predict', *inputs])
+        result = subprocess.run(command, capture_output=True, text=True,
+                                **({'creationflags': subprocess.CREATE_NO_WINDOW} if os.name == 'nt' else {}))
         if result.returncode:
-            raise RuntimeError('Nuclear helper inference failed: '+result.stderr[-2000:])
-        with np.load(folder/'maps.npz',allow_pickle=False) as maps:
-            return [maps[str(index)].copy() for index in range(len(images))]
+            from tempo_credentials import redact_credentials
+            detail = ''
+            sidecar = Path(str(folder/'maps.npz')+'.error.json')
+            try:
+                if sidecar.stat().st_size <= 16384:
+                    failure = json.loads(sidecar.read_text(encoding='utf-8'))
+                    if isinstance(failure, dict) and isinstance(failure.get('message'), str):
+                        detail = redact_credentials(failure['message'])[-2000:]
+            except (OSError, ValueError, TypeError):
+                pass
+            detail = detail or redact_credentials((result.stderr or '').strip())[-2000:] or f'worker exited with code {result.returncode}'
+            raise RuntimeError('Nuclear helper inference failed: '+detail)
+        if not (folder/'maps.npz').is_file():
+            raise RuntimeError('Nuclear helper exited without producing prediction maps.')
+        try:
+            with np.load(folder/'maps.npz',allow_pickle=False) as maps:
+                expected = {str(index) for index in range(len(images))}
+                if len(maps.files) != len(expected) or set(maps.files) != expected:
+                    raise RuntimeError('Nuclear helper returned an unexpected set of prediction maps.')
+                predictions = []
+                for index, image in enumerate(images):
+                    values = maps[str(index)]
+                    if (values.shape != image.shape[:2] or not np.issubdtype(values.dtype, np.number)
+                            or np.iscomplexobj(values) or not np.isfinite(values).all()):
+                        raise RuntimeError('Nuclear helper returned invalid prediction-map values or dimensions.')
+                    predictions.append(values.copy())
+                return predictions
+        except (OSError, ValueError, TypeError, KeyError, EOFError, zipfile.BadZipFile) as error:
+            raise RuntimeError('Nuclear helper returned unreadable prediction maps.') from error
+
+
+def run_prediction(model_path, images_path, maps_path):
+    """Headless entry point shared by the source script and frozen executable."""
+    from tempo_training import configure_tensorflow, unpack_stardist
+    from tempo_nuclei import continuous_map
+    configure_tensorflow()
+    with tempfile.TemporaryDirectory() as folder, np.load(images_path, allow_pickle=False) as images:
+        model = unpack_stardist(model_path, folder)
+        maps = {key: continuous_map(model, images[key]) for key in images.files}
+        np.savez(maps_path, **maps)
+    return 0
+
+
+def prediction_command(model_path, images_path, maps_path):
+    """Return headless failures through a file even without windowed stderr."""
+    try:
+        return run_prediction(model_path, images_path, maps_path)
+    except Exception as error:
+        from tempo_credentials import redact_credentials
+        failure = dict(error_type=type(error).__name__, message=redact_credentials(str(error))[:2000])
+        try:
+            Path(str(maps_path)+'.error.json').write_text(json.dumps(failure), encoding='utf-8')
+        except OSError:
+            pass  # The parent still receives a nonzero exit code.
+        return 1
 
 
 if __name__ == '__main__':
@@ -201,10 +257,4 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--predict',nargs=3,metavar=('MODEL','IMAGES','MAPS'),required=True)
     args = parser.parse_args()
-    from tempo_training import configure_tensorflow, unpack_stardist
-    from tempo_nuclei import continuous_map
-    configure_tensorflow()
-    with tempfile.TemporaryDirectory() as folder, np.load(args.predict[1],allow_pickle=False) as images:
-        model = unpack_stardist(args.predict[0],folder)
-        maps = {key:continuous_map(model,images[key]) for key in images.files}
-        np.savez(args.predict[2],**maps)
+    raise SystemExit(prediction_command(*args.predict))

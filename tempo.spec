@@ -15,6 +15,8 @@ sys.path.insert(0, str(root))
 from tempo_cloud import BUNDLE_FILES
 from tempo_model_catalog import MODEL_FILES
 from tempo_release import RUNTIME_IMPORTS
+from scripts.windows_build_profile import build_profile
+profile = build_profile() if sys.platform == 'win32' else None
 os.environ['YOLO_AUTOINSTALL'] = 'false'
 
 # Dynamically collect all Ultralytics configuration YAMLs (default.yaml, etc.)
@@ -49,8 +51,8 @@ if sys.platform == 'win32':
     from scripts.prepare_dependency_sources import validate, check_inventory, write_index
     notices = root/'Output/third-party-licenses'
     license_inventory = collect_licenses(notices)
-    source_manifest = json.loads((root/'installer/dependency-sources.json').read_text(encoding='utf-8'))
-    validate(source_manifest, root/'requirements-windows.lock')
+    source_manifest = json.loads((root/profile.source_manifest).read_text(encoding='utf-8'))
+    validate(source_manifest, root/profile.lock)
     check_inventory(license_inventory, source_manifest)
     source_index = root/'Output/dependency-sources'
     source_files = write_index(source_manifest, source_index)
@@ -67,6 +69,11 @@ if sys.platform == 'win32':
     audit_path.parent.mkdir(parents=True,exist_ok=True)
     audit_path.write_text(json.dumps(audit,indent=2)+'\n',encoding='utf-8')
     datas += private_datas + [(str(audit_path),'assets')]
+    if profile.key == 'cpu':
+        optional_runtime = root/'Output/nvidia-runtime.json'
+        if not optional_runtime.is_file():
+            raise RuntimeError('The CPU release requires a verified NVIDIA runtime descriptor.')
+        datas.append((str(optional_runtime), 'assets'))
 identity = root / 'Output/build-provenance.json'
 if identity.is_file():
     datas.append((str(identity), 'assets'))
@@ -86,6 +93,13 @@ for weight_file in MODEL_FILES.values():
 
 hidden_imports = [
     'tempo_onboarding',
+    'tempo_first_run',
+    'tempo_assistance_runtime',
+    'tempo_assistance_progress',
+    'tempo_nvidia_runtime',
+    'tempo_nvidia_setup',
+    'tempo_startup_diagnostics',
+    'setup_wizard',
     'PyQt6.QtCore',
     'PyQt6.QtGui',
     'PyQt6.QtWidgets',

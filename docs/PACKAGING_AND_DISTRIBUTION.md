@@ -27,6 +27,7 @@ These checks do not connect to microscope hardware, use real collaborator accoun
 | Artifact | Contents | Retention |
 | --- | --- | --- |
 | `Windows_install_payload` | Installer, SHA-256 checksum, source/dependency provenance, dependency source index, verification contract, and installation-check scripts | 3 days |
+| `Windows_NVIDIA_runtime` | Optional CUDA 12.6 inference runtime archive and the descriptor pinned into the installer | 7 days |
 | `TEMPO_Colab_Trainer` | Notebook regenerated from tested training sources | 7 days |
 | `Windows_test_evidence` | Regression output and machine-readable results | 3 days |
 | `Windows_prebuild_evidence` | Source checks and interface captures | 3 days |
@@ -34,7 +35,7 @@ These checks do not connect to microscope hardware, use real collaborator accoun
 | `Windows_build_evidence` | Collected build reports, logs, and captures | 7 days |
 | `Windows_install_evidence` | Fresh-runner installation, runtime, and uninstall reports | 7 days |
 
-Download the payload before expiry. Keep the installer, checksum, and provenance together. The filename `TEMPO_Setup_v1.0.0.exe` alone does not identify which test build produced it.
+Download the payload before expiry. Keep the installer, checksum, and provenance together. The filename `TEMPO_Setup_v1.0.1.exe` alone does not identify which test build produced it. The optional NVIDIA runtime archive and its descriptor are separate workflow artifacts; the workflow does not publish them to the Releases page. Guided Setup can download the runtime only after that exact checksummed archive is published at the descriptor URL.
 
 ## Installation, models, and hardware
 
@@ -43,6 +44,19 @@ The default per-user directory is `%LOCALAPPDATA%\Programs\TEMPO`. The installer
 Current packaging includes the runtime libraries needed by the model checks. Project weights are included only when their declared files are present in the build directory. Otherwise TEMPO's authenticated update path obtains them from the configured private model repository. Passing an offline runtime check does not establish that trained project weights are bundled.
 
 Scientific-camera acquisition requires suitable vendor drivers and Micro-Manager adapters. Annotation of existing images needs no connected camera. Check camera compatibility on the actual hardware.
+
+## Startup diagnostics
+
+For builds containing the startup recorder, run these commands in Command Prompt:
+
+```bat
+cd /d "%LOCALAPPDATA%\Programs\TEMPO"
+TEMPO.exe --diagnose-startup "%TEMP%\tempo-startup.json"
+```
+
+This performs a normal launch with the saved account and preferences. The report records HTTP status and byte counts for shared settings, JSON validation, settings application, and dashboard creation. While startup is pending it captures Python thread locations every ten seconds, for up to ten minutes. It excludes credentials, settings values, response contents, and local variable values. Recording stops when the dashboard is shown. Share the JSON report after a stalled launch; this option is absent from the original v1.0.0 installer.
+
+The read-only `scripts/collect_windows_settings_cache.ps1` can inspect an existing installation without a new build. It reports the cached settings file's dates, hash, schema checks, and whether the four workspace values match saved preferences. It performs no network requests and never reads credentials. Cache inspection alone cannot establish which launch downloaded or applied a file.
 
 ## Publication
 

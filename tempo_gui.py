@@ -2,6 +2,30 @@ import sys
 import os
 import platform
 
+if __name__ == '__main__' and len(sys.argv) > 1 and sys.argv[1] in ('--assist-model', '--assist-model-cuda'):
+    if len(sys.argv) != 8:
+        sys.exit(2)
+    from tempo_assistance_runtime import assist_command
+    sys.exit(assist_command(*sys.argv[2:], require_cuda=sys.argv[1] == '--assist-model-cuda'))
+
+if __name__ == '__main__' and len(sys.argv) > 1 and sys.argv[1] == '--probe-cuda':
+    if len(sys.argv) != 3:
+        sys.exit(2)
+    from tempo_nvidia_runtime import probe_command
+    sys.exit(probe_command(sys.argv[2]))
+
+if __name__ == '__main__' and len(sys.argv) > 1 and sys.argv[1] == '--predict-cells':
+    if len(sys.argv) != 7:
+        sys.exit(2)
+    from tempo_nvidia_runtime import predict_command
+    sys.exit(predict_command(*sys.argv[2:]))
+
+if __name__ == '__main__' and len(sys.argv) > 1 and sys.argv[1] == '--predict-nuclei':
+    if len(sys.argv) != 5:
+        sys.exit(2)
+    from tempo_nuclear_training import prediction_command
+    sys.exit(prediction_command(*sys.argv[2:]))
+
 if __name__ == '__main__' and len(sys.argv) == 3 and sys.argv[1] == '--verify-installation':
     from tempo_release import verify_installation
     sys.exit(verify_installation(sys.argv[2]))
@@ -23,8 +47,12 @@ if platform.system() == "Darwin" and platform.machine() == "arm64":
         sys.exit(1)
 
 if __name__ == '__main__':
+    from tempo_startup_diagnostics import start_from_arguments, record as startup_stage
+    start_from_arguments(sys.argv)
+    startup_stage('runtime.started')
     from tempo_runtime import prepare_windows_runtime
     prepare_windows_runtime()
+    startup_stage('runtime.completed')
 
 import cv2
 import contextlib
@@ -73,8 +101,10 @@ from tempo_credentials import safe_profile_name, redact_credentials
 from tempo_secure_store import CredentialMigrationRequired
 import datetime
 from yolo_inference_helper import detect_cells_via_bridge
-from tempo_hub import tempo_hub, atomic_json, expired
-from tempo_annotation_store import update_session
+from tempo_hub import tempo_hub, atomic_json, expired, configure_desktop_http
+configure_desktop_http()
+from tempo_app_icon import application_icon_path
+from tempo_annotation_store import update_session, atomic_bytes, AnnotationSessionConflict
 from tempo_image_browser import SharedImageBrowser
 from tempo_annotations import (normalize_record, validate_annotations, pixel_record,
                                merge_image_records, canonical_image_name)
@@ -2736,6 +2766,7 @@ class UniversalImportDialog(QDialog):
 
 class AutoAnnotateWorker(QThread):
     status_signal = pyqtSignal(str)
+    stage_signal = pyqtSignal(str)
     finished_signal = pyqtSignal(dict)
     error_signal = pyqtSignal(str)
 
@@ -2750,38 +2781,12 @@ class AutoAnnotateWorker(QThread):
             conf_val = float(tempo_preferences.get("annotator", "confidence_threshold", 0.15))
             iou_val = float(tempo_preferences.get("annotator", "nms_iou_threshold", 0.40))
             
-            # If frozen executable or native Windows, run inference directly in-process
-            if getattr(sys, 'frozen', False) or (platform.system() == "Windows" and ".venv_x86" not in sys.executable):
-                self.status_signal.emit('Counting cells…' if self.model_type == 'scout' else 'Finding nuclei…' if self.model_type == 'stardist' else 'Outlining cells…')
-                json_response = detect_cells_via_bridge(self.current_file, self.model_type, conf=conf_val, iou=iou_val)
-            else:
-                native_python = sys.executable
-                venv_native = os.path.join(tempo_backend.BASE_DIR, ".venv", "bin", "python")
-                cmd_prefix = []
-                if ".venv_x86" in sys.executable and os.path.exists(venv_native):
-                    native_python = venv_native
-                    if platform.system() == "Darwin":
-                        cmd_prefix = ["arch", "-arm64"]
-                    
-                helper_script = os.path.join(tempo_backend.BASE_DIR, "yolo_inference_helper.py")
-                cmd = cmd_prefix + [native_python, helper_script, self.current_file, "--model_type", self.model_type, "--conf", str(conf_val), "--iou", str(iou_val)]
-                
-                self.status_signal.emit('Counting cells…' if self.model_type == 'scout' else 'Finding nuclei…' if self.model_type == 'stardist' else 'Outlining cells…')
-                result = subprocess.run(
-                    cmd,
-                    capture_output=True, text=True, check=True
-                )
-                
-                self.status_signal.emit('Reading model results…')
-                output_lines = result.stdout.strip().split('\n')
-                json_response = None
-                for line in reversed(output_lines):
-                    if line.startswith('{"success":'):
-                        json_response = json.loads(line)
-                        break
+            from tempo_assistance_runtime import run_assistance
+            json_response = run_assistance(self.current_file, self.model_type, conf_val, iou_val,
+                                           progress=self.status_signal.emit, stage=self.stage_signal.emit)
                     
             if not json_response:
-                raise Exception("Could not parse inference response.\n" + result.stdout)
+                raise RuntimeError('The model worker did not return a result.')
                 
             if not json_response.get("success"):
                 raise Exception(json_response.get("error", "Unknown error"))
@@ -3219,6 +3224,10 @@ class AnnotatorTab(QWidget):
         # Multi-Model Automated Annotation Suite
         self.auto_group = QGroupBox('Model Assistance')
         auto_layout = QVBoxLayout(self.auto_group)
+
+        from tempo_assistance_progress import ModelAssistanceProgress
+        self.auto_progress = ModelAssistanceProgress(self.auto_group)
+        auto_layout.addWidget(self.auto_progress)
 
         self.lbl_auto_status = InlineNotice()
         self.lbl_auto_status.setWordWrap(True)
@@ -3741,6 +3750,7 @@ class AnnotatorTab(QWidget):
         if getattr(self, '_annotation_save_unconfirmed', False):
             return False
         records = {}
+        session = {}
         try:
             for path in (self.universal_json_path, self.session_file):
                 try:
@@ -3754,7 +3764,7 @@ class AnnotatorTab(QWidget):
                 if path == self.session_file:
                     if data.get('dataset_repo') not in (None, tempo_hub.get_dataset_repo()):
                         raise ValueError('These saved annotations belong to a different shared dataset.')
-                    self._session_revision = data.get('session_revision', 0)
+                    session = copy.deepcopy(data)
                 if not isinstance(incoming, dict) or any(
                         not isinstance(record, dict) or not isinstance(record.get('boxes', []), list)
                         for record in incoming.values()):
@@ -3777,6 +3787,8 @@ class AnnotatorTab(QWidget):
             self.update_submission_readiness()
             return False
         self.universal_annotations = converted
+        self._session_revision = session.get('session_revision', 0)
+        self._session_base = session
         self._annotation_load_failed = False
         self.update_canvas_hint()
         self.annotation_load_error.clear()
@@ -3785,21 +3797,93 @@ class AnnotatorTab(QWidget):
         return True
 
     def retry_annotation_load(self):
+        recovery = None
+        unconfirmed = getattr(self, '_annotation_save_unconfirmed', False)
+        if getattr(self, '_annotation_session_conflict', False):
+            recovery = os.path.join(tempo_backend.UNIVERSAL_DATASET_DIR,
+                                    f'auto_annotation_backup_{time.time_ns()}.json')
+            try:
+                atomic_bytes(recovery, json.dumps(self.universal_annotations, indent=2, allow_nan=False).encode('utf-8'))
+            except (OSError, ValueError, TypeError) as error:
+                self.annotation_load_error.set_error(
+                    'Your current edits could not be backed up. Check storage permissions and free space, then retry Reload Saved Annotations.', error)
+                return
+            self._annotation_save_unconfirmed = False
         if self.load_universal_annotations():
+            self._annotation_session_conflict = False
+            self.btn_retry_annotation_load.setText('Retry Loading Annotations')
+            if recovery is not None:
+                self.btn_retry_annotation_save.hide()
+                self.file_error.clear()
+                self.reservation_error.clear()
             self.refresh_universal_file_list()
             self._apply_current_lease()
+            if recovery is not None:
+                self.restore_feedback.show()
+                self.restore_error.clear()
+                self.restore_status.setText('Saved annotations reloaded. Earlier edits were kept in '
+                                            + os.path.basename(recovery) + '. Use Restore Backup to recover them.')
+        elif recovery is not None:
+            self._annotation_save_unconfirmed = unconfirmed
+
+    def _session_annotation_record(self, name, record):
+        converted = pixel_record(record)
+        converted['boxes'] = self.read_annotation_shapes(name, converted.get('boxes', []))
+        for shape in converted['boxes']:
+            if not shape.get('polygon') and 'box' in shape:
+                x, y, width, height = shape['box']
+                shape['polygon'] = [[x,y], [x+width,y], [x+width,y+height], [x,y+height]]
+            if shape.get('polygon'):
+                shape.pop('box', None)
+        return converted
 
     def save_universal_annotations(self):
         if getattr(self, '_annotation_load_failed', False):
             raise OSError('Shared annotation loading failed; retry loading before saving.')
-        updated = update_session(self.session_file, lambda current: {
-            'collaborator_id': self.collaborator_id,
-            'dataset_repo': tempo_hub.get_dataset_repo(),
-            'last_updated': datetime.datetime.now(datetime.timezone.utc).isoformat(),
-            'claimed_images': [name for name,rec in self.lock_manifest.get('images', {}).items() if rec.get('claimed_by') == self.collaborator_id],
-            'annotations': self.universal_annotations,
-        }, expected_revision=getattr(self, '_session_revision', 0), annotations_path=self.universal_json_path)
+        visible_name = (os.path.basename(self.current_file) if self.current_file and self.is_universal_mode
+                        and self._preview_record is None else None)
+        previous_boxes = (self._session_annotation_record(visible_name, self.universal_annotations.get(visible_name, {}))['boxes']
+                          if visible_name else None)
+        try:
+            updated = update_session(self.session_file, lambda current: {
+                **current,
+                'collaborator_id': self.collaborator_id,
+                'dataset_repo': tempo_hub.get_dataset_repo(),
+                'last_updated': datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                'claimed_images': list(dict.fromkeys(
+                    [name for name in current.get('claimed_images', []) if name not in self.lock_manifest.get('images', {})]
+                    + [name for name,rec in self.lock_manifest.get('images', {}).items() if rec.get('claimed_by') == self.collaborator_id])),
+                'annotations': self.universal_annotations,
+            }, expected_revision=getattr(self, '_session_revision', 0), annotations_path=self.universal_json_path,
+                base_session=getattr(self, '_session_base', None), normalize_record=self._session_annotation_record)
+        except AnnotationSessionConflict as error:
+            self._annotation_session_conflict = True
+            self._annotation_load_failed = True
+            self._sync_timer.stop()
+            self.btn_retry_annotation_load.setText('Reload Saved Annotations')
+            self.btn_retry_annotation_load.show()
+            self.annotation_load_error.set_error(
+                'Saved annotations changed in another operation. Close other TEMPO windows, then choose Reload Saved Annotations. TEMPO will first keep a backup of your current edits.', error)
+            self.btn_import.setEnabled(False)
+            self._apply_current_lease()
+            self.annotation_navigator.layout().activate()
+            self.navigator_scroll.ensureWidgetVisible(self.btn_retry_annotation_load)
+            raise
         self._session_revision = updated['session_revision']
+        self._session_base = copy.deepcopy(updated)
+        merged = {name:self._session_annotation_record(name, record)
+                  for name,record in updated['annotations'].items()}
+        for name in list(self.universal_annotations):
+            if name not in merged:
+                del self.universal_annotations[name]
+        for name, record in merged.items():
+            if self.universal_annotations.get(name) != record:
+                self.universal_annotations[name] = record
+        if visible_name and previous_boxes != self.universal_annotations.get(visible_name, {}).get('boxes', []):
+            self.refresh_boxes()
+            self.update_running_counts()
+            self.update_file_status()
+            self.update_submission_readiness()
         if hasattr(self, 'identity_error'):
             self.identity_error.clear()
 
@@ -4078,7 +4162,9 @@ class AnnotatorTab(QWidget):
             name = tempo_hub.display_collaborator(owner, record=draft, profiles=self.lock_manifest.get('collaborators', {}))
             text = f'Read-only · unsynced annotations belong to {name}. Switch to that collaborator to sync them.'
             self.lbl_lock_status.setToolTip(owner)
-        if getattr(self, '_annotation_load_failed', False):
+        if getattr(self, '_annotation_session_conflict', False):
+            text = 'Read-only · reload saved annotations'
+        elif getattr(self, '_annotation_load_failed', False):
             text = 'Read-only · annotation loading failed'
         self.lbl_lock_status.setText(text)
         self.arrange_preview_header()
@@ -4147,7 +4233,10 @@ class AnnotatorTab(QWidget):
                 self.lbl_sync_status.clear()
             self.shared_browser.load()
         except Exception as exc:
-            self.reservation_error.set_error('Release did not finish. Saved annotations are retained. Refresh reservations before retrying.', exc)
+            message = ('Release paused. Close other TEMPO windows, then choose Reload Saved Annotations beside the image list and retry Release Reservation.'
+                       if isinstance(exc, AnnotationSessionConflict) else
+                       'Release did not finish. Saved annotations are retained. Check the current reservation status before retrying.')
+            self.reservation_error.set_error(message, exc)
             if self.universal_annotations.get(name, {}).get('sync_pending'):
                 self._sync_timer.start(1000)
 
@@ -4655,11 +4744,20 @@ class AnnotatorTab(QWidget):
             'boxes': copy.deepcopy(self.get_current_boxes()),
         }
         self.lbl_auto_status.setText('Counting cells…' if model_type == 'scout' else 'Finding nuclei…' if model_type == 'stardist' else 'Outlining cells…')
+        self.lbl_auto_status.hide()
         self._auto_pending['role'] = model_type
+        self.auto_progress.begin(model_type)
+        def reveal_progress(request=self._auto_pending):
+            if request is getattr(self, '_auto_pending', None):
+                scroll = self.annotation_inspector_scroll.verticalScrollBar()
+                top = self.auto_progress.mapTo(self.annotation_inspector, QPoint(0, 0)).y()
+                scroll.setValue(min(scroll.maximum(), max(0, top - 110)))
+        QTimer.singleShot(0, reveal_progress)
         self.set_auto_buttons_enabled(False)
         self.auto_worker = AutoAnnotateWorker(self.current_file, model_type=model_type, parent=self)
         request = self._auto_pending
         self.auto_worker.status_signal.connect(lambda text: self.on_auto_annotation_status(text, request))
+        self.auto_worker.stage_signal.connect(lambda stage: self.on_auto_annotation_stage(stage, request))
         self.auto_worker.finished_signal.connect(lambda result: self.on_auto_annotate_finished(result, request))
         self.auto_worker.error_signal.connect(lambda error: self.on_auto_annotate_error(error, request))
         self.auto_worker.start()
@@ -4757,6 +4855,7 @@ class AnnotatorTab(QWidget):
         self.lbl_auto_status.setText(text)
 
     def clear_detection_feedback(self):
+        self.auto_progress.finish()
         self.lbl_auto_status.clear()
         self.auto_error.clear()
 
@@ -4766,8 +4865,16 @@ class AnnotatorTab(QWidget):
 
     def on_auto_annotation_status(self, text, request):
         if (request is getattr(self, '_auto_pending', None) and self.auto_request_is_current(request)
-                and self.get_current_boxes() == request['boxes'] and not self._current_file_readonly):
+                and self.get_current_boxes() == request['boxes']
+                and (not self._current_file_readonly or request.get('role') == 'scout')):
             self.lbl_auto_status.setText(text)
+            self.lbl_auto_status.hide()
+
+    def on_auto_annotation_stage(self, stage, request):
+        if (request is getattr(self, '_auto_pending', None) and self.auto_request_is_current(request)
+                and self.get_current_boxes() == request['boxes']
+                and (not self._current_file_readonly or request.get('role') == 'scout')):
+            self.auto_progress.note_stage(stage)
 
     def on_auto_annotate_finished(self, json_response, request=None):
         pending = getattr(self, '_auto_pending', None)
@@ -4775,6 +4882,8 @@ class AnnotatorTab(QWidget):
             return
         request = pending
         self._auto_pending = None
+        self.auto_progress.finish()
+        self.lbl_auto_status.clear()
         self.set_auto_buttons_enabled(not self._current_file_readonly)
         if not self.auto_request_is_current(request):
             self.clear_detection_feedback()
@@ -4856,6 +4965,7 @@ class AnnotatorTab(QWidget):
         if request is not None and request is not pending:
             return
         self._auto_pending = None
+        self.auto_progress.finish()
         self.set_auto_buttons_enabled(not self._current_file_readonly)
         if pending is not None and not self.auto_request_is_current(pending):
             self.clear_detection_feedback()
@@ -6709,9 +6819,9 @@ class TempoDashboard(QMainWindow):
         self.setGeometry(100, 100, 960, 620)
 
         # Set Window Icon
-        icon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "tempo_icon.png")
+        icon_path = application_icon_path()
         if os.path.exists(icon_path):
-            self.setWindowIcon(QIcon(icon_path))
+            self.setWindowIcon(QIcon(str(icon_path)))
 
         # Main Central Container
         central_container = QWidget()
@@ -6734,7 +6844,10 @@ class TempoDashboard(QMainWindow):
         self.tabs.setCornerWidget(account_slot, Qt.Corner.TopRightCorner)
         self._account_generation = 0
 
+        from tempo_startup_diagnostics import record as startup_stage
+        startup_stage('dashboard.capture.started')
         self.tab_capture = CaptureTab()
+        startup_stage('dashboard.capture.completed')
         self.tab_capture.cleanup_finished.connect(self.capture_cleanup_finished)
         self.tab_annotator = AnnotatorTab()
         self.tab_cruncher = QWidget()
@@ -7510,14 +7623,20 @@ def run_desktop_application(app):
 
     def start():
         try:
+            from tempo_startup_diagnostics import record as startup_stage, finish as finish_diagnostics
+            startup_stage('splash.started')
             splash = SplashScreen()
             views.append(splash)
             splash.exec()
+            startup_stage('splash.completed')
             if getattr(app, '_tempo_quit_requested', False):
                 return
+            startup_stage('dashboard.started')
             window = TempoDashboard()
             views.append(window)
             window.show()
+            startup_stage('dashboard.shown')
+            finish_diagnostics()
             app.setQuitOnLastWindowClosed(True)
 
             def show_startup_updates():
@@ -7531,6 +7650,8 @@ def run_desktop_application(app):
             if getattr(splash, 'update_available', False):
                 QTimer.singleShot(600, show_startup_updates)
         except Exception as exc:
+            from tempo_startup_diagnostics import record as startup_stage
+            startup_stage('startup.failed', error=exc)
             startup_error.append(exc)
             app.exit(1)
 
@@ -7561,11 +7682,15 @@ if __name__ == "__main__":
     app.setApplicationName("TEMPO")
     app.setApplicationDisplayName("TEMPO")
 
-    icon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "tempo_icon.png")
+    icon_path = application_icon_path()
     if os.path.exists(icon_path):
-        app.setWindowIcon(QIcon(icon_path))
+        app.setWindowIcon(QIcon(str(icon_path)))
 
-    exit_code = run_desktop_application(app)
+    from tempo_first_run import run_packaged_setup
+    startup_stage('setup.check.started')
+    setup_ready = run_packaged_setup(app)
+    startup_stage('setup.check.completed' if setup_ready else 'setup.canceled')
+    exit_code = run_desktop_application(app) if setup_ready else 0
     from tempo_tasks import dispose_application
     dispose_application(app)
     sys.exit(exit_code)

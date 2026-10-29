@@ -1,5 +1,6 @@
 """Bounded, revision-checked local annotation writes shared by GUI and checkout."""
 import json
+import copy
 import os
 import tempfile
 import threading
@@ -9,6 +10,29 @@ from pathlib import Path
 
 _locks = {}
 _guard = threading.Lock()
+
+
+class AnnotationSessionConflict(OSError):
+    """A newer local session contains changes that cannot be merged safely."""
+
+
+def _merge_session_annotations(base, proposed, current, normalize):
+    missing = object()
+    result = {}
+    for name in sorted(set(base) | set(proposed) | set(current)):
+        values = [records.get(name, missing) for records in (base, proposed, current)]
+        before, local, saved = [normalize(name, value) if value is not missing else missing for value in values]
+        if local == before:
+            chosen = saved
+        elif saved == before or local == saved:
+            chosen = local
+        else:
+            raise AnnotationSessionConflict(
+                'Annotations changed in another operation. Close other TEMPO windows, then choose '
+                'Reload Saved Annotations. Your current edits remain in this window.')
+        if chosen is not missing:
+            result[name] = copy.deepcopy(chosen)
+    return result
 
 
 def atomic_bytes(path, data):
@@ -76,14 +100,34 @@ def session_lock(path):
         lock.release()
 
 
-def update_session(path, transform, *, expected_revision=None, annotations_path=None):
+def update_session(path, transform, *, expected_revision=None, annotations_path=None,
+                   base_session=None, normalize_record=None):
     """Commit a complete draft snapshot; restore earlier files on handled failure."""
     with session_lock(path):
         current = read_session(path)
         revision = current.get('session_revision', 0)
-        if expected_revision is not None and expected_revision != revision:
-            raise OSError('Annotations changed in another operation. Reload them before saving; your edits were preserved.')
-        updated = transform(current)
+        stale = expected_revision is not None and expected_revision != revision
+        if stale and base_session is None:
+            raise AnnotationSessionConflict('Annotations changed in another operation. Reload the saved session before retrying; no files were overwritten.')
+        updated = transform(copy.deepcopy(current) if stale else current)
+        if stale:
+            updated = dict(current, **updated)
+            if (current.get('dataset_repo') not in (None, updated.get('dataset_repo'))
+                    or current.get('collaborator_id') not in (None, base_session.get('collaborator_id'), updated.get('collaborator_id'))):
+                raise AnnotationSessionConflict('The saved annotation session now belongs to another account or dataset. Close other TEMPO windows, then choose Reload Saved Annotations.')
+            normalize = normalize_record or (lambda name, record: copy.deepcopy(record))
+            updated['annotations'] = _merge_session_annotations(
+                base_session.get('annotations', {}), updated.get('annotations', {}),
+                current.get('annotations', {}), normalize)
+            # Apply this window's claim changes without discarding independent
+            # checkouts made after its baseline was loaded.
+            before = set(base_session.get('claimed_images', []))
+            proposed = set(updated.get('claimed_images', []))
+            removed = before-proposed
+            added = proposed-before
+            updated['claimed_images'] = list(dict.fromkeys(
+                [name for name in current.get('claimed_images', []) if name not in removed]
+                + [name for name in updated.get('claimed_images', []) if name in added]))
         updated['session_revision'] = revision + 1
         files = {Path(path):json.dumps(updated, indent=2, allow_nan=False).encode('utf-8')}
         if annotations_path is not None:

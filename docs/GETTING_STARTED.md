@@ -1,6 +1,6 @@
 # Getting started with TEMPO
 
-Setup checks this computer, connects your personal Hugging Face account, and installs the published models. You can connect camera and stimulation hardware later in **Acquisition**.
+The v1.0.0 Windows release opens the dashboard first; choose **Guided Setup** from Settings → Application Tools. Builds made from the updated source open Setup on first launch and resume saved progress if you close it. Setup checks this computer, connects your personal Hugging Face account, and installs the published models. On Windows, the updated setup offers an optional NVIDIA acceleration download for Cellpose outlines when the matching runtime is published. Leave it unchecked to use CPU processing. You can connect camera and stimulation hardware later in **Acquisition**.
 
 For the Windows download and an explanation of unsigned-installer warnings, see [Install on Windows](../README.md#install-on-windows).
 

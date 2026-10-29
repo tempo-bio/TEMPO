@@ -48,6 +48,31 @@ class ModelInstallationTests(unittest.TestCase):
                              local_sources={'yolo26n-scout.pt':self.source}),1)
         self.assertEqual((self.root/'yolo26n-scout.pt').read_bytes(),b'candidate')
 
+    def test_cached_source_reports_verification_then_installation_without_fake_transfer(self):
+        events = []
+        self.hub.download_model_release(self.manifest, self.root,
+            local_sources={'yolo26n-scout.pt': self.source}, progress=events.append)
+        self.assertEqual([event.stage for event in events],
+                         ['checking', 'verifying', 'verified', 'installing', 'complete'])
+        self.assertEqual((self.root/'yolo26n-scout.pt').read_bytes(), b'candidate')
+
+    def test_checksum_failure_reports_failure_and_preserves_existing_model(self):
+        target = self.root/'yolo26n-scout.pt'
+        target.write_bytes(b'installed model')
+        self.source.write_bytes(b'wrong download')
+        events = []
+        with self.assertRaisesRegex(ValueError, 'checksum mismatch'):
+            self.hub.download_model_release(self.manifest, self.root,
+                local_sources={'yolo26n-scout.pt': self.source}, progress=events.append)
+        self.assertEqual(events[-1].stage, 'failed')
+        self.assertNotIn('complete', [event.stage for event in events])
+        self.assertEqual(target.read_bytes(), b'installed model')
+
+    def test_broken_progress_callback_cannot_interrupt_model_installation(self):
+        self.assertEqual(self.hub.download_model_release(self.manifest, self.root,
+            local_sources={'yolo26n-scout.pt': self.source},
+            progress=Mock(side_effect=RuntimeError('Display unavailable'))), 1)
+
     def test_wrong_local_source_cannot_replace_incumbent(self):
         target=self.root/'yolo26n-scout.pt';target.write_bytes(b'incumbent')
         self.source.write_bytes(b'wrong checkpoint')

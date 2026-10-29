@@ -8,6 +8,7 @@ from PyQt6.QtCore import QObject, QElapsedTimer, QProcess, QThread, QTimer, Qt
 from PyQt6.QtGui import QIcon, QImage, QPainter, QPen, QPixmap
 
 from tempo_logo import _ASSETS, _VIEW, _artwork, _trimmed_path, trace_interval
+from tempo_app_icon import WINDOWS_ICON_SIZES, icon_source_rect, render_app_icon
 
 
 _CLOUD_PHASES = frozenset(('preparing', 'running', 'checking_runtime', 'preparing_dataset',
@@ -88,7 +89,8 @@ class IconFrames:
             return 17  # Reuse the full stroke during the hold; no OS redraws.
         return index
 
-    def __init__(self, size):
+    def __init__(self, size, *, platform=None):
+        platform = sys.platform if platform is None else platform
         base, _, self.path, ready = _artwork()
         source = QImage(str(_ASSETS / 'tempo_icon.png'))
         if not ready or source.isNull():
@@ -99,37 +101,47 @@ class IconFrames:
         painter.drawImage(_VIEW.topLeft(), base)
         painter.end()
         self.size = size
-        self.scale = size / source.width()
-        self.base = empty.scaled(size, size, Qt.AspectRatioMode.KeepAspectRatio,
-                                 Qt.TransformationMode.SmoothTransformation)
-        self.source = source.scaled(size, size, Qt.AspectRatioMode.KeepAspectRatio,
-                                    Qt.TransformationMode.SmoothTransformation)
+        self.source_rect = icon_source_rect(source, platform)
+        sizes = sorted({size, *(value for value in WINDOWS_ICON_SIZES if value <= size)}) if platform == 'win32' else [size]
+        # Direct small-size renders avoid a second resize when Windows asks for
+        # its 16/24/32px icons, keeping the tile stable when activity begins.
+        self.layers = {value: (render_app_icon(empty, value, platform),
+                               render_app_icon(source, value, platform)) for value in sizes}
         self.frames = {}
+
+    def _render_frame(self, index, size):
+        base, source = self.layers[size]
+        image = base.convertToFormat(QImage.Format.Format_ARGB32_Premultiplied)
+        start, end = trace_interval(index / self.FPS)
+        if end - start > 1e-6:
+            mask = QImage(size, size, QImage.Format.Format_ARGB32_Premultiplied)
+            mask.fill(Qt.GlobalColor.transparent)
+            painter = QPainter(mask)
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            scale = size / self.source_rect.width()
+            painter.scale(scale, scale)
+            painter.translate(-self.source_rect.x(), -self.source_rect.y())
+            painter.setPen(QPen(Qt.GlobalColor.white, 34, Qt.PenStyle.SolidLine,
+                               Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
+            painter.drawPath(_trimmed_path(self.path, start, end))
+            painter.end()
+            trace = source.convertToFormat(QImage.Format.Format_ARGB32_Premultiplied)
+            painter = QPainter(trace)
+            painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_DestinationIn)
+            painter.drawImage(0, 0, mask)
+            painter.end()
+            painter = QPainter(image)
+            painter.drawImage(0, 0, trace)
+            painter.end()
+        return image
 
     def at(self, index):
         index %= self.COUNT
         if index not in self.frames:
-            image = self.base.convertToFormat(QImage.Format.Format_ARGB32_Premultiplied)
-            start, end = trace_interval(index / self.FPS)
-            if end - start > 1e-6:
-                mask = QImage(self.size, self.size, QImage.Format.Format_ARGB32_Premultiplied)
-                mask.fill(Qt.GlobalColor.transparent)
-                painter = QPainter(mask)
-                painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-                painter.scale(self.scale, self.scale)
-                painter.setPen(QPen(Qt.GlobalColor.white, 34, Qt.PenStyle.SolidLine,
-                                   Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
-                painter.drawPath(_trimmed_path(self.path, start, end))
-                painter.end()
-                trace = self.source.convertToFormat(QImage.Format.Format_ARGB32_Premultiplied)
-                painter = QPainter(trace)
-                painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_DestinationIn)
-                painter.drawImage(0, 0, mask)
-                painter.end()
-                painter = QPainter(image)
-                painter.drawImage(0, 0, trace)
-                painter.end()
-            self.frames[index] = QIcon(QPixmap.fromImage(image))
+            icon = QIcon()
+            for size in self.layers:
+                icon.addPixmap(QPixmap.fromImage(self._render_frame(index, size)))
+            self.frames[index] = icon
         return self.frames[index]
 
 
@@ -224,7 +236,8 @@ class ActivityIconController(QObject):
             return
         try:
             if self.frames is None:
-                self.frames = IconFrames(256 if self.target.platform == 'darwin' else 128)
+                self.frames = IconFrames(256 if self.target.platform == 'darwin' else 128,
+                                         platform=self.target.platform)
             index = IconFrames.index_at(self.clock.nsecsElapsed() / 1_000_000_000)
             if index != self.last_frame:
                 self.target.apply(self.frames.at(index))

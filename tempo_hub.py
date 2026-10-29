@@ -30,6 +30,37 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 UNIVERSAL_DIR = get_collaboration_dir()
 LOCAL_LOCK_CACHE = os.path.join(UNIVERSAL_DIR, 'lock_manifest_cache.json')
 LOCAL_SESSION_PATH = os.path.join(UNIVERSAL_DIR, 'local_session.json')
+_desktop_http_configured = False
+
+
+def _desktop_request_timeout(request):
+    # Some HfApi methods explicitly pass timeout=None, overriding the client.
+    # Preserve finite SDK download limits while bounding every unbounded phase.
+    limits = {'connect': 10, 'read': 30, 'write': 30, 'pool': 30}
+    current = request.extensions.get('timeout', {})
+    request.extensions['timeout'] = {
+        phase: current[phase] if current.get(phase) is not None else limit
+        for phase, limit in limits.items()}
+
+
+def _desktop_http_client():
+    # Keep the SDK's offline guard, tracing hooks, redirects and TLS defaults.
+    # Hub 1.8's default timeout is None, including for metadata and commits.
+    import httpx
+    from huggingface_hub.utils._http import default_client_factory
+    client = default_client_factory()
+    client.timeout = httpx.Timeout(30, connect=10)
+    client.event_hooks['request'].append(_desktop_request_timeout)
+    return client
+
+
+def configure_desktop_http():
+    """Bound inactive desktop requests without changing Colab's upload policy."""
+    global _desktop_http_configured
+    if HAS_HF and not _desktop_http_configured:
+        from huggingface_hub import set_client_factory
+        set_client_factory(_desktop_http_client)
+        _desktop_http_configured = True
 
 
 def atomic_json(path, value):
@@ -325,7 +356,7 @@ class TempoHub:
     def publish_collaborator_profile(self):
         self.authenticated_account()
         return self._transaction(lambda manifest, revision: ({}, True), 'Update collaborator display name',
-                                 reconcile_images=False)
+                                 reconcile_images=False, skip_unchanged=True)
 
     def _prepare_manifest(self, manifest, revision):
         """Read one pinned snapshot; upgrade legacy identities without losing data."""
@@ -483,7 +514,7 @@ class TempoHub:
         except (OSError, ValueError):
             return {'version':1,'images':{}}
 
-    def _transaction(self, mutate, message, *, reconcile_images=True):
+    def _transaction(self, mutate, message, *, reconcile_images=True, skip_unchanged=False):
         """Commit related files together; re-evaluate business rules after a conflict."""
         context = self.token, self.get_dataset_repo(), self.get_models_repo()
         for attempt in range(4):
@@ -491,6 +522,7 @@ class TempoHub:
                 raise PermissionError('The account or shared repositories changed. Refresh before retrying.')
             revision = self._head()
             manifest = validate_lock_manifest(self._read('lock_manifest.json', revision, {'version':1,'images':{}}))
+            original = copy.deepcopy(manifest) if skip_unchanged else None
             identity_updates = {}
             if reconcile_images:
                 manifest, identity_updates = self._prepare_manifest(manifest, revision)
@@ -503,6 +535,10 @@ class TempoHub:
                 profiles[actor] = dict(profile_name=self.profile_name(),
                                       account_name=self.get_account_display_name())
             files = dict(identity_updates, **files)
+            if skip_unchanged and not files and manifest == original:
+                if context != (self.token, self.get_dataset_repo(), self.get_models_repo()):
+                    raise PermissionError('The account or shared repositories changed. Refresh before retrying.')
+                return result
             files['lock_manifest.json'] = json.dumps(manifest, allow_nan=False).encode()
             operations = [CommitOperationAdd(path_in_repo=name, path_or_fileobj=value) for name,value in files.items()]
             if context != (self.token, self.get_dataset_repo(), self.get_models_repo()):
@@ -1114,11 +1150,13 @@ class TempoHub:
         result['models'] = _model_records(result)
         return result
 
-    def download_model_release(self, manifest, target_dir=None, *, local_sources=None):
+    def download_model_release(self, manifest, target_dir=None, *, local_sources=None, progress=None):
         """Verify a whole release before replacing any installed weights."""
         models = _model_records(manifest)
         if not models:
             return 0
+        from tempo_model_transfer import ModelTransferReporter
+        reporter = ModelTransferReporter(progress, models)
         if target_dir is None:
             from tempo_model_catalog import installed_model_dir
             target_dir = installed_model_dir(self.get_models_repo())
@@ -1130,13 +1168,17 @@ class TempoHub:
             downloads = Path(folder)/'downloads'; downloads.mkdir()
             backup_folder = Path(folder)/'backups'; backup_folder.mkdir()
             for name, record in models.items():
+                reporter.emit('checking', name)
                 source=(local_sources or {}).get(name)
                 if source is None:
-                    source = hf_hub_download(repo_id=self.get_models_repo(), filename=name, revision=manifest['revision'], repo_type='model', token=self.token or False)
+                    source = hf_hub_download(repo_id=self.get_models_repo(), filename=name, revision=manifest['revision'], repo_type='model', token=self.token or False,
+                                             tqdm_class=reporter.download_class(name))
+                reporter.emit('verifying', name)
                 path = downloads/name; shutil.copy2(source,path)
                 if self.calculate_sha256(path) != record['sha256']:
                     raise ValueError(f'{name}: checksum mismatch. Existing models were preserved.')
                 staged[name] = path
+                reporter.emit('verified', name)
             from tempo_cellpose import bundle_metadata
             from tempo_model_catalog import MODEL_FILES
             if MODEL_FILES['cellpose'] in staged:
@@ -1145,6 +1187,7 @@ class TempoHub:
                     raise ValueError('The release pairs Cellpose with a different nuclear helper. Existing models were preserved.')
             try:
                 for name,path in staged.items():
+                    reporter.emit('installing', name)
                     target = Path(target_dir)/name
                     if target.exists():
                         backup = backup_folder/(name+'.previous'); shutil.copy2(target,backup); backups[name]=backup
@@ -1168,9 +1211,13 @@ class TempoHub:
                                        + ' '.join(rollback_errors)) from installation_error
                 retain_backups = False
                 raise
+        except BaseException:
+            reporter.emit('failed')
+            raise
         finally:
             if not retain_backups:
                 shutil.rmtree(folder)
+        reporter.emit('complete')
         return len(models)
 
     def download_champion_weights(self, model_filename, target_dir=None, expected_sha256=None, progress_callback=None):

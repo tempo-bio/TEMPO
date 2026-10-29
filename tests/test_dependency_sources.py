@@ -125,7 +125,7 @@ class DependencySourceTests(unittest.TestCase):
         root = self.root/'payload'
         (root/'assets').mkdir(parents=True)
         (root/'docs').mkdir()
-        for name in ('tempo_icon.ico', 'tempo_icon.png', 'tempo_logo_base.png', 'verification_add.onnx'):
+        for name in ('tempo_icon.ico', 'tempo_icon.png', 'tempo_shell_icon.png', 'tempo_logo_base.png', 'verification_add.onnx'):
             (root/'assets'/name).write_bytes(b'Synthetic required asset')
         (root/'docs/TRAINING_WORKFLOW.md').write_text('Synthetic workflow')
         for relative in ('docs/STIMULATION_SETUP.md', 'firmware/tempo_pacer/tempo_pacer.ino'):

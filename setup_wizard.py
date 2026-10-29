@@ -14,18 +14,20 @@ from PyQt6.QtCore import QEvent, Qt, QThread, pyqtSignal, QTimer, QUrl
 from PyQt6.QtGui import QDesktopServices
 from PyQt6.QtWidgets import (
     QDialog, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QProgressBar, QLineEdit, QStackedWidget, QFrame, QMessageBox, QScrollArea, QMenu, QBoxLayout
+    QProgressBar, QLineEdit, QStackedWidget, QFrame, QMessageBox, QScrollArea, QMenu, QBoxLayout, QCheckBox
 )
 
 from tempo_config import tempo_preferences
 from tempo_credentials import safe_profile_name
 from tempo_secure_store import save_hf_token, CredentialStorageError
 from tempo_shared_settings import CONTROL_REPO
-from tempo_hub import tempo_hub
+from tempo_hub import tempo_hub, configure_desktop_http
 from tempo_tasks import run_read_task, run_task, run_background, run_inline_task
 from tempo_ui import ErrorDetails, FlowRow
 import tempo_oauth
 from tempo_onboarding import SetupGuide, WorkspaceGuideShell, link_button
+
+configure_desktop_http()
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -261,13 +263,22 @@ class SetupWizardDialog(QDialog):
         self._build_ready_page()
         self._token_status_generation = 0
         self._token_check_pending = False
-        self.stack.setCurrentWidget(self.account_page if account_only else self.welcome_page)
+        page = self.account_page if account_only else self.welcome_page
+        if not account_only and getattr(sys, 'frozen', False):
+            from tempo_first_run import setup_stage
+            stage = setup_stage()
+            if stage in ('account', 'models'):
+                self._requirements_ready = True
+                page = self.models_page if stage == 'models' else self.account_page
+        self.stack.setCurrentWidget(page)
         self.stack.currentChanged.connect(self._page_changed)
         self._page_changed()
         self.finished.connect(self._invalidate_token_check)
         self.finished.connect(self._discard_browser_sign_in)
         self.finished.connect(self.guide.close)
         self._sync_fonts()
+        if self._requirements_ready:
+            self._diagnostics_joined()
 
     def _open_guide(self, key):
         self.guide.open_guide(key)
@@ -441,6 +452,13 @@ class SetupWizardDialog(QDialog):
         self.diag_log.setText(msg)
 
     def _on_diag_finished(self, success: bool, details: str):
+        if success and not self.account_only and getattr(sys, 'frozen', False):
+            try:
+                from tempo_first_run import save_setup_stage
+                save_setup_stage('account')
+            except OSError as error:
+                success = False
+                details = 'The requirements check passed, but setup progress could not be saved. Check access to your profile folder and retry. ' + str(error)
         self._requirements_ready = success
         self.progress.hide()
         self.diag_log.setText('Required packages are available.' if success else 'Requirements check failed.')
@@ -611,12 +629,30 @@ class SetupWizardDialog(QDialog):
             divider.setStyleSheet('background: #354454; border: none;')
             layout.addWidget(divider)
             self.model_statuses[filename] = status
+        from tempo_nvidia_setup import release_descriptor
+        nvidia_release = release_descriptor()
+        self.nvidia_option = QCheckBox('Download NVIDIA acceleration (optional)')
+        self.nvidia_option.setAccessibleName('Download NVIDIA acceleration')
+        self.nvidia_option.setChecked(False)
+        layout.addWidget(self.nvidia_option)
+        self.nvidia_option.setVisible(nvidia_release is not None)
+        self.nvidia_description = self._add_setup_text(
+            layout, 'Uses a compatible NVIDIA GPU for cell outlines. Additional download: about '
+            + (f"{nvidia_release['archive_size'] / 1024**3:.1f} GB." if nvidia_release else '3 GB.'))
+        self.nvidia_description.setStyleSheet('color: #42586b;')
+        self.nvidia_description.setVisible(nvidia_release is not None)
+        self.nvidia_progress_label = self._add_setup_text(layout, '')
+        self.nvidia_progress_label.hide()
+        self.nvidia_progress = QProgressBar()
+        self.nvidia_progress.setRange(0, 100)
+        self.nvidia_progress.hide()
+        layout.addWidget(self.nvidia_progress)
         self.model_wait_status = self._add_setup_text(layout, '')
         self.model_wait_status.hide()
-        self.model_progress = QProgressBar()
-        self.model_progress.setRange(0, 0)
-        self.model_progress.setTextVisible(False)
-        self.model_progress.setFixedHeight(6)
+        from tempo_model_progress import ModelProgressWidget
+        self.model_progress = ModelProgressWidget(states=self.model_statuses)
+        for status in self.model_statuses.values():
+            status.setText('Not checked')
         self.model_progress.hide()
         layout.addWidget(self.model_progress)
         self.model_error = ErrorDetails()
@@ -633,8 +669,24 @@ class SetupWizardDialog(QDialog):
                          alignment=Qt.AlignmentFlag.AlignLeft)
         layout.addWidget(link_button('Models and hardware guide', lambda: self._open_guide('models')),
                          alignment=Qt.AlignmentFlag.AlignLeft)
+        self.ready_error = ErrorDetails()
+        layout.addWidget(self.ready_error)
         layout.addStretch()
-        self.btn_open, _, _ = self._footer(self.ready_page, 'Open TEMPO', self.accept)
+        self.btn_open, _, _ = self._footer(self.ready_page, 'Open TEMPO', self._finish_setup)
+
+    def _finish_setup(self):
+        if not self._models_ready or self._work_pending():
+            return
+        self.ready_error.clear()
+        if getattr(sys, 'frozen', False):
+            try:
+                from tempo_first_run import save_setup_stage
+                save_setup_stage('complete')
+            except OSError as error:
+                self.ready_error.set_error(
+                    'Setup completion could not be saved. Check access to your profile folder, then choose Open TEMPO again.', error)
+                return
+        self.accept()
 
     def _install_models(self):
         if self._model_task is not None:
@@ -643,44 +695,76 @@ class SetupWizardDialog(QDialog):
             self.stack.setCurrentWidget(self.ready_page)
             return
         self.model_error.clear()
-        self.model_wait_status.setText('Keep TEMPO open while the release is verified and installed.')
-        self.model_wait_status.show()
+        self.model_progress.begin(self.model_statuses)
         self.model_progress.show()
+        download_nvidia = self.nvidia_option.isVisible() and self.nvidia_option.isChecked()
+        self._nvidia_selected = download_nvidia
+        self._nvidia_models_downloaded = False
+        self.nvidia_option.setEnabled(False)
+        self.nvidia_progress.hide()
+        self.nvidia_progress_label.hide()
         self.btn_models.setEnabled(False)
         self.btn_models.setText('Installing…')
         self.btn_models_back.setEnabled(False)
-        for status in self.model_statuses.values():
-            status.setText('Verifying / downloading…')
 
-        def install():
+        def install(report):
             from tempo_model_catalog import MODEL_FILES
             manifest = tempo_hub.model_manifest()
             if set(MODEL_FILES.values()) - set(manifest['models']):
                 raise RuntimeError('The published model release is incomplete. Setup requires every model in the catalog.')
-            tempo_hub.download_model_release(manifest)
-            try:
-                with open(os.path.join(sys.prefix, 'tempo_setup_complete'), 'w') as stream:
-                    stream.write('1')
-            except OSError as error:
-                raise RuntimeError('Models were installed, but setup completion could not be recorded. Check folder permissions and retry.') from error
+            tempo_hub.download_model_release(manifest, progress=report)
+            self._nvidia_models_downloaded = True
+            if download_nvidia:
+                from tempo_nvidia_setup import install_nvidia_runtime
+                install_nvidia_runtime(lambda received, total: report(('nvidia', received, total)))
+            if not getattr(sys, 'frozen', False):
+                # The source VBS launcher still uses its environment marker.
+                try:
+                    with open(os.path.join(sys.prefix, 'tempo_setup_complete'), 'w') as stream:
+                        stream.write('1')
+                except OSError as error:
+                    raise RuntimeError('Models were installed, but setup completion could not be recorded. Check folder permissions and retry.') from error
+
+        def progress(event):
+            if isinstance(event, tuple) and len(event) == 3 and event[0] == 'nvidia':
+                _, received, total = event
+                self.nvidia_progress_label.setText(
+                    f'Downloading NVIDIA acceleration: {received / 1024**3:.2f} of {total / 1024**3:.2f} GB')
+                self.nvidia_progress_label.show()
+                self.nvidia_progress.setValue(min(100, int(received * 100 / total)))
+                self.nvidia_progress.show()
+            else:
+                self.model_progress.update_progress(event)
 
         self._model_task = run_inline_task(
             self, 'Installing the published model release…', install, self._models_finished,
-            wait_status=self.model_wait_status)
+            wait_status=self.model_wait_status, progress_receiver=progress)
 
     def _models_finished(self, value, error):
         self._model_task = None
+        self.model_progress.timer.stop()
         self.model_progress.hide()
         self.model_wait_status.hide()
+        self.nvidia_option.setEnabled(True)
+        if error and self._nvidia_selected and self._nvidia_models_downloaded:
+            self.nvidia_progress_label.setText('NVIDIA acceleration was not installed. Retry or clear the checkbox to continue.')
+            self.nvidia_progress_label.show()
+            self.nvidia_progress.hide()
+        elif error is None and self._nvidia_selected:
+            self.nvidia_progress_label.setText('NVIDIA acceleration ready')
+            self.nvidia_progress_label.show()
+            self.nvidia_progress.hide()
         self.btn_models.setEnabled(True)
         self.btn_models_back.setEnabled(True)
         self._models_ready = error is None
         for status in self.model_statuses.values():
-            status.setText('Ready' if error is None else 'Check again')
+            status.setText('Ready' if self._nvidia_models_downloaded else 'Check again')
         if error:
             self.btn_models.setText('Retry installation')
             self.model_error.set_error(
-                'Your account was saved, but model installation did not finish. Review the details and retry.',
+                ('The models are ready, but NVIDIA acceleration did not install. Retry or clear the checkbox to continue.'
+                 if self._nvidia_selected and self._nvidia_models_downloaded else
+                 'Your account was saved, but model installation did not finish. Review the details and retry.'),
                 error, secrets=(tempo_hub.token,))
         else:
             self.btn_models.setText('Finish setup')
@@ -973,6 +1057,10 @@ class SetupWizardDialog(QDialog):
                 raise
             recovery = 'Your account and profile were saved locally, but the shared display name could not be updated. Save again to retry.'
             run_task(self, 'Updating your shared profile name…', tempo_hub.publish_collaborator_profile)
+            if not self.account_only and getattr(sys, 'frozen', False):
+                recovery = 'Your account was saved, but setup progress could not be saved. Check access to your profile folder and save again.'
+                from tempo_first_run import save_setup_stage
+                save_setup_stage('models')
             self.account_saved.emit()
             if self.account_only:
                 self.accept()
@@ -1016,7 +1104,8 @@ def run_setup_application(app):
         dispose_closed_views(wizard)
         dispose_application(app)
     if result == QDialog.DialogCode.Accepted:
-        subprocess.Popen([sys.executable, os.path.join(BASE_DIR, 'tempo_gui.py')], cwd=BASE_DIR,
+        command = [sys.executable] if getattr(sys, 'frozen', False) else [sys.executable, os.path.join(BASE_DIR, 'tempo_gui.py')]
+        subprocess.Popen(command, cwd=BASE_DIR,
                          **({'creationflags': subprocess.CREATE_NO_WINDOW} if os.name == 'nt' else {}))
     return 0
 

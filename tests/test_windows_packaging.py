@@ -27,6 +27,31 @@ def valid_report():
 
 
 class PackagingCommandTests(unittest.TestCase):
+    def test_windows_runtime_disables_tqdm_monitor_before_model_imports(self):
+        import tempo_runtime
+        from tqdm.std import tqdm
+        original = tqdm.monitor_interval
+        original_lock = tqdm.get_lock()
+        observed = []
+        def load(name):
+            observed.append((name, tqdm.monitor_interval, tqdm.get_lock(),
+                             os.environ.get('HF_HUB_DISABLE_PROGRESS_BARS')))
+            return Mock(__version__='fixture')
+        try:
+            with patch.dict(os.environ, {}, clear=False), \
+                 patch.object(tempo_runtime.sys, 'platform', 'win32'), \
+                 patch.object(tempo_runtime.importlib, 'import_module', side_effect=load):
+                self.assertEqual(tempo_runtime.prepare_windows_runtime(),
+                                 {'tensorflow': 'fixture', 'torch': 'fixture'})
+        finally:
+            tqdm.monitor_interval = original
+            tqdm.set_lock(original_lock)
+        self.assertEqual([name for name, _, _, _ in observed], ['tensorflow', 'torch'])
+        self.assertTrue(all(interval == 0 and lock is not original_lock
+                            and disabled == '1'
+                            for _, interval, lock, disabled in observed))
+        self.assertIs(observed[0][2], observed[1][2])
+
     def test_subtest_failure_is_reported_before_the_next_test_runs(self):
         from scripts.windows_test_suite import ImmediateFailures
         output = io.StringIO()
@@ -219,7 +244,7 @@ print(json.dumps(captured))
             self.assertIn(name, declared)
             self.assertEqual(declared[name], str(Path(name).parent))
         self.assertEqual(declared['assets'], 'assets')
-        for name in ('tempo_icon.png', 'tempo_icon.ico', 'tempo_logo_base.png'):
+        for name in ('tempo_icon.png', 'tempo_icon.ico', 'tempo_shell_icon.png', 'tempo_logo_base.png'):
             self.assertTrue((root/'assets'/name).is_file(), name)
         self.assertEqual(declared['docs/TRAINING_WORKFLOW.md'], 'docs')
         for name in ('GETTING_STARTED.md', 'CREDENTIAL_SECURITY.md', 'COLLABORATION_WORKFLOW.md',

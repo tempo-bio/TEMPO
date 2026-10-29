@@ -15,6 +15,7 @@ from tempo_ui import format_model_metric, ErrorDetails
 from tempo_training import MODEL_FILES
 from tempo_shared_settings import fetch_shared_settings, apply_shared_settings
 from tempo_logo import AnimatedTempoLogo
+from tempo_startup_diagnostics import record as startup_stage
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 SOFTWARE_RELEASES_URL = 'https://github.com/tempo-bio/TEMPO/releases'
@@ -188,10 +189,13 @@ class StartupUpdateCheck(QObject):
                 token, record = value
                 if token == tempo_hub.token:
                     try:
+                        startup_stage('settings.apply.started')
                         apply_shared_settings(record)
+                        startup_stage('settings.apply.completed' if record is not None else 'settings.apply.no_document')
                     except Exception as failure:
                         error = failure
             if error is not None:
+                startup_stage('settings.refresh.failed', error=error)
                 self._results['workspace_error'] = 'Shared workspace settings could not be refreshed. Saved settings were retained.'
             run_background(model_release_probe, lambda result, failure: self.received('models', result, failure))
         if error is None:
@@ -202,6 +206,7 @@ class StartupUpdateCheck(QObject):
     def finish(self):
         if self._finished:
             return
+        startup_stage('startup_checks.completed', count=len(self._pending))
         self._finished = True
         self.deadline.stop()
         found, details = False, []
@@ -371,10 +376,13 @@ class ModelWeightsUpdateWizard(QDialog):
         if not self.manifest:
             return
         self.error_details.clear()
-        def download():
-            return tempo_hub.download_model_release(self.manifest)
+        from tempo_model_progress import ModelProgressWidget
+        progress = ModelProgressWidget()
+        progress.begin(self.manifest['models'])
+        def download(report):
+            return tempo_hub.download_model_release(self.manifest, progress=report)
         try:
-            run_task(self,'Downloading model weights…',download)
+            run_task(self,'Downloading model weights…',download, progress_widget=progress)
             self.audit()
         except Exception as exc:
             self.error_details.set_error('Model installation did not finish. Review the details, then retry Install Updates.', exc)

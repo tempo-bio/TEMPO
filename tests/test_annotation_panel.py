@@ -287,15 +287,20 @@ class AnnotationPanelTests(unittest.TestCase):
         worker = self.begin_auto_annotation()
         request = self.view._auto_pending
         status = worker.status_signal.connect.call_args.args[0]
+        stage = worker.stage_signal.connect.call_args.args[0]
         finished = worker.finished_signal.connect.call_args.args[0]
         failed = worker.error_signal.connect.call_args.args[0]
         status('Loading model…')
         self.assertEqual(self.view.lbl_auto_status.text(), 'Loading model…')
+        stage('inference')
+        self.assertIn('Outline cells', self.view.auto_progress.steps[1].text())
         self.view.current_file = str(self.root / 'other.png')
         self.view.clear_detection_feedback()
         status('Old progress')
+        stage('result')
         failed('Old failure')
         self.assert_feedback_cleared()
+        self.assertTrue(self.view.auto_progress.isHidden())
         self.view._auto_pending = dict(request)
         self.view.current_file = request['file']
         new_request = self.view._auto_pending

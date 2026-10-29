@@ -11,7 +11,7 @@ import zipfile
 
 BUNDLE_FILES = ('tempo_evaluation.py','tempo_evaluation_protocol.py','tempo_evaluation_metrics.py','tempo_evaluation_notebook.py','tempo_evaluation_runner.py', 'tempo_preprocessing.py', 'tempo_nuclei.py', 'tempo_nuclear_training.py', 'tempo_scout_training.py', 'train_yolo.py', 'tempo_training.py', 'tempo_training_runtime.py', 'tempo_training_groups.py', 'tempo_cellpose.py', 'tempo_cloud.py',
                 'tempo_model_catalog.py', 'tempo_regions.py', 'tempo_annotations.py', 'tempo_annotation_store.py', 'tempo_config.py',
-                'tempo_hub.py', 'tempo_credentials.py', 'tempo_secure_store.py', 'tempo_progress.py',
+                'tempo_hub.py', 'tempo_credentials.py', 'tempo_secure_store.py', 'tempo_progress.py', 'tempo_model_transfer.py',
                 'tempo_cloud_runner.py', 'requirements-training.txt', 'notebooks/colab_runtime.py')
 
 

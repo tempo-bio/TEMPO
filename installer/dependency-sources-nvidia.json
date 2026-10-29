@@ -1,0 +1,366 @@
+{
+  "schema": 1,
+  "windows_lock_sha256": "7e9fb557b9df584037a2a5cf85a5dd8ab31ea2371e6549c61a4982f6db83d837",
+  "scope": "Version-matched sources for copyleft dependencies and selected interpreter, build and native-library components. Other permissive dependency notices are retained in the build license inventory.",
+  "sources": [
+    {
+      "id": "certifi",
+      "version": "2026.10.19",
+      "license": "MPL-2.0",
+      "required_by": {
+        "certifi": "2026.10.19"
+      },
+      "basis": "Version-matched source distribution and checksum from the upstream PyPI release metadata.",
+      "url": "https://files.pythonhosted.org/packages/a6/bd/1436c50cc46699de0230fbaacc1d1de7bfec413176099949e9d5112e88f2/certifi-2026.10.19.tar.gz",
+      "filename": "certifi-2026.10.19.tar.gz",
+      "sha256": "035c1e85572b141bf1c3a3eff0e33a8eb74917522f2559075ff8d2fea780a1ae",
+      "size": 137598
+    },
+    {
+      "id": "cpython",
+      "version": "3.13.16",
+      "url": "https://www.python.org/ftp/python/3.13.16/Python-3.13.16.tar.xz",
+      "filename": "Python-3.13.16.tar.xz",
+      "license": "Python-2.0",
+      "required_by": {
+        "pyinstaller": "6.22.3"
+      },
+      "basis": "Source for the exact interpreter used by Windows build and source installation.",
+      "sha256": "f4b1bfb3c79b5bb11b8d228a12504163b4c0dab4d679828d8f5f26b6cb6ab35d",
+      "size": 23225704
+    },
+    {
+      "id": "fastremap",
+      "version": "1.21.0",
+      "license": "LGPL-3.0",
+      "required_by": {
+        "fastremap": "1.21.0"
+      },
+      "basis": "Version-matched source distribution and checksum from the upstream PyPI release metadata.",
+      "url": "https://files.pythonhosted.org/packages/17/6f/dfc151ff33cc6a916e89e561a7e502b5d97251d1bb3fe853a97fdfbecaf3/fastremap-1.21.0.tar.gz",
+      "filename": "fastremap-1.21.0.tar.gz",
+      "sha256": "69c14cc36ffff240ad1f14dcb031f5419b022512e4c5000b648f325416f92551",
+      "size": 54258
+    },
+    {
+      "id": "ffmpeg",
+      "version": "7.1",
+      "url": "https://ffmpeg.org/releases/ffmpeg-7.1.tar.xz",
+      "filename": "ffmpeg-7.1.tar.xz",
+      "license": "LGPL-2.1-or-later",
+      "required_by": {
+        "opencv-python": "5.0.0.93",
+        "opencv-python-headless": "5.0.0.93"
+      },
+      "basis": "Version explicitly pinned by the exact Windows FFmpeg plugin download_src.sh; OpenH264 is used through a dynamic-loading header wrapper.",
+      "sha256": "40973d44970dbc83ef302b0609f2e74982be2d85916dd2ee7472d30678a7abe6",
+      "size": 11011364
+    },
+    {
+      "id": "fill-voids",
+      "version": "2.1.2",
+      "license": "LGPL-3.0-or-later",
+      "required_by": {
+        "fill-voids": "2.1.2"
+      },
+      "basis": "Version-matched source distribution and checksum from the upstream PyPI release metadata.",
+      "url": "https://files.pythonhosted.org/packages/f0/ca/b7be6906b27c5620df0ecff8ddbd00b81aa238ca24ec1f9e424cd3f3ff02/fill_voids-2.1.2.tar.gz",
+      "filename": "fill_voids-2.1.2.tar.gz",
+      "sha256": "2b9ef2753ffd2394a1948f9a11431a7ff084d4d7024509e0466b1b260be089df",
+      "size": 3227944
+    },
+    {
+      "id": "geos",
+      "version": "3.11.3",
+      "license": "LGPL-2.1-only",
+      "required_by": {
+        "shapely": "2.2.0"
+      },
+      "basis": "The locked Windows wheel embeds GEOS 3.11.3, commit 961c151d2e87f2686a955a9be24d316f1362bf21, in geos-bf067cd6ff74ee0ad5f3ff52c7ef08c9.dll.",
+      "url": "https://download.osgeo.org/geos/geos-3.11.3.tar.bz2",
+      "filename": "geos-3.11.3.tar.bz2",
+      "sha256": "80d60a2bbc0cde7745a3366b9eb8c0d65a142b03e063ea0a52c364758cd5ee89",
+      "size": 6752013
+    },
+    {
+      "id": "imagecodecs",
+      "version": "2026.10.10",
+      "license": "BSD-3-Clause",
+      "required_by": {
+        "imagecodecs": "2026.10.10"
+      },
+      "basis": "Version-matched source distribution and checksum from the upstream PyPI release metadata.",
+      "url": "https://files.pythonhosted.org/packages/28/7d/1658ab284e024562f1fd3a684dded89b97125789743e0d1f57a494b64290/imagecodecs-2026.10.10.tar.gz",
+      "filename": "imagecodecs-2026.10.10.tar.gz",
+      "sha256": "cde6914505668196b15e0f99dbc236b779e3b61217f04d2e498cbae790965f9f",
+      "size": 9685030
+    },
+    {
+      "id": "libaom",
+      "version": "3.14.1",
+      "url": "https://storage.googleapis.com/aom-releases/libaom-3.14.1.tar.gz",
+      "filename": "libaom-3.14.1.tar.gz",
+      "license": "BSD / component-specific notices",
+      "required_by": {
+        "opencv-python": "5.0.0.93",
+        "opencv-python-headless": "5.0.0.93"
+      },
+      "basis": "Version explicitly pinned by the exact Windows FFmpeg plugin download_src.sh; OpenH264 is used through a dynamic-loading header wrapper.",
+      "sha256": "44bf90dbd23e734d50e70a8c41c285193922938bd0d3bc2ee56764d181d55ef5",
+      "size": 6368868
+    },
+    {
+      "id": "libvpx",
+      "version": "1.16.0",
+      "url": "https://codeload.github.com/webmproject/libvpx/tar.gz/refs/tags/v1.16.0",
+      "filename": "libvpx-1.16.0.tar.gz",
+      "license": "BSD / component-specific notices",
+      "required_by": {
+        "opencv-python": "5.0.0.93",
+        "opencv-python-headless": "5.0.0.93"
+      },
+      "basis": "Version explicitly pinned by the exact Windows FFmpeg plugin download_src.sh; OpenH264 is used through a dynamic-loading header wrapper.",
+      "sha256": "7a479a3c66b9f5d5542a4c6a1b7d3768a983b1e5c14c60a9396edc9b649e015c",
+      "size": 5635379
+    },
+    {
+      "id": "numpy",
+      "version": "2.5.4",
+      "license": "BSD-3-Clause AND 0BSD AND MIT AND Zlib AND CC0-1.0",
+      "required_by": {
+        "numpy": "2.5.4"
+      },
+      "basis": "Version-matched source distribution and checksum from the upstream PyPI release metadata.",
+      "url": "https://files.pythonhosted.org/packages/95/b0/c7453d0b6e2073c3264468b106ee1563750cecc910965e67357e3698c83e/numpy-2.5.4.tar.gz",
+      "filename": "numpy-2.5.4.tar.gz",
+      "sha256": "9a94cf751c9ad8ebaa835bcd3d40dacf8534ad086b88c38029b65123c7999d2a",
+      "size": 20866315
+    },
+    {
+      "id": "opencv",
+      "version": "40738fb16ceddb5fb3fea747585f7ce6abb0605b",
+      "url": "https://codeload.github.com/opencv/opencv/tar.gz/40738fb16ceddb5fb3fea747585f7ce6abb0605b",
+      "filename": "opencv-40738fb16ced.tar.gz",
+      "license": "Apache-2.0",
+      "required_by": {
+        "opencv-python": "5.0.0.93",
+        "opencv-python-headless": "5.0.0.93"
+      },
+      "basis": "Exact source revision traced from opencv-python tag 93 and its Windows FFmpeg plugin submodule; includes the corresponding build recipes.",
+      "sha256": "23affb17b8f7a46517a62b5e9fa637a8bc660acb5460bef9f130ee939df01ebb",
+      "size": 81622927
+    },
+    {
+      "id": "opencv-ffmpeg-wrapper",
+      "version": "06dc20cad65dc7fcf784f70c95d46750520889a7",
+      "url": "https://codeload.github.com/opencv/opencv_3rdparty/tar.gz/06dc20cad65dc7fcf784f70c95d46750520889a7",
+      "filename": "opencv-ffmpeg-wrapper-06dc20cad65d.tar.gz",
+      "license": "Apache-2.0 / LGPL-2.1-or-later",
+      "required_by": {
+        "opencv-python": "5.0.0.93",
+        "opencv-python-headless": "5.0.0.93"
+      },
+      "basis": "Exact source revision traced from opencv-python tag 93 and its Windows FFmpeg plugin submodule; includes the corresponding build recipes.",
+      "sha256": "6ed03e7468a3d91b62e24aa5ad2183924f231dd81a3442da221d7ddf315220b8",
+      "size": 25729765
+    },
+    {
+      "id": "opencv-python",
+      "version": "b83046cda41133f1bf2e73e99dba16a1248f103a",
+      "url": "https://codeload.github.com/opencv/opencv-python/tar.gz/b83046cda41133f1bf2e73e99dba16a1248f103a",
+      "filename": "opencv-python-b83046cda411.tar.gz",
+      "license": "Apache-2.0",
+      "required_by": {
+        "opencv-python": "5.0.0.93",
+        "opencv-python-headless": "5.0.0.93"
+      },
+      "basis": "Exact source revision traced from opencv-python tag 93 and its Windows FFmpeg plugin submodule; includes the corresponding build recipes.",
+      "sha256": "bc7256da47ea6b30472bde574edbd023004ae0570ea6fe2cb25a284a3dc43ab6",
+      "size": 1130292
+    },
+    {
+      "id": "opencv-wrapper-core",
+      "version": "a0a660fcb1e58a295e6caa6aee64ed4d369b0181",
+      "url": "https://codeload.github.com/opencv/opencv/tar.gz/a0a660fcb1e58a295e6caa6aee64ed4d369b0181",
+      "filename": "opencv-wrapper-core-a0a660fcb1e5.tar.gz",
+      "license": "Apache-2.0",
+      "required_by": {
+        "opencv-python": "5.0.0.93",
+        "opencv-python-headless": "5.0.0.93"
+      },
+      "basis": "Exact source revision traced from opencv-python tag 93 and its Windows FFmpeg plugin submodule; includes the corresponding build recipes.",
+      "sha256": "5d97bddd4c5d2895dddafe6aff211b9fc1add564887263b7c062f2699660bf1d",
+      "size": 81508684
+    },
+    {
+      "id": "openh264-headers",
+      "version": "2.5.0",
+      "url": "https://codeload.github.com/cisco/openh264/tar.gz/refs/tags/v2.5.0",
+      "filename": "openh264-headers-2.5.0.tar.gz",
+      "license": "BSD / component-specific notices",
+      "required_by": {
+        "opencv-python": "5.0.0.93",
+        "opencv-python-headless": "5.0.0.93"
+      },
+      "basis": "Version explicitly pinned by the exact Windows FFmpeg plugin download_src.sh; OpenH264 is used through a dynamic-loading header wrapper.",
+      "sha256": "94c8ca364db990047ec4ec3481b04ce0d791e62561ef5601443011bdc00825e3",
+      "size": 60301431
+    },
+    {
+      "id": "pyinstaller",
+      "version": "6.22.3",
+      "license": "GPLv2-or-later with a special exception which allows to use PyInstaller to build and distribute non-free programs (including commercial ones)",
+      "required_by": {
+        "pyinstaller": "6.22.3"
+      },
+      "basis": "Version-matched source distribution and checksum from the upstream PyPI release metadata.",
+      "url": "https://files.pythonhosted.org/packages/63/41/f90302845945abd4ed647933ff5ee7c6ac93983187be67f897b6cb613331/pyinstaller-6.22.3.tar.gz",
+      "filename": "pyinstaller-6.22.3.tar.gz",
+      "sha256": "05eb2f5615503e72939a7224d68b4aff572c6b0438ee4a17d0a4b481f399362d",
+      "size": 4437180
+    },
+    {
+      "id": "pymmcore",
+      "version": "12.5.1.75.0",
+      "license": "LGPL-2.1-only",
+      "required_by": {
+        "pymmcore": "12.5.1.75.0"
+      },
+      "basis": "Version-matched source distribution and checksum from the upstream PyPI release metadata.",
+      "url": "https://files.pythonhosted.org/packages/58/1d/a4560abeb3aecfb32711898827589bf0a2f58337beee13a0729a2eda06c1/pymmcore-12.5.1.75.0.tar.gz",
+      "filename": "pymmcore-12.5.1.75.0.tar.gz",
+      "sha256": "30e7dc47d76fd774fc4b34b27c77565d6d523d819575dbb4731b04035c123d76",
+      "size": 278147
+    },
+    {
+      "id": "pyqt6",
+      "version": "6.11.0",
+      "license": "GPL-3.0-only",
+      "required_by": {
+        "pyqt6": "6.11.0"
+      },
+      "basis": "Version-matched source distribution and checksum from the upstream PyPI release metadata.",
+      "url": "https://files.pythonhosted.org/packages/8b/47/b25c13eca5bebc6505394d0223e46d7ebf0c57dcac2ed908d7d19b18ab6b/pyqt6-6.11.0.tar.gz",
+      "filename": "pyqt6-6.11.0.tar.gz",
+      "sha256": "45dd60aa69976de1918b5ced6b4e7b6a25abd2a919ecef5fd5826ecc76718889",
+      "size": 1087430
+    },
+    {
+      "id": "pyqt6-sip",
+      "version": "13.13.0",
+      "license": "BSD-2-Clause",
+      "required_by": {
+        "pyqt6-sip": "13.13.0"
+      },
+      "basis": "Version-matched source distribution and checksum from the upstream PyPI release metadata.",
+      "url": "https://files.pythonhosted.org/packages/78/35/bed43ff7cf040ced6b62a17b272abecb94914755284b54e8d06844e1ed23/pyqt6_sip-13.13.0.tar.gz",
+      "filename": "pyqt6_sip-13.13.0.tar.gz",
+      "sha256": "2cd55f575cde208c398d6cfdecc5a13394ed2afb54226210c50e3a6df7c3a997",
+      "size": 95006
+    },
+    {
+      "id": "qt",
+      "version": "6.11.2",
+      "url": "https://download.qt.io/archive/qt/6.11/6.11.2/single/qt-everywhere-src-6.11.2.tar.xz",
+      "filename": "qt-everywhere-src-6.11.2.tar.xz",
+      "license": "LGPL-3.0 / GPL-3.0; component-specific notices",
+      "required_by": {
+        "pyqt6-qt6": "6.11.2"
+      },
+      "basis": "Complete Qt source release; digest and size published by the upstream mirror list.",
+      "sha256": "6dcfbca271d76a6502741a2c0dc6fc98ef7dd0b7b4cfd0abcebb285a86a26f33",
+      "size": 1019661552
+    },
+    {
+      "id": "scipy",
+      "version": "1.18.1",
+      "license": "See upstream source notices",
+      "required_by": {
+        "scipy": "1.18.1"
+      },
+      "basis": "Version-matched source distribution and checksum from the upstream PyPI release metadata.",
+      "url": "https://files.pythonhosted.org/packages/7e/74/66de6258867beb2ef08f35f9f2ac017a52cacd5081714d239ff1a442d458/scipy-1.18.1.tar.gz",
+      "filename": "scipy-1.18.1.tar.gz",
+      "sha256": "52c4b7422442aba924d03ad4019852b08a92e64ea187b933135687bfe2747307",
+      "size": 30781235
+    },
+    {
+      "id": "shapely",
+      "version": "2.2.0",
+      "license": "BSD-3-Clause",
+      "required_by": {
+        "shapely": "2.2.0"
+      },
+      "basis": "Version-matched source distribution and checksum from the upstream PyPI release metadata.",
+      "url": "https://files.pythonhosted.org/packages/f3/ab/924b6e202f796d270a3041a230151f7908db5ea48c74effe6f8023e9bd05/shapely-2.2.0.tar.gz",
+      "filename": "shapely-2.2.0.tar.gz",
+      "sha256": "e8865e553d874a1ec4a032057ea81fca9def37b188cd8fb550af3b3480b3f88c",
+      "size": 380326
+    },
+    {
+      "id": "tqdm",
+      "version": "4.70.1",
+      "license": "MPL-2.0 AND MIT",
+      "required_by": {
+        "tqdm": "4.70.1"
+      },
+      "basis": "Version-matched source distribution and checksum from the upstream PyPI release metadata.",
+      "url": "https://files.pythonhosted.org/packages/0d/ea/b2a5bd54b28a324dae8211928b2d730b6547500342c7e6c6dea08bd0a485/tqdm-4.70.1.tar.gz",
+      "filename": "tqdm-4.70.1.tar.gz",
+      "sha256": "cefd0eca11b2a37a3aee776544d4f4ae913f02688135b5556b8788dfa474afc4",
+      "size": 171846
+    },
+    {
+      "id": "ultralytics",
+      "version": "8.4.183",
+      "license": "AGPL-3.0",
+      "required_by": {
+        "ultralytics": "8.4.183"
+      },
+      "basis": "Version-matched source distribution and checksum from the upstream PyPI release metadata.",
+      "url": "https://files.pythonhosted.org/packages/f4/63/8c65a1d6bd342e8039980bc0f25da6d8a4d2058d6b7055d8bd74d4d82de0/ultralytics-8.4.183.tar.gz",
+      "filename": "ultralytics-8.4.183.tar.gz",
+      "sha256": "2719ab5cf4c67fb5ae01cc3c46aa6394ac392ddf4a320a24b568397d26d20f6d",
+      "size": 1278353
+    },
+    {
+      "id": "ultralytics-platform",
+      "version": "0.1.90",
+      "license": "AGPL-3.0-only",
+      "required_by": {
+        "ultralytics-platform": "0.1.90"
+      },
+      "basis": "Source for the required Ultralytics SDK, under its own AGPL-3.0-only license.",
+      "url": "https://files.pythonhosted.org/packages/73/53/fd4505e2aed7ec82aaea075d0adfcc4f457b587c476ab226c00c31649002/ultralytics_platform-0.1.90.tar.gz",
+      "filename": "ultralytics_platform-0.1.90.tar.gz",
+      "sha256": "73ff5062e8e86ab6e7dbfb0fa6556e6beb5bd5cb8a76c997af0d4128dc356d9b",
+      "size": 89301
+    },
+    {
+      "id": "ultralytics-thop",
+      "version": "2.2.3",
+      "license": "AGPL-3.0",
+      "required_by": {
+        "ultralytics-thop": "2.2.3"
+      },
+      "basis": "Version-matched source distribution and checksum from the upstream PyPI release metadata.",
+      "url": "https://files.pythonhosted.org/packages/f9/6f/f7dd1959a3f0d3d7417800f6c54112a0bdc9f0529470bb0558c326cd19f3/ultralytics_thop-2.2.3.tar.gz",
+      "filename": "ultralytics_thop-2.2.3.tar.gz",
+      "sha256": "141cea7d1af7fda04b135b5070d19d84f2272c76c5401de9e47581c23e7c5c60",
+      "size": 39816
+    },
+    {
+      "id": "dinov3-backbone",
+      "filename": "dinov3-6876159a11b4df116f30f667f8c9888617df0751.zip",
+      "url": "https://github.com/facebookresearch/dinov3/archive/6876159a11b4df116f30f667f8c9888617df0751.zip",
+      "sha256": "8f3ba3a5e4f017c4ae209cf3052ac3ffae714bc8308d1e541db7c6050294ece2",
+      "size": 13486624,
+      "version": "0.0.1",
+      "license": "DINOv3 License",
+      "basis": "CPDINO backbone source pinned to upstream commit 6876159a11b4df116f30f667f8c9888617df0751; source package version and LICENSE.md inspected.",
+      "required_by": {
+        "dinov3": "0.0.1"
+      }
+    }
+  ]
+}

@@ -157,14 +157,18 @@ def provenance(output):
     output = Path(output)
     output.mkdir(parents=True, exist_ok=True)
     root = Path(__file__).resolve().parents[1]
+    from scripts.windows_build_profile import build_profile, validate_torch_build
+    profile = build_profile()
+    import torch, torchvision
+    validate_torch_build(profile, torch.__version__, torchvision.__version__, torch.version.cuda)
     packages = {d.metadata['Name'].lower().replace('_', '-'): d.version for d in importlib.metadata.distributions()}
     data = dict(commit=os.environ.get('GITHUB_SHA') or subprocess.check_output(
         ['git', 'rev-parse', 'HEAD'], cwd=root, text=True).strip(),
         python=platform.python_version(), architecture=platform.machine(), platform=platform.platform(),
         runner_image=os.environ.get('ImageOS'), runner_image_version=os.environ.get('ImageVersion'),
-        lock_sha256=hashlib.sha256((root/'requirements-windows.lock').read_bytes()).hexdigest(), packages=packages,
+        profile=profile.key, lock_sha256=hashlib.sha256((root/profile.lock).read_bytes()).hexdigest(), packages=packages,
         project_license_sha256=hashlib.sha256((root/'LICENSE').read_bytes()).hexdigest(),
-        dependency_sources_sha256=hashlib.sha256((root/'installer/dependency-sources.json').read_bytes()).hexdigest(),
+        dependency_sources_sha256=hashlib.sha256((root/profile.source_manifest).read_bytes()).hexdigest(),
         compiler=dict(version='7.1.0', sha256='0362a383ed217d4c4239b5933866dd96d3eb2102737da92f80f6057a4b40df2f'))
     # Ultralytics and Cellpose require different distributions of the cv2
     # namespace. Record which exact native file won their shared installation.

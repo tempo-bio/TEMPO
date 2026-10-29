@@ -9,12 +9,14 @@ import unittest
 from unittest.mock import Mock, patch
 
 from PyQt6.QtCore import QCoreApplication, QEvent, QThread
-from PyQt6.QtGui import QIcon
+from PyQt6.QtGui import QIcon, QImage
 from PyQt6.QtWidgets import QApplication, QWidget
 
 import tempo_activity_icon as activity
 import tempo_config as config
 import tempo_tasks as tasks
+from tempo_app_icon import application_icon_path
+from tests.test_app_icon import opaque_bounds
 
 APP = QApplication.instance() or QApplication([])
 
@@ -116,7 +118,7 @@ class ActivityIconTests(unittest.TestCase):
 
     def test_icons_are_square_transparent_keep_static_letters_and_have_bounded_cache(self):
         for size in (128, 256):
-            frames = activity.IconFrames(size)
+            frames = activity.IconFrames(size, platform='darwin')
             empty = frames.at(0).pixmap(size, size).toImage()
             full = frames.at(18).pixmap(size, size).toImage()
             self.assertEqual(empty.size(), full.size())
@@ -134,6 +136,40 @@ class ActivityIconTests(unittest.TestCase):
             self.assertIs(frames.at(1), frames.at(37))
         self.assertEqual(activity.IconFrames.index_at(1.45), activity.IconFrames.index_at(1.6))
         self.assertEqual(activity.IconFrames.index_at(0), activity.IconFrames.index_at(2.95))
+
+    def test_windows_animation_keeps_approved_static_icon_size_and_trace_alignment(self):
+        for size in (16, 24, 32, 48, 64, 128, 256):
+            frames = activity.IconFrames(size, platform='win32')
+            static = QImage(str(application_icon_path('win32'))).scaled(
+                size, size, activity.Qt.AspectRatioMode.KeepAspectRatio,
+                activity.Qt.TransformationMode.SmoothTransformation)
+            bounds = opaque_bounds(static)
+            for index in (0, 8, 18, 25, 35):
+                image = frames.at(index).pixmap(size, size).toImage()
+                self.assertEqual(opaque_bounds(image), bounds, (size, index))
+                self.assertEqual(image.pixelColor(0, 0).alpha(), 0)
+            if size >= 128:
+                empty = frames.at(0).pixmap(size, size).toImage()
+                full = frames.at(18).pixmap(size, size).toImage()
+                peak = (round((658 - 93) * size / 1068), round((498 - 93) * size / 1068))
+                self.assertLess(empty.pixelColor(*peak).green(), 80)
+                self.assertGreater(full.pixelColor(*peak).green(), 170)
+                for x, y, width, height in ((219, 551, 131, 157), (872, 548, 164, 164)):
+                    region = (round((x - 93) * size / 1068), round((y - 93) * size / 1068),
+                              round(width * size / 1068), round(height * size / 1068))
+                    self.assertEqual(empty.copy(*region), full.copy(*region))
+
+    def test_windows_taskbar_scaling_does_not_resize_the_tile_when_animation_starts(self):
+        static = QIcon(str(application_icon_path('win32')))
+        frames = activity.IconFrames(128, platform='win32')
+        for size in (16, 24, 32, 48, 64):
+            bounds = opaque_bounds(static.pixmap(size, size).toImage())
+            for index in (0, 8, 18, 25, 35):
+                animated = opaque_bounds(frames.at(index).pixmap(size, size).toImage())
+                self.assertLessEqual(abs(animated.left() - bounds.left()), 1)
+                self.assertLessEqual(abs(animated.top() - bounds.top()), 1)
+                self.assertLessEqual(abs(animated.width() - bounds.width()), 1)
+                self.assertLessEqual(abs(animated.height() - bounds.height()), 1)
 
     def test_pacing_requires_acknowledged_active_output_not_just_a_connection(self):
         tools = SimpleNamespace(service=SimpleNamespace(connected=True, status=None))

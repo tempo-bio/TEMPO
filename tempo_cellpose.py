@@ -343,7 +343,8 @@ def train_specialists(train_images, train_labels, val_images, val_labels, output
     return str(target)
 
 
-def predict_batch(path, images, device, *, processed=False, helper_mode="normal", cue_output=None):
+def predict_batch(path, images, device, *, processed=False, helper_mode="normal", cue_output=None,
+                  progress=None):
     """Run one specialist at a time, sharing the inference path with evaluation."""
     from cellpose import models
     import torch
@@ -355,6 +356,8 @@ def predict_batch(path, images, device, *, processed=False, helper_mode="normal"
         images = [image.astype(np.float32)/255 if processed else preprocess(image,profile) for image in images]
     cues = None
     if manifest.get('helper_sha256'):
+        if progress is not None:
+            progress('nuclear')
         from tempo_nuclear_training import predict_maps_isolated
         import hashlib
         with tempfile.TemporaryDirectory() as folder, zipfile.ZipFile(path) as archive:
@@ -382,6 +385,8 @@ def predict_batch(path, images, device, *, processed=False, helper_mode="normal"
                     if guided:
                         from tempo_nuclei import helper_channels
                         image = helper_channels(image,cues[index])
+                    if progress is not None:
+                        progress('inference')
                     labels = _validate_mask(model.eval(image, channel_axis=-1 if guided else None,
                                                       **({'normalize':False} if profile else {}))[0])
                     if labels.shape != image.shape[:2]:

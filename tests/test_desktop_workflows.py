@@ -267,20 +267,17 @@ class DesktopTests(unittest.TestCase):
         self.assertIn('Sync failed', self.view.lbl_sync_status.text())
 
     def test_auto_annotation_uses_configured_overlap_threshold(self):
-        from types import SimpleNamespace
         worker = tempo_gui.AutoAnnotateWorker('example.png'); errors = []
         worker.error_signal.connect(errors.append)
         def preference(category, key, default=None):
             return {'confidence_threshold': 0.25, 'nms_iou_threshold': 0.65}.get(key, default)
         with patch.object(tempo_gui.tempo_preferences, 'get', side_effect=preference), \
-             patch.object(tempo_gui.platform, 'system', return_value='Darwin'), \
-             patch.object(tempo_gui.subprocess, 'run', return_value=SimpleNamespace(stdout='{"success": true, "boxes": []}')) as run:
+             patch('tempo_assistance_runtime.run_assistance', return_value={'success': True, 'boxes': []}) as run:
             worker.run()
-        command = run.call_args.args[0]
-        self.assertEqual(command[command.index('--iou') + 1], '0.65')
+        self.assertEqual(run.call_args.args[:4], ('example.png', 'cellpose', 0.25, 0.65))
         self.assertFalse(errors)
 
-    def test_windows_auto_annotation_forwards_thresholds_in_process(self):
+    def test_windows_auto_annotation_forwards_thresholds_to_headless_worker(self):
         worker = tempo_gui.AutoAnnotateWorker('example.png'); errors = []
         worker.error_signal.connect(errors.append)
         def preference(category, key, default=None):
@@ -288,11 +285,11 @@ class DesktopTests(unittest.TestCase):
         with patch.object(tempo_gui.tempo_preferences, 'get', side_effect=preference), \
              patch.object(tempo_gui.platform, 'system', return_value='Windows'), \
              patch.object(tempo_gui.sys, 'executable', 'C:/TEMPO/python.exe'), \
-             patch.object(tempo_gui, 'detect_cells_via_bridge', return_value={'success': True, 'boxes': []}) as detect, \
-             patch.object(tempo_gui.subprocess, 'run') as run:
+             patch('tempo_assistance_runtime.run_assistance', return_value={'success': True, 'boxes': []}) as run, \
+             patch.object(tempo_gui.subprocess, 'run') as generic:
             worker.run()
-        detect.assert_called_once_with('example.png', 'cellpose', conf=0.25, iou=0.65)
-        run.assert_not_called()
+        self.assertEqual(run.call_args.args[:4], ('example.png', 'cellpose', 0.25, 0.65))
+        generic.assert_not_called()
         self.assertFalse(errors)
 
     def test_settings_does_not_report_failed_save_as_success(self):

@@ -27,6 +27,29 @@ TOKEN = 'hf_SYNTHETICAccountSecurityFixture0123456789'
 
 
 class AccountSecurityTests(unittest.TestCase):
+    def test_shared_profile_timeout_keeps_saved_account_and_allows_retry(self):
+        view = self.view()
+        view.txt_collab_id.setText('Shared Laboratory')
+        saved = Mock()
+        view.account_saved.connect(saved)
+        with patch('huggingface_hub.HfApi'), \
+             patch.object(tempo_hub, '_init_credentials'), \
+             patch.object(tempo_hub, 'authenticated_account', return_value='hf:fixture'), \
+             patch.object(tempo_preferences, 'save', return_value=True), \
+             patch.object(tempo_hub, 'publish_collaborator_profile', side_effect=TimeoutError('Server stopped responding')):
+            view._save_and_finish()
+        self.assertEqual(tempo_hub.token, TOKEN)
+        self.assertEqual(tempo_preferences.get('collaboration', 'collaborator_id'), 'Shared Laboratory')
+        self.assertIn('saved locally', view.account_error.summary.text())
+        self.assertTrue(view.btn_finish.isEnabled())
+        saved.assert_not_called()
+        with patch('huggingface_hub.HfApi'), \
+             patch.object(tempo_hub, '_init_credentials'), \
+             patch.object(tempo_hub, 'authenticated_account', return_value='hf:fixture'), \
+             patch.object(tempo_preferences, 'save', return_value=True):
+            view._save_and_finish()
+        saved.assert_called_once()
+
     def test_failed_profile_save_retains_the_previous_visible_profile(self):
         tempo_preferences.set('collaboration', 'collaborator_id', 'Original Laboratory')
         view = setup.SetupWizardDialog(account_only=True); self.addCleanup(view.close)

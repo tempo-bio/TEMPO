@@ -2,6 +2,11 @@ name: Build & Package Windows Release
 
 on:
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Future release tag for the optional NVIDIA runtime download (for example v1.0.1)'
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -17,9 +22,74 @@ env:
   YOLO_AUTOINSTALL: 'false'
 
 jobs:
+  build-nvidia-runtime:
+    name: Build optional NVIDIA inference runtime
+    runs-on: windows-2025
+    timeout-minutes: 180
+    env:
+      TEMPO_WINDOWS_PROFILE: nvidia-cu126
+    steps:
+      - name: Check out tested revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Check release tag before building large runtimes
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          $expected = & python -c "from tempo_release import VERSION; print('v' + VERSION)"
+          if ($env:RELEASE_TAG -ne $expected) { throw "Release tag must be $expected" }
+      - name: Set up Python 3.13.16 x64
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.13.16'
+          architecture: x64
+      - name: Install pinned NVIDIA dependencies
+        timeout-minutes: 25
+        run: |
+          New-Item -ItemType Directory -Force Output | Out-Null
+          python -m venv .venv_nvidia
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & .\.venv_nvidia\Scripts\python.exe -m pip install --no-cache-dir --no-deps --require-hashes -r requirements-windows-nvidia.lock
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & .\.venv_nvidia\Scripts\python.exe -m scripts.windows_native_bundle
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & .\.venv_nvidia\Scripts\python.exe -m pip check
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & .\.venv_nvidia\Scripts\python.exe -m scripts.windows_release_checks provenance --output Output
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Build NVIDIA worker executable
+        timeout-minutes: 60
+        run: |
+          & .\.venv_nvidia\Scripts\python.exe -m scripts.windows_release_checks run --log Output/nvidia-pyinstaller.log --timeout 3300 -- .\.venv_nvidia\Scripts\python.exe -m scripts.windows_packager tempo.spec --clean --noconfirm
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & .\.venv_nvidia\Scripts\python.exe -m scripts.windows_release_checks verify --executable dist/TEMPO/TEMPO.exe --report Output/nvidia-verification.json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Verify CUDA bundle privacy and source notices
+        run: |
+          & .\.venv_nvidia\Scripts\python.exe -m scripts.check_repository --payload dist/TEMPO --report Output/nvidia-payload-privacy.json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & .\.venv_nvidia\Scripts\python.exe -m scripts.prepare_dependency_sources --lock requirements-windows-nvidia.lock --manifest installer/dependency-sources-nvidia.json --inventory Output/third-party-licenses/index.json --output Output/dependency-sources
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Create checksummed optional runtime archive
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          & .\.venv_nvidia\Scripts\python.exe -m scripts.package_nvidia_runtime --release-tag "$env:RELEASE_TAG"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Retain runtime and descriptor for the CPU build
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: Windows_NVIDIA_runtime
+          retention-days: 7
+          compression-level: 0
+          path: |
+            Output/TEMPO_NVIDIA_Runtime_*.zip
+            Output/nvidia-runtime.json
+          if-no-files-found: error
+
   build-windows:
     name: Test and build Windows payload
     runs-on: windows-2025
+    needs: build-nvidia-runtime
     timeout-minutes: 180
     outputs:
       installer: ${{ steps.installer.outcome }}
@@ -31,6 +101,17 @@ jobs:
         with:
           python-version: '3.13.16'
           architecture: x64
+      - name: Retrieve tested NVIDIA runtime descriptor and archive
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: Windows_NVIDIA_runtime
+          path: Output
+      - name: Verify the exact optional runtime for this revision
+        run: |
+          $archives = @(Get-ChildItem Output/TEMPO_NVIDIA_Runtime_*.zip)
+          if ($archives.Count -ne 1) { throw 'Expected one NVIDIA runtime archive' }
+          python -m scripts.package_nvidia_runtime --verify-descriptor Output/nvidia-runtime.json --verify-archive $archives[0].FullName --commit "$env:GITHUB_SHA"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Install checksummed Windows wheels
         id: runtime
         timeout-minutes: 12
@@ -185,8 +266,8 @@ jobs:
         run: |
           & .\.venv_build\Scripts\python.exe -m scripts.windows_release_checks run --log Output/inno-setup.log --timeout 900 -- iscc installer/tempo_setup.iss
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          $hash = (Get-FileHash Output/TEMPO_Setup_v1.0.0.exe -Algorithm SHA256).Hash.ToLower()
-          "$hash  TEMPO_Setup_v1.0.0.exe" | Set-Content Output/SHA256SUMS.txt -Encoding utf8NoBOM
+          $hash = (Get-FileHash Output/TEMPO_Setup_v1.0.1.exe -Algorithm SHA256).Hash.ToLower()
+          "$hash  TEMPO_Setup_v1.0.1.exe" | Set-Content Output/SHA256SUMS.txt -Encoding utf8NoBOM
           Copy-Item scripts/verify_windows_install.ps1,scripts/windows_installer_helpers.ps1 Output
       - name: Transfer installer even if an independent diagnostic failed
         id: payload
@@ -197,7 +278,7 @@ jobs:
           retention-days: 3
           compression-level: 0
           path: |
-            Output/TEMPO_Setup_v1.0.0.exe
+            Output/TEMPO_Setup_v1.0.1.exe
             Output/SHA256SUMS.txt
             Output/verification-contract.json
             Output/build-provenance.json

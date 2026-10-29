@@ -28,8 +28,9 @@ See Microsoft's guidance on [SmartScreen warnings](https://learn.microsoft.com/e
 
 1. Run the installer. The default location is `%LOCALAPPDATA%\Programs\TEMPO`.
 2. Open TEMPO from the Start menu or the optional desktop shortcut.
-3. Open **Account Setup** from the account indicator in the top right.
-4. Enter **Your name or laboratory** and choose **Sign in with Hugging Face**. Approve access to the workspace organizations in your browser, return to TEMPO, and choose **Save Account**. If browser sign-in is unavailable, choose **Use an access token**. Use your own account; do not share tokens between collaborators.
+3. In the v1.0.0 release, open **Guided Setup** from Settings → Application Tools. Builds made from the updated source open Setup on first launch and resume saved progress if you close it. The updated model step offers an optional NVIDIA acceleration download for cell outlines when its matching runtime is published; leave the checkbox clear to use CPU processing.
+4. Enter **Your name or laboratory** and choose **Sign in with Hugging Face**. Approve access to the workspace organizations in your browser, return to TEMPO, and save your account. If browser sign-in is unavailable, choose **Use an access token**. Use your own account; do not share tokens between collaborators.
+5. Install the models and choose **Open TEMPO**. **Account Setup** and **Guided Setup** remain available in Settings → Application Tools.
 
 Choose **Need an account?** for account creation and workspace access instructions. Maintainers configuring browser sign-in should follow [workspace administration](docs/WORKSPACE_ADMINISTRATION.md#browser-sign-in-application).
 

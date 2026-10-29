@@ -298,7 +298,8 @@ class SetupModelUpdateTests(unittest.TestCase):
                     break
                 QTest.qWait(10)
             self.assertIsNone(view._model_task)
-        download.assert_called_once_with(self.manifest)
+        self.assertEqual(download.call_args.args, (self.manifest,))
+        self.assertTrue(callable(download.call_args.kwargs['progress']))
         self.assertFalse((Path(self.temp.name) / 'tempo_setup_complete').exists())
         warning.assert_not_called()
         self.assertIn('checksum mismatch', view.model_error.details.toPlainText())

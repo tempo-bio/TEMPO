@@ -1,5 +1,6 @@
 """Real selection/hover behavior and isolated administrator/profile transactions."""
 import copy
+import httpx
 import io
 import json
 import os
@@ -9,6 +10,7 @@ from types import SimpleNamespace
 import unittest
 import zipfile
 from unittest.mock import Mock, patch
+from huggingface_hub.errors import HfHubHTTPError
 
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 from PyQt6.QtCore import QPoint, Qt
@@ -53,8 +55,11 @@ class SharedWorkspaceTests(unittest.TestCase):
         self.hub.api.repo_info.return_value = SimpleNamespace(sha='pinned-revision', private=True)
         self.document = dict(schema_version=2, settings=shared_values(), updated_by='hf:synthetic-admin-id')
         self.path = self.root/'settings.json'; self.path.write_text(json.dumps(self.document))
-        download_patch = patch('tempo_shared_settings.hf_hub_download', return_value=str(self.path))
-        self.download = download_patch.start(); self.addCleanup(download_patch.stop)
+        self.session = Mock()
+        self.session.get.side_effect = lambda url, **kwargs: httpx.Response(
+            200, content=self.path.read_bytes(), request=httpx.Request('GET', url))
+        session_patch = patch('tempo_shared_settings.get_session', return_value=self.session)
+        session_patch.start(); self.addCleanup(session_patch.stop)
 
     def test_other_organization_admin_cannot_publish_or_gain_edit_access(self):
         self.hub.api.whoami.return_value['orgs'] = [dict(name='another-org', roleInOrg='admin')]
@@ -67,8 +72,43 @@ class SharedWorkspaceTests(unittest.TestCase):
         self.preferences.set('collaboration', 'hf_models_repo', 'other/models')
         result = fetch_shared_settings(self.hub)
         self.assertEqual(result['revision'], 'pinned-revision')
-        self.assertEqual(self.download.call_args.kwargs['repo_id'], CONTROL_REPO)
-        self.assertEqual(self.download.call_args.kwargs['revision'], 'pinned-revision')
+        self.assertIn(CONTROL_REPO, self.session.get.call_args.args[0])
+        self.assertIn('pinned-revision', self.session.get.call_args.args[0])
+        self.assertIn('Bearer fixture-token', self.session.get.call_args.kwargs['headers']['authorization'])
+
+    def test_startup_trace_records_received_and_validated_settings_without_content(self):
+        import tempo_startup_diagnostics as diagnostics
+        report_path = self.root/'startup.json'
+        with patch.object(diagnostics, '_recorder', diagnostics.StartupRecorder(report_path)):
+            result = fetch_shared_settings(self.hub)
+        self.assertEqual(result['settings'], shared_values())
+        report = json.loads(report_path.read_text())
+        stages = [event['stage'] for event in report['events']]
+        self.assertIn('settings.metadata.completed', stages)
+        self.assertIn('settings.document.validated', stages)
+        response = next(event for event in report['events'] if event['stage'] == 'settings.download.response')
+        self.assertEqual(response['http_status'], 200)
+        self.assertEqual(response['count'], self.path.stat().st_size)
+        self.assertNotIn('fixture-token', report_path.read_text())
+        self.assertNotIn('synthetic-admin-id', report_path.read_text())
+
+    def test_startup_trace_does_not_claim_application_after_save_failure(self):
+        import update_wizard as updates
+        import tempo_startup_diagnostics as diagnostics
+        for failure in (None, OSError('private error detail')):
+            with self.subTest(failed=failure is not None):
+                path = self.root/'apply.json'
+                with patch.object(diagnostics, '_recorder', diagnostics.StartupRecorder(path)), \
+                     patch.object(updates, 'tempo_hub', self.hub), \
+                     patch.object(updates, 'run_background'), \
+                     patch.object(updates, 'apply_shared_settings', side_effect=failure):
+                    check = updates.StartupUpdateCheck()
+                    check.received('workspace', (self.hub.token, {'settings': shared_values()}), None)
+                stages = [event['stage'] for event in json.loads(path.read_text())['events']]
+                self.assertIn('settings.apply.started', stages)
+                self.assertEqual('settings.apply.completed' in stages, failure is None)
+                self.assertEqual('settings.refresh.failed' in stages, failure is not None)
+                self.assertNotIn('private error detail', path.read_text())
 
     def test_models_can_use_the_read_only_settings_organization(self):
         self.document['settings']['hf_models_repo'] = 'tempo-bio/tempo-models'
@@ -88,8 +128,23 @@ class SharedWorkspaceTests(unittest.TestCase):
         self.hub.api.repo_info.return_value.private = False
         with self.assertRaisesRegex(PermissionError, 'private'):
             fetch_shared_settings(self.hub)
-        self.download.assert_not_called()
+        self.session.get.assert_not_called()
         self.preferences.save_to_disk.assert_not_called()
+
+    def test_missing_settings_file_is_optional_but_inaccessible_repository_is_not(self):
+        self.session.get.side_effect = lambda url, **kwargs: httpx.Response(
+            404, headers={'X-Error-Code': 'EntryNotFound'}, request=httpx.Request('GET', url))
+        self.assertIsNone(fetch_shared_settings(self.hub))
+        self.session.get.side_effect = lambda url, **kwargs: httpx.Response(
+            401, request=httpx.Request('GET', url))
+        with self.assertRaises(HfHubHTTPError):
+            fetch_shared_settings(self.hub)
+
+    def test_oversized_settings_document_is_rejected(self):
+        self.session.get.side_effect = lambda url, **kwargs: httpx.Response(
+            200, content=b' ' * 65537, request=httpx.Request('GET', url))
+        with self.assertRaisesRegex(ValueError, 'too large'):
+            fetch_shared_settings(self.hub)
 
     def test_new_organization_admin_needs_no_identity_constant(self):
         self.hub.api.whoami.return_value['id'] = 'new-admin-id'
@@ -113,7 +168,7 @@ class SharedWorkspaceTests(unittest.TestCase):
         with self.assertRaises(PermissionError):
             fetch_shared_settings(self.hub)
         self.assertEqual(self.hub.api.repo_info.call_args.kwargs['repo_id'], CONTROL_REPO)
-        self.download.assert_not_called()
+        self.session.get.assert_not_called()
 
     def test_publisher_without_settings_write_scope_cannot_create_a_commit(self):
         self.hub.api.auth_check.side_effect = PermissionError('Read-only token')
@@ -128,10 +183,10 @@ class SharedWorkspaceTests(unittest.TestCase):
             fetch_shared_settings(self.hub)
 
     def test_account_change_during_refresh_cannot_apply_another_accounts_result(self):
-        def changed(**kwargs):
+        def changed(url, **kwargs):
             self.hub.token = 'replacement-token'
-            return str(self.path)
-        self.download.side_effect = changed
+            return httpx.Response(200, content=self.path.read_bytes(), request=httpx.Request('GET', url))
+        self.session.get.side_effect = changed
         with self.assertRaises(PermissionError):
             fetch_shared_settings(self.hub)
 

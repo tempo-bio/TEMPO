@@ -83,7 +83,7 @@ class WorkspaceGuideTests(unittest.TestCase):
 
     def test_install_blocks_escape_close_and_quit_until_worker_is_joined_but_keeps_help_available(self):
         release, entered = threading.Event(), threading.Event()
-        def download(_):
+        def download(_, **kwargs):
             entered.set()
             if not release.wait(3):
                 raise TimeoutError('Fixture release was not signaled.')

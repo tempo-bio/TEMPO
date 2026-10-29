@@ -3,6 +3,7 @@ import importlib
 import os
 from pathlib import Path
 import sys
+import threading
 
 
 def configure_matplotlib_cache():
@@ -25,6 +26,14 @@ def configure_matplotlib_cache():
 def prepare_windows_runtime():
     if sys.platform != 'win32':
         return {}
+    # Hugging Face creates tqdm bars for startup downloads. This windowed app
+    # shows its own progress, and the released build was caught waiting in a
+    # tqdm finalizer before its dashboard appeared. Disable those bars before
+    # Hugging Face imports its configuration, and keep other bars thread-only.
+    os.environ['HF_HUB_DISABLE_PROGRESS_BARS'] = '1'
+    from tqdm.std import tqdm
+    tqdm.set_lock(threading.RLock())
+    tqdm.monitor_interval = 0
     # TensorFlow 2.20's Windows DLL initialization fails after pandas loads.
     # Torch also needs to initialize before the Windows Qt runtime. Use the
     # same order in the GUI entry point and the combined installation probe.

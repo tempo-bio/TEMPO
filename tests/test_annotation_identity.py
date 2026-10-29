@@ -26,6 +26,42 @@ def record(name, count=1, status=None):
 
 
 class IdentityTests(unittest.TestCase):
+    def test_same_account_and_name_on_second_computer_does_not_commit(self):
+        self.repo.files['lock_manifest.json']['collaborators'] = {
+            'hf:alice-id': {'profile_name': 'Shared Laboratory', 'account_name': 'alice'}}
+        before = copy.deepcopy(self.repo.files)
+        with patch.object(self.hub, 'profile_name', return_value='Shared Laboratory'), \
+             patch.object(self.hub, '_prepare_manifest', side_effect=AssertionError('Profile save must not migrate images')):
+            self.assertTrue(self.hub.publish_collaborator_profile())
+        self.assertEqual(self.repo.files, before)
+        self.assertEqual(self.repo.commits, [])
+
+    def test_profile_change_preserves_reservations_and_other_accounts(self):
+        manifest = self.repo.files['lock_manifest.json']
+        manifest['collaborators'] = {
+            'hf:alice-id': {'profile_name': 'Old name', 'account_name': 'alice'},
+            'hf:bob-id': {'profile_name': 'Other Laboratory', 'account_name': 'bob'}}
+        before = copy.deepcopy(self.repo.files)
+        with patch.object(self.hub, 'profile_name', return_value='Shared Laboratory'):
+            self.assertTrue(self.hub.publish_collaborator_profile())
+            # A second device saving the same name must not write again.
+            self.assertTrue(self.hub.publish_collaborator_profile())
+        expected = before['lock_manifest.json']
+        expected['collaborators']['hf:alice-id']['profile_name'] = 'Shared Laboratory'
+        self.assertEqual(self.repo.files, before)
+        self.assertEqual(self.repo.commits, [['lock_manifest.json']])
+
+    def test_concurrent_matching_profile_finishes_without_retry_commit(self):
+        def other_device(repo):
+            repo.files['lock_manifest.json']['collaborators'] = {
+                'hf:alice-id': {'profile_name': 'Shared Laboratory', 'account_name': 'alice'}}
+        self.repo.conflict = other_device
+        with patch.object(self.hub, 'profile_name', return_value='Shared Laboratory'), \
+             patch.object(self.repo, 'create_commit', wraps=self.repo.create_commit) as commit:
+            self.assertTrue(self.hub.publish_collaborator_profile())
+        self.assertEqual(commit.call_count, 1)
+        self.assertEqual(self.repo.commits, [])
+
     def test_readonly_preview_pins_identity_and_does_not_migrate_or_reserve(self):
         before = copy.deepcopy(self.repo.files)
         catalog = self.hub.fetch_image_catalog()

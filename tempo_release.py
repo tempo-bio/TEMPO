@@ -7,7 +7,7 @@ from pathlib import Path
 import sys
 import traceback
 
-VERSION = '1.0.0'
+VERSION = '1.0.1'
 
 
 def configure_verification_environment():
@@ -257,7 +257,7 @@ def probe_action(name):
             path = root/filename
             if not path.is_file(): raise RuntimeError(f'Missing bundled cloud source: {filename}')
             if filename.endswith('.py'): compile(path.read_bytes(), filename, 'exec')
-        for asset in ('tempo_icon.ico','tempo_icon.png','tempo_logo_base.png','verification_add.onnx'):
+        for asset in ('tempo_icon.ico','tempo_icon.png','tempo_shell_icon.png','tempo_logo_base.png','verification_add.onnx'):
             if not (root/'assets'/asset).is_file(): raise RuntimeError(f'Required bundled asset is missing: {asset}')
         if not (root/'docs/TRAINING_WORKFLOW.md').is_file():
             raise RuntimeError('Bundled training workflow is missing.')

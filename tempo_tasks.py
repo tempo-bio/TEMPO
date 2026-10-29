@@ -27,6 +27,7 @@ class QuitGuard(QObject):
             event.ignore()
             for dialog in tuple(_modal_tasks):
                 dialog.wait_status.setText('Waiting for this operation to finish before quitting. Its outcome has not been confirmed.')
+                dialog.wait_status.show()
             return True
         if event.type() == QEvent.Type.Quit and target is QApplication.instance():
             target._tempo_quit_requested = True
@@ -165,20 +166,23 @@ def run_background(action, completed):
 
 class TaskThread(QThread):
     completed = pyqtSignal(object, object)
+    progress = pyqtSignal(object)
 
-    def __init__(self, action, parent=None):
+    def __init__(self, action, parent=None, *, reports_progress=False):
         super().__init__(parent)
         self.action = action
+        self.reports_progress = reports_progress
 
     def run(self):
         try:
-            self.completed.emit(self.action(), None)
+            value = self.action(self.progress.emit) if self.reports_progress else self.action()
+            self.completed.emit(value, None)
         except Exception as exc:
             self.completed.emit(None, exc)
 
 
 class TaskDialog(QDialog):
-    def __init__(self, parent, title, action):
+    def __init__(self, parent, title, action, *, progress_receiver=None, progress_widget=None):
         super().__init__(parent)
         self.setWindowTitle(title)
         self.setWindowFlag(Qt.WindowType.WindowCloseButtonHint, False)
@@ -189,12 +193,21 @@ class TaskDialog(QDialog):
         self.wait_notice = QTimer(self)
         self.wait_notice.setSingleShot(True)
         self.wait_notice.timeout.connect(lambda: self.wait_status.setText(title + '\nStill waiting for the operation. Closing is unavailable until its outcome is known.'))
-        self.wait_notice.start(10000)
-        progress = QProgressBar()
-        progress.setRange(0, 0)
-        layout.addWidget(progress)
+        if progress_receiver is None:
+            self.wait_notice.start(10000)
+        if progress_widget is not None:
+            self.wait_status.hide()
+            layout.addWidget(progress_widget)
+            self.resize(560, 280)
+        else:
+            progress = QProgressBar()
+            progress.setRange(0, 0)
+            layout.addWidget(progress)
         self.result_value = self.error = None
-        self.worker = TaskThread(action, self)
+        self.progress_receiver = progress_receiver
+        self.worker = TaskThread(action, self, reports_progress=progress_receiver is not None)
+        if progress_receiver is not None:
+            self.worker.progress.connect(progress_receiver)
         self.worker.completed.connect(self.done_work)
         self.worker.finished.connect(self.finish_when_joined)
         self.join_poll = QTimer(self)
@@ -229,8 +242,9 @@ class TaskDialog(QDialog):
         self.result_value, self.error = value, error
 
 
-def run_task(parent, title, action):
-    dialog = TaskDialog(parent, title, action)
+def run_task(parent, title, action, *, progress_widget=None):
+    receiver = progress_widget.update_progress if progress_widget is not None else None
+    dialog = TaskDialog(parent, title, action, progress_receiver=receiver, progress_widget=progress_widget)
     install_quit_guard(QApplication.instance())
     _modal_tasks.add(dialog)
     dialog.worker.start()
@@ -245,13 +259,13 @@ def run_task(parent, title, action):
         dialog.deleteLater()
 
 
-def run_inline_task(parent, title, action, completed, *, wait_status):
+def run_inline_task(parent, title, action, completed, *, wait_status, progress_receiver=None):
     """Protect an embedded operation while leaving its parent's help usable.
 
     Reuse the modal task's quit guard and joined-thread lifecycle without
     opening a second window. Apply the outcome only after the worker exits.
     """
-    dialog = TaskDialog(parent, title, action)
+    dialog = TaskDialog(parent, title, action, progress_receiver=progress_receiver)
     dialog.wait_status = wait_status
     def deliver(_):
         try:

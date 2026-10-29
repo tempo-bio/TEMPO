@@ -192,8 +192,11 @@ def mask_polygon(mask, image_shape=None):
     return contour[:, 0, :].tolist()
 
 
-def run_inference(image_or_video_path, model_path_or_type=None, conf=0.15, iou=0.40):
+def run_inference(image_or_video_path, model_path_or_type=None, conf=0.15, iou=0.40,
+                  require_cuda=False, progress=None):
     """Executes model inference on an image file or video frame 0 and outputs JSON."""
+    stage = progress or (lambda value: None)
+    stage('weights')
     temp_img = None
     target_path = image_or_video_path
     model_path = resolve_model_path(model_path_or_type)
@@ -218,6 +221,7 @@ def run_inference(image_or_video_path, model_path_or_type=None, conf=0.15, iou=0
         target_path = temp_img
 
     try:
+        stage('image')
         native = os.path.basename(model_path) in ('stardist_nuclei.zip', 'cellpose4_cardio.pt')
         if not native and zipfile.is_zipfile(model_path):
             with zipfile.ZipFile(model_path) as archive:
@@ -237,12 +241,18 @@ def run_inference(image_or_video_path, model_path_or_type=None, conf=0.15, iou=0
                     model = unpack_stardist(model_path, folder)
                     with zipfile.ZipFile(model_path) as archive:
                         metadata = json.loads(archive.read('model/tempo_nuclei.json'))
-                    masks, details = model.predict_instances(preprocess(image, metadata['preprocessing']['profile']))
+                    prepared = preprocess(image, metadata['preprocessing']['profile'])
+                    stage('inference')
+                    masks, details = model.predict_instances(prepared)
             else:
                 from tempo_cellpose import predict_batch
                 import torch
+                if require_cuda and not torch.cuda.is_available():
+                    raise RuntimeError('CUDA is unavailable on this computer.')
                 device = torch.device('cuda' if torch.cuda.is_available() else 'mps' if torch.backends.mps.is_available() else 'cpu')
-                instances = predict_batch(model_path, [image], device)[0]
+                instances = predict_batch(model_path, [image], device,
+                                          progress=stage if progress is not None else None)[0]
+                stage('result')
                 boxes = []
                 for instance in instances:
                     polygon = mask_polygon(instance.mask)
@@ -256,6 +266,7 @@ def run_inference(image_or_video_path, model_path_or_type=None, conf=0.15, iou=0
                 response = {'success': True, 'result_kind':'cells', 'boxes': boxes, 'model_used': os.path.basename(model_path)}
                 print(json.dumps(response))
                 return response
+            stage('result')
             boxes = []
             for instance_id in np.unique(masks):
                 if instance_id == 0:
@@ -278,7 +289,9 @@ def run_inference(image_or_video_path, model_path_or_type=None, conf=0.15, iou=0
             raw = read_image_plane(target_path) if isinstance(target_path,str) else target_path
             image = np.rint(preprocess(raw, metadata['preprocessing']['profile'])*255).astype(np.uint8)
             target_path = cv2.cvtColor(image,cv2.COLOR_GRAY2BGR)
+        stage('inference')
         results = model(target_path, conf=conf, iou=iou, retina_masks=True, verbose=False)
+        stage('result')
         
         output_boxes = []
         for result in results:
@@ -344,6 +357,15 @@ def detect_cells_via_bridge(image_or_video_path, model_path_or_type=None, conf=0
     target_path = os.path.abspath(image_or_video_path) if isinstance(image_or_video_path, str) else image_or_video_path
 
     try:
+        if platform.system() == 'Windows' and getattr(sys, 'frozen', False):
+            is_cellpose = os.path.basename(model_path) == 'cellpose4_cardio.pt'
+            if not is_cellpose and str(model_path).lower().endswith('.zip'):
+                with zipfile.ZipFile(model_path) as archive:
+                    is_cellpose = 'tempo_cellpose.json' in archive.namelist()
+            if is_cellpose:
+                from tempo_nvidia_runtime import active_executable, run_cellpose
+                if active_executable() is not None:
+                    return run_cellpose(target_path, model_path, conf=conf, iou=iou)
         venv_native = os.path.join(BASE_DIR, ".venv", "bin", "python")
         
         # If already running natively on ARM64 or Windows, invoke directly without subprocess

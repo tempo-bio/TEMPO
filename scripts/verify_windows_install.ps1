@@ -16,7 +16,7 @@ if ($contract.commit -ne $env:GITHUB_SHA) { throw 'Payload commit does not match
 $gate = @{phase=$Mode;success=$false;commit=$contract.commit}
 try {
     if ($Mode -eq 'install') {
-        $installer = Join-Path $Payload 'TEMPO_Setup_v1.0.0.exe'
+        $installer = Join-Path $Payload 'TEMPO_Setup_v1.0.1.exe'
         $expected = (Get-Content (Join-Path $Payload 'SHA256SUMS.txt') -Raw).Trim().Split(' ')[0]
         if ((Get-FileHash $installer -Algorithm SHA256).Hash.ToLower() -ne $expected) { throw 'Installer checksum mismatch' }
         Invoke-Bounded $installer @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/SP-',"/DIR=`"$Target`"","/LOG=`"$(Join-Path $Evidence 'installation.log')`"") 300
