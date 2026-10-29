@@ -2,8 +2,8 @@
 *.py text eol=lf
 *.ipynb text eol=lf
 requirements*.txt text eol=lf
-requirements-windows.lock text eol=lf
-installer/dependency-sources.json text eol=lf
+requirements-windows*.lock text eol=lf
+installer/dependency-sources*.json text eol=lf
 
 # Upstream notices are checksum-verified as original bytes.
 assets/licenses/** -text

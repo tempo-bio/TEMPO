@@ -4,6 +4,8 @@ import hashlib
 import io
 import json
 from pathlib import Path
+import shutil
+import subprocess
 import tempfile
 import unittest
 from unittest.mock import Mock, patch
@@ -45,6 +47,30 @@ class DependencySourceTests(unittest.TestCase):
         self.lock.write_text(self.lock.read_text().replace('example-1.0-', 'example-2.0-'))
         with self.assertRaisesRegex(ValueError, 'dependencies changed'):
             validate(self.manifest, self.lock)
+
+    def test_windows_checkout_preserves_every_profile_lock_and_source_manifest(self):
+        from scripts.windows_build_profile import PROFILES
+        repository = self.root/'repository'
+        checkout = self.root/'windows checkout'
+        repository.mkdir()
+        files = {'.gitattributes'} | {name for profile in PROFILES.values()
+                                      for name in (profile.lock, profile.source_manifest)}
+        for name in files:
+            destination = repository/name
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(ROOT/name, destination)
+        def git(*arguments):
+            subprocess.run(['git', '-C', str(repository), '-c', 'core.autocrlf=true',
+                            *arguments], check=True, capture_output=True)
+        git('init', '--quiet')
+        git('add', '.')
+        git('checkout-index', '--all', '--prefix='+checkout.as_posix()+'/')
+        for profile in PROFILES.values():
+            with self.subTest(profile=profile.key):
+                for name in (profile.lock, profile.source_manifest):
+                    self.assertEqual((checkout/name).read_bytes(), (ROOT/name).read_bytes())
+                validate(json.loads((checkout/profile.source_manifest).read_text()),
+                         checkout/profile.lock)
 
     def test_source_cannot_claim_a_different_package_version(self):
         self.source['required_by']['example'] = '2.0'

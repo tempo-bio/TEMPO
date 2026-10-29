@@ -31,6 +31,20 @@ jobs:
     steps:
       - name: Check out tested revision
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Check dependency source identities before downloading runtimes
+        run: |
+          python -c @'
+          import json
+          from pathlib import Path
+          from scripts.prepare_dependency_sources import sha256_file
+          from scripts.windows_build_profile import PROFILES
+          for profile in PROFILES.values():
+              expected = json.loads(Path(profile.source_manifest).read_text())['windows_lock_sha256']
+              if sha256_file(profile.lock) != expected:
+                  raise SystemExit(f'Lock checksum differs from reviewed sources: {profile.lock}')
+              print(f'Verified source identity: {profile.key}')
+          '@
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Check release tag before building large runtimes
         env:
           RELEASE_TAG: ${{ inputs.release_tag }}
