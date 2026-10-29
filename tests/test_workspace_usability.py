@@ -1,6 +1,6 @@
 """Real selection/hover behavior and isolated administrator/profile transactions."""
 import copy
-import httpx
+from huggingface_hub.utils._http import httpx
 import io
 import json
 import os

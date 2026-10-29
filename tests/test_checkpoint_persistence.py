@@ -11,7 +11,7 @@ import types
 import unittest
 from unittest.mock import patch
 
-import httpx
+from huggingface_hub.utils._http import httpx
 from huggingface_hub import HfApi, set_client_factory
 from huggingface_hub.utils import _http
 from tempo_cloud import training_transaction,RepositoryWriteBudget

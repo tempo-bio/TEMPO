@@ -2,6 +2,7 @@
 import hashlib
 import io
 import json
+import stat
 import tempfile
 import unittest
 from pathlib import Path
@@ -25,7 +26,11 @@ class _Response(io.BytesIO):
 def _archive(*, path='TEMPO/TEMPO.exe', payload=b'fixed-worker'):
     output = io.BytesIO()
     with zipfile.ZipFile(output, 'w') as archive:
-        archive.writestr(path, payload)
+        # ZipInfo's constructor replaces the host separator on Windows.
+        # Preserve the raw archive name so unsafe-path fixtures stay unsafe.
+        info = zipfile.ZipInfo()
+        info.filename = path
+        archive.writestr(info, payload)
     return output.getvalue()
 
 
@@ -95,8 +100,15 @@ class NvidiaSetupTests(unittest.TestCase):
             for name in ('../escape', 'TEMPO/../../escape', '/TEMPO/TEMPO.exe', 'TEMPO\\bad.exe'):
                 file = root/'archive.zip'
                 file.write_bytes(_archive(path=name))
-                with self.assertRaises(ValueError):
+                with self.subTest(name=name), self.assertRaisesRegex(ValueError, 'unsafe path'):
                     setup._extract_checked(file, root/'out')
+            with zipfile.ZipFile(file, 'w') as out:
+                link = zipfile.ZipInfo('TEMPO/link')
+                link.create_system = 3
+                link.external_attr = (stat.S_IFLNK | 0o777) << 16
+                out.writestr(link, '../outside')
+            with self.assertRaisesRegex(ValueError, 'link'):
+                setup._extract_checked(file, root/'out')
             file.write_bytes(_archive(path='TEMPO/TEMPO.exe'))
             with zipfile.ZipFile(file, 'a') as out:
                 out.writestr('TEMPO/tempo.EXE', b'other')

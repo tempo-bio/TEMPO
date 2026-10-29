@@ -4,6 +4,7 @@ from pathlib import Path
 import struct
 import tempfile
 import unittest
+import numpy as np
 
 from PyQt6.QtCore import QRect
 from PyQt6.QtGui import QImage
@@ -21,6 +22,18 @@ def opaque_bounds(image):
 
 
 class AppIconTests(unittest.TestCase):
+    def assert_same_rendering(self, actual, expected):
+        self.assertEqual(actual.size(), expected.size())
+        def pixels(image):
+            image = image.convertToFormat(QImage.Format.Format_RGBA8888_Premultiplied)
+            return np.frombuffer(image.constBits().asstring(image.sizeInBytes()),
+                                 dtype=np.uint8).astype(np.int16)
+        # Qt smooth scaling can round channels differently across platforms
+        # and Qt versions. Compare visible pixels, independent of PNG encoding.
+        error = np.abs(pixels(actual) - pixels(expected))
+        self.assertLessEqual(int(error.max()), 2)
+        self.assertLessEqual(float(error.mean()), 0.5)
+
     def test_windows_asset_keeps_complete_original_logo_and_other_platforms_keep_original_framing(self):
         original = QImage(str(ASSETS / 'tempo_icon.png'))
         windows = QImage(str(application_icon_path('win32')))
@@ -46,8 +59,7 @@ class AppIconTests(unittest.TestCase):
             self.assertLessEqual(offset + length, len(data))
             frame = QImage.fromData(data[offset:offset + length], 'PNG')
             self.assertEqual((frame.width(), frame.height()), (width, height))
-            self.assertEqual(frame.convertToFormat(QImage.Format.Format_ARGB32),
-                             render_app_icon(original, width, 'win32'))
+            self.assert_same_rendering(frame, render_app_icon(original, width, 'win32'))
             self.assertEqual(frame.pixelColor(0, 0).alpha(), 0)
             self.assertEqual(frame.pixelColor(width - 1, height - 1).alpha(), 0)
             bounds = opaque_bounds(frame)
@@ -62,8 +74,10 @@ class AppIconTests(unittest.TestCase):
         original = ASSETS / 'tempo_icon.png'
         original_digest = hashlib.sha256(original.read_bytes()).hexdigest()
         with tempfile.TemporaryDirectory() as directory:
-            for rebuilt in build_icons(Path(directory)):
-                self.assertEqual(hashlib.sha256(rebuilt.read_bytes()).hexdigest(),
-                                 hashlib.sha256((ASSETS / rebuilt.name).read_bytes()).hexdigest())
-            self.assertFalse((Path(directory) / 'tempo_icon.png').exists())
+            first, second = Path(directory)/'first', Path(directory)/'second'
+            for rebuilt, repeated in zip(build_icons(first), build_icons(second)):
+                self.assertEqual(rebuilt.read_bytes(), repeated.read_bytes())
+            self.assertEqual(QImage(str(first/'tempo_shell_icon.png')),
+                             QImage(str(ASSETS/'tempo_shell_icon.png')))
+            self.assertFalse((first / 'tempo_icon.png').exists())
         self.assertEqual(hashlib.sha256(original.read_bytes()).hexdigest(), original_digest)
