@@ -57,7 +57,7 @@ The acquisition view provides camera controls and an XY-stage plate scout. Acqui
 
 Processing outputs retain recording and field identity; registered fields can be explored together. See [spatial metadata](docs/SPATIAL_METADATA.md) for registration and coordinate conventions.
 
-Acquisition includes AU26 V2 stimulation, pre-pacing across multiple fields, and
+Acquisition includes stimulation, pre-pacing across multiple fields, and
 calibrated automatic field collection. Firmware can be installed from TEMPO;
 see [stimulation setup and capture](docs/STIMULATION_SETUP.md).
 
