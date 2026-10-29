@@ -312,6 +312,27 @@ class AnnotationPanelTests(unittest.TestCase):
         self.assertEqual(self.view.lbl_auto_status.text(), 'New detection…')
         self.view._auto_pending = None
 
+    def test_small_window_reveals_active_stages_and_preserves_draft_on_failure(self):
+        self.view.resize(820, 520)
+        self.view.show(); APP.processEvents()
+        worker = self.begin_auto_annotation()
+        before = copy.deepcopy(self.view.get_current_boxes())
+        APP.processEvents()
+        worker.stage_signal.connect.call_args.args[0]('inference')
+        self.view.auto_progress._last_stage_at -= 31
+        self.view.auto_progress.refresh()
+        APP.processEvents()
+        progress = self.view.auto_progress
+        viewport = self.view.annotation_inspector_scroll.viewport()
+        bottom = progress.mapTo(viewport, progress.rect().bottomLeft()).y()
+        self.assertLessEqual(bottom, viewport.height())
+        self.assertLess(progress.detail.geometry().bottom(), progress.activity.geometry().top())
+        self.assertIn('Waiting for a model result', progress.detail.text())
+        worker.error_signal.connect.call_args.args[0]('Fixture worker failure')
+        self.assertTrue(progress.isHidden())
+        self.assertEqual(self.view.get_current_boxes(), before)
+        self.assertIn('previous draft preserved', self.view.lbl_auto_status.text())
+
     def test_successful_sync_collapses_feedback_and_newer_edits_stay_visible(self):
         self.open_editor()
         record = self.view.universal_annotations['a.png']

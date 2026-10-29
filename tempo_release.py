@@ -65,6 +65,8 @@ def verify_plot_lifecycle(application):
 REPORT_SCHEMA = 2
 EXTRA_CHECKS = ('bundled payload', 'Windows Qt platform dependencies',
                 'offscreen Qt startup and close', 'offscreen plot resize and disposal',
+                'packaged setup handoff', 'headless model assistance entrypoints',
+                'headless nuclear helper entrypoint',
                 'scientific processing and export', 'combined native runtime')
 REQUIRED_CHECKS = RUNTIME_IMPORTS + EXTRA_CHECKS
 
@@ -246,6 +248,113 @@ def scientific_processing_export():
                 'image_formats':['PNG','LZW-compressed TIFF']}
 
 
+def verify_packaged_setup_handoff():
+    """Exercise the frozen onboarding handoff with isolated state and offscreen dialogs."""
+    import tempfile
+    from unittest.mock import patch
+    from PyQt6 import sip
+    from PyQt6.QtCore import QTimer
+    from PyQt6.QtWidgets import QApplication, QDialog
+    import setup_wizard
+    import tempo_first_run
+    from tempo_tasks import dispose_application
+
+    application = QApplication.instance() or QApplication([])
+    original_quit = application.quitOnLastWindowClosed()
+    try:
+        with tempfile.TemporaryDirectory(prefix='TEMPO first run ') as directory, \
+                patch.object(tempo_first_run, 'get_config_dir', return_value=str(Path(directory)/'profile')), \
+                patch.object(tempo_first_run.sys, 'frozen', True, create=True):
+            if tempo_first_run.setup_stage() != 'welcome':
+                raise RuntimeError('Fresh profile unexpectedly skipped setup.')
+
+            canceled = QDialog()
+            QTimer.singleShot(0, canceled.reject)
+            with patch.object(setup_wizard, 'SetupWizardDialog', return_value=canceled):
+                if tempo_first_run.run_packaged_setup(application):
+                    raise RuntimeError('Canceled setup opened the dashboard.')
+            if not sip.isdeleted(canceled) or tempo_first_run.setup_stage() != 'welcome':
+                raise RuntimeError('Canceled setup changed profile state or retained its dialog.')
+
+            accepted_without_completion = QDialog()
+            QTimer.singleShot(0, accepted_without_completion.accept)
+            with patch.object(setup_wizard, 'SetupWizardDialog', return_value=accepted_without_completion):
+                if tempo_first_run.run_packaged_setup(application):
+                    raise RuntimeError('An uncompleted dialog opened the dashboard.')
+
+            completed = QDialog()
+            def complete_setup():
+                tempo_first_run.save_setup_stage('complete')
+                completed.accept()
+            QTimer.singleShot(0, complete_setup)
+            with patch.object(setup_wizard, 'SetupWizardDialog', return_value=completed) as wizard:
+                if not tempo_first_run.run_packaged_setup(application):
+                    raise RuntimeError('Completed setup did not hand off to the dashboard.')
+                if not tempo_first_run.run_packaged_setup(application) or wizard.call_count != 1:
+                    raise RuntimeError('Completed setup was shown a second time.')
+            if (not sip.isdeleted(accepted_without_completion) or not sip.isdeleted(completed)
+                    or tempo_first_run.setup_stage() != 'complete'):
+                raise RuntimeError('Setup completion was not saved and disposed.')
+            if application.quitOnLastWindowClosed() != original_quit:
+                raise RuntimeError('Setup changed application quit behavior.')
+            result = {'profile': 'temporary isolated user profile', 'platform': application.platformName(),
+                      'canceled': 'dashboard blocked', 'uncompleted': 'dashboard blocked',
+                      'completed': 'dashboard handoff allowed', 'repeat_launch': 'wizard skipped'}
+    finally:
+        dispose_application(application)
+    result['application_disposed'] = True
+    return result
+
+
+def verify_headless_helper_entrypoints(name):
+    """Run real source/frozen commands; expected fixture errors prove early dispatch."""
+    import tempfile
+    from scripts.windows_release_checks import run_logged
+    if getattr(sys, 'frozen', False):
+        executable = [sys.executable]
+    else:
+        executable = [sys.executable, str(Path(__file__).resolve().with_name('tempo_gui.py'))]
+    with tempfile.TemporaryDirectory(prefix='TEMPO headless helper ') as directory:
+        root = Path(directory)
+        missing_image = root/'missing image.png'
+        missing_model = root/'missing model.zip'
+        checks = []
+        if name == 'headless model assistance entrypoints':
+            for command in ('--assist-model', '--assist-model-cuda'):
+                result, status = root/(command[2:]+'-result.json'), root/(command[2:]+'-status.json')
+                checks.append((command, [str(missing_image), 'cellpose', 'invalid-threshold', '0.4',
+                                         str(result), str(status)], result, status,
+                               'invalid-threshold'))
+            cells_report = root/'cuda-cells-result.json'
+            checks.append(('--predict-cells', [str(missing_image), str(missing_model), '0.15', '0.4',
+                                               str(cells_report)], cells_report, None, 'FileNotFoundError'))
+        else:
+            maps = root/'nuclear maps.npz'
+            checks.append(('--predict-nuclei', [str(missing_model), str(root/'missing images.npz'), str(maps)],
+                           Path(str(maps)+'.error.json'), None, 'FileNotFoundError'))
+
+        verified = []
+        for command, arguments, report_path, status_path, expected in checks:
+            code = run_logged([*executable, command, *arguments], root/(command[2:]+'.log'), 35,
+                              cwd=root)
+            if code != 1 or not report_path.is_file() or report_path.stat().st_size > 4096:
+                raise RuntimeError(f'{command} did not return a bounded fixture failure (exit {code}).')
+            report = json.loads(report_path.read_text(encoding='utf-8'))
+            if command == '--predict-nuclei':
+                valid = report.get('error_type') == expected
+            elif command == '--predict-cells':
+                valid = report.get('success') is False and report.get('error') == expected
+            else:
+                valid = report.get('success') is False and expected in str(report.get('error', ''))
+                if status_path is None or json.loads(status_path.read_text(encoding='utf-8')) != {'stage':'weights'}:
+                    valid = False
+            if not valid:
+                raise RuntimeError(f'{command} did not reach the expected headless fixture path: {report!r}')
+            verified.append(command)
+        return {'commands': verified, 'mode': 'offline fixture failures',
+                'model_weights': 'not loaded', 'cuda_hardware': 'not exercised'}
+
+
 def probe_action(name):
     if name in RUNTIME_IMPORTS:
         module = importlib.import_module(name)
@@ -371,6 +480,9 @@ def probe_action(name):
         dispose_application(application)
         result['application_disposed'] = True
         return result
+    if name == 'packaged setup handoff': return verify_packaged_setup_handoff()
+    if name in ('headless model assistance entrypoints', 'headless nuclear helper entrypoint'):
+        return verify_headless_helper_entrypoints(name)
     if name == 'scientific processing and export': return scientific_processing_export()
     if name == 'combined native runtime':
         # Individual probes identify a crashing dependency. This additional

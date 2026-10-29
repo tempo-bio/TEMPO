@@ -47,6 +47,10 @@ def assist_command(image, model, conf, iou, result_path, status_path, *, require
         if value in STAGES:
             _atomic_json(status_path, {'stage': value})
     try:
+        stage('weights')
+        if sys.platform == 'win32':
+            from tempo_runtime import prepare_windows_runtime
+            prepare_windows_runtime()
         from yolo_inference_helper import run_inference
         response = run_inference(image, model, conf=float(conf), iou=float(iou),
                                  require_cuda=require_cuda, progress=stage)

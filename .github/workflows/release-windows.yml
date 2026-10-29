@@ -56,7 +56,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & .\.venv_nvidia\Scripts\python.exe -m scripts.windows_release_checks provenance --output Output
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Build NVIDIA worker executable
+      - name: Build and verify NVIDIA worker with headless entrypoint smoke checks
         timeout-minutes: 60
         run: |
           & .\.venv_nvidia\Scripts\python.exe -m scripts.windows_release_checks run --log Output/nvidia-pyinstaller.log --timeout 3300 -- .\.venv_nvidia\Scripts\python.exe -m scripts.windows_packager tempo.spec --clean --noconfirm
@@ -229,7 +229,7 @@ jobs:
         run: |
           & .\.venv_build\Scripts\python.exe -m scripts.prepare_dependency_sources --inventory Output/third-party-licenses/index.json --output Output/dependency-sources
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Verify actual portable executable
+      - name: Verify portable executable, first-run handoff, and model helpers
         id: portable_check
         if: ${{ !cancelled() && steps.portable.outcome == 'success' }}
         timeout-minutes: 16
@@ -328,7 +328,7 @@ jobs:
       - name: Install in a path containing spaces
         id: install
         run: ./payload/verify_windows_install.ps1 -Mode install -Payload payload -Evidence evidence -Target "$env:RUNNER_TEMP\TEMPO installed verification"
-      - name: Verify offline installed application with isolated environment
+      - name: Verify offline installed setup handoff and headless model helpers
         id: verify
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         timeout-minutes: 16

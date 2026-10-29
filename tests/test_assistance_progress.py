@@ -4,6 +4,7 @@ os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 import unittest
 
 from PyQt6.QtWidgets import QApplication
+from PyQt6.QtTest import QSignalSpy
 
 from tempo_assistance_progress import ModelAssistanceProgress
 
@@ -49,6 +50,18 @@ class AssistanceProgressTests(unittest.TestCase):
         view.note_stage('result', now=4)
         view.note_stage('weights', now=5)
         self.assertTrue(view.steps[2].text().startswith('●'))
+        view.finish()
+        view.deleteLater()
+
+    def test_elapsed_message_advances_while_no_worker_stage_arrives(self):
+        view = ModelAssistanceProgress()
+        view.begin('stardist')
+        initial = view.elapsed.text()
+        view._started -= 2
+        timer_events = QSignalSpy(view._timer.timeout)
+        self.assertTrue(timer_events.wait(3000))
+        self.assertNotEqual(view.elapsed.text(), initial)
+        self.assertIn('elapsed', view.elapsed.text())
         view.finish()
         view.deleteLater()
 

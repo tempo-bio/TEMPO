@@ -30,4 +30,6 @@ Connect the camera in Acquisition when you are ready to image. Previously record
 
 Open **Segmentation Annotation → Shared Annotation Pool**. Reserve images before editing, annotate the cells, and submit fully annotated images for maintainer review. Check sync status before closing: local saving and uploading to the shared workspace are separate operations.
 
+**Count Cells**, **Suggest Nuclei**, and **Outline Cells** show observed preparation, model, and result stages with elapsed time. A waiting message means TEMPO is responsive while it waits for the model; it does not estimate how much work remains. If a model does not return within 15 minutes, the attempt stops and your draft stays intact.
+
 See the [Collaboration workflow](COLLABORATION_WORKFLOW.md) for reservations, review, and recovery, or the [TEMPO overview](../README.md) for the rest of the application.

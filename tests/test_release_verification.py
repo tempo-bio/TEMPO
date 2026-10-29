@@ -69,6 +69,23 @@ def deferred_dashboard_probe(release_worker):
 
 
 class ReleaseVerificationTests(unittest.TestCase):
+    def test_first_run_and_headless_helper_smokes_are_required_release_checks(self):
+        expected = {'packaged setup handoff', 'headless model assistance entrypoints',
+                    'headless nuclear helper entrypoint'}
+        self.assertTrue(expected.issubset(tempo_release.REQUIRED_CHECKS))
+
+    def test_missing_headless_helper_entrypoint_blocks_certification(self):
+        def probe(name, destination):
+            return dict(check=name, success=name != 'headless nuclear helper entrypoint',
+                        error='Nuclear helper returned no result', details={})
+        with tempfile.TemporaryDirectory() as directory, patch.object(tempo_release.sys, 'platform', 'win32'), \
+             patch.object(tempo_release, 'run_probe', side_effect=probe):
+            report = Path(directory) / 'verification.json'
+            self.assertEqual(verify_installation(report), 1)
+            result = json.loads(report.read_text())
+        self.assertNotIn('headless nuclear helper entrypoint', result['checks'])
+        self.assertIn('Nuclear helper returned no result', result['error'])
+
     def run_deferred_dashboard(self,release_worker):
         command=[sys.executable,'-X','utf8','-c',
                  'from tests.test_release_verification import deferred_dashboard_probe; '

@@ -64,6 +64,7 @@ class ModelAssistanceProgress(QWidget):
         self._last_stage = None
         self._phase = 0
         self._operation = None
+        self._fitting = False
         self.hide()
 
     def begin(self, operation, *, now=None):
@@ -111,19 +112,27 @@ class ModelAssistanceProgress(QWidget):
             self.detail.setText('Waiting for model preparation; TEMPO is responding.')
         elif current - self._last_stage_at >= 30 and self._phase == 1:
             self.detail.setText('Waiting for a model result; TEMPO is responding.')
+        elif current - self._last_stage_at >= 30 and self._phase == 2:
+            self.detail.setText('Waiting for annotation results; TEMPO is responding.')
         self._fit_content()
 
     def _fit_content(self):
         # The inspector scroll area may otherwise compress a wrapped status
         # line beneath the activity bar at small window widths.
-        self.setMinimumHeight(0)
-        needed = self.sizeHint().height()
-        self.setMinimumHeight(needed)
-        self.updateGeometry()
+        if self._fitting:
+            return
+        self._fitting = True
+        try:
+            self.setMinimumHeight(0)
+            needed = self.sizeHint().height()
+            self.setMinimumHeight(needed)
+            self.updateGeometry()
+        finally:
+            self._fitting = False
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        QTimer.singleShot(0, self._fit_content)
+        self._fit_content()
 
     def finish(self):
         self._timer.stop()
