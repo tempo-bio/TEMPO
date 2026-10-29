@@ -194,3 +194,22 @@ def save_hf_token(token):
         _load_token(backend, migrate=True)
         _write_verified(backend, token)
         remove_legacy_copies(token)
+
+
+def delete_hf_token():
+    """Safely remove the active Hugging Face token from native secure storage."""
+    with _LOCK:
+        backend = native_backend()
+        try:
+            token = _read(backend)
+        except Exception:
+            token = None
+        try:
+            backend.delete_password(SERVICE, ACCOUNT)
+        except Exception:
+            pass
+        if token:
+            try:
+                remove_legacy_copies(token)
+            except Exception:
+                pass

@@ -135,6 +135,15 @@ class SecureStoreTests(unittest.TestCase):
         self.assertEqual(store.load_hf_token(migrate=True), TOKEN)
         self.assertFalse(self.active.exists())
 
+    def test_delete_hf_token_clears_vault_and_legacy_copies(self):
+        store.save_hf_token(TOKEN)
+        self.assertEqual(self.vault.value, TOKEN)
+        store.delete_hf_token()
+        self.assertIsNone(self.vault.value)
+        # Verify subsequent delete does not raise even if vault is empty
+        store.delete_hf_token()
+        self.assertIsNone(self.vault.value)
+
     def test_modified_cache_is_not_overwritten(self):
         self.seed(); original = self.saved.read_bytes()
         self.saved.write_text('[replacement]\nhf_token = ' + OTHER + '\n')

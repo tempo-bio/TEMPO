@@ -38,6 +38,19 @@ Camera acquisition requires compatible vendor drivers and Micro-Manager adapters
 
 See [Getting started](docs/GETTING_STARTED.md) for account setup and your first shared annotation.
 
+### Uninstall TEMPO
+
+To uninstall TEMPO on Windows:
+
+1. **From within TEMPO (Recommended)**:
+   Open **Settings → Application Tools → Uninstall TEMPO...**. Review your user data options (with checkboxes to optionally remove saved preferences or stored Hugging Face authentication tokens), then choose **Uninstall and Exit**. TEMPO closes automatically and runs the Windows uninstaller.
+2. **From Windows Settings**:
+   Open **Windows Settings → Apps → Installed apps** (or *Add or Remove Programs*), find **TEMPO**, and select **Uninstall**.
+3. **From the Start Menu**:
+   Open the Start Menu, locate the **TEMPO** folder, and select **Uninstall TEMPO**.
+
+Personal recordings and analysis outputs in your data folder (default: `Documents\TEMPO`) are kept safe and will not be removed. Confirm that all local annotation drafts are synchronized before uninstalling.
+
 ## Start annotating
 
 Ask the workspace administrator to grant your Hugging Face account access to the shared dataset and model repositories. Your token must permit the operations you will perform; it cannot grant more access than your account has.

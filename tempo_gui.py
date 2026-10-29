@@ -6503,7 +6503,8 @@ class SettingsTab(QWidget):
             ('Check Software Updates', self.check_software_updates),
             ('About TEMPO', self.show_application_details),
             ('Account Setup', self.run_account_setup),
-            ('Guided Setup', self.run_guided_setup)])
+            ('Guided Setup', self.run_guided_setup),
+            ('Uninstall TEMPO...', lambda: self.run_uninstall())])
         self.btn_tools.clicked.connect(self.tools_menu.toggle)
         if getattr(tempo_preferences, 'load_error', ''):
             self.lbl_save_status.setText('Saved settings could not be loaded. Defaults are shown; review them before saving. ' + tempo_preferences.load_error)
@@ -6806,6 +6807,11 @@ class SettingsTab(QWidget):
         from setup_wizard import SetupWizardDialog
         dialog = SetupWizardDialog(self)
         dialog.account_saved.connect(self.on_account_saved)
+        dialog.exec()
+
+    def run_uninstall(self):
+        from tempo_uninstall import UninstallTempoDialog
+        dialog = UninstallTempoDialog(self.window() or self)
         dialog.exec()
 
 
