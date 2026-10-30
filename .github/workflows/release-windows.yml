@@ -22,8 +22,12 @@ env:
   YOLO_AUTOINSTALL: 'false'
 
 jobs:
+  preflight:
+    uses: ./.github/workflows/windows-preflight.yml
+
   validate-source:
     name: Validate Windows source before packaging
+    needs: preflight
     runs-on: windows-2025
     timeout-minutes: 40
     steps:
@@ -399,15 +403,16 @@ jobs:
 
   certify:
     name: Certify every required Windows gate
-    needs: [validate-source, build-windows, verify-installed]
+    needs: [preflight, validate-source, build-windows, verify-installed]
     if: ${{ always() }}
     runs-on: windows-2025
     steps:
       - name: Require complete build and clean installation success
         env:
+          PREFLIGHT_RESULT: ${{ needs.preflight.result }}
           SOURCE_RESULT: ${{ needs.validate-source.result }}
           BUILD_RESULT: ${{ needs.build-windows.result }}
           INSTALL_RESULT: ${{ needs.verify-installed.result }}
         run: |
-          if ($env:SOURCE_RESULT -ne 'success' -or $env:BUILD_RESULT -ne 'success' -or $env:INSTALL_RESULT -ne 'success') { throw 'Windows certification failed or required checks were skipped' }
+          if ($env:PREFLIGHT_RESULT -ne 'success' -or $env:SOURCE_RESULT -ne 'success' -or $env:BUILD_RESULT -ne 'success' -or $env:INSTALL_RESULT -ne 'success') { throw 'Windows certification failed or required checks were skipped' }
           "Certified revision: $env:GITHUB_SHA" >> $env:GITHUB_STEP_SUMMARY

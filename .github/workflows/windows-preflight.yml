@@ -1,0 +1,28 @@
+name: Windows preflight
+
+on:
+  push:
+    branches: [codex/tempo-v1.0.1-candidate]
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  preflight:
+    name: Check Windows launch and source contracts
+    runs-on: windows-2025
+    timeout-minutes: 5
+    steps:
+      - name: Check out tested revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Python 3.13.16 x64
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.13.16'
+          architecture: x64
+      - name: Check contracts without application dependencies
+        run: |
+          python -S -m unittest -v tests.test_assistance_launch tests.test_release_preflight
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
