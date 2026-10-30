@@ -12,6 +12,29 @@ import tempo_assistance_runtime as runtime
 
 
 class AssistanceRuntimeTests(unittest.TestCase):
+    def test_cancel_stops_real_helper_descendants(self):
+        real_popen = subprocess.Popen
+        with tempfile.TemporaryDirectory() as folder:
+            started, leaked = Path(folder)/'started', Path(folder)/'leaked'
+            owned = []
+            helper = ('import time,tempfile;from pathlib import Path;'
+                      'Path(tempfile.mkdtemp(prefix="tempo-cellpose-")).joinpath("checkpoint.pt").write_bytes(b"fixture");'
+                      'Path('+repr(str(started))+').touch();'
+                      'time.sleep(1);Path('+repr(str(leaked))+').touch()')
+            parent = ('import subprocess,sys,time;subprocess.Popen([sys.executable,"-c",'+repr(helper)+']);time.sleep(10)')
+            def launch(arguments, **kwargs):
+                owned.append(Path(kwargs['env']['TEMP']))
+                return real_popen([sys.executable, '-c', parent], **kwargs)
+            with patch.object(runtime.subprocess, 'Popen', side_effect=launch):
+                with self.assertRaises(runtime.AssistanceCancelled):
+                    runtime.run_assistance('fixture.png','cellpose',.15,.4,
+                                           cancel_requested=started.exists,timeout=5)
+            self.assertTrue(started.exists())
+            self.assertEqual(len(owned), 1)
+            self.assertFalse(owned[0].exists(), 'Cancelled checkpoint scratch files survived.')
+            time.sleep(1.2)
+            self.assertFalse(leaked.exists(), 'A cancelled assistance helper survived.')
+
     def test_child_writes_actual_stages_and_result_without_a_desktop(self):
         with tempfile.TemporaryDirectory() as folder:
             result = Path(folder) / 'result.json'

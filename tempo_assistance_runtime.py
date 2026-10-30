@@ -25,6 +25,10 @@ MAX_STATUS_BYTES = 1024
 TIMEOUT_SECONDS = 900
 
 
+class AssistanceCancelled(RuntimeError):
+    """The user stopped assistance and its owned worker tree has settled."""
+
+
 def _atomic_json(path, value):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -65,10 +69,15 @@ def assist_command(image, model, conf, iou, result_path, status_path, *, require
 
 
 def run_assistance(image, model, conf, iou, progress=lambda text: None, *,
-                   stage=lambda code: None, timeout=TIMEOUT_SECONDS):
+                   stage=lambda code: None, timeout=TIMEOUT_SECONDS,
+                   cancel_requested=lambda: False):
     """Poll actual child stages; bound native hangs and never launch a dashboard."""
     if model not in ('scout', 'stardist', 'cellpose'):
         raise ValueError('Unknown assistance model.')
+    def check_cancelled():
+        if cancel_requested():
+            raise AssistanceCancelled('Model stopped; no annotations were changed.')
+    check_cancelled()
     executable = sys.executable
     command = '--assist-model'
     frozen = bool(getattr(sys, 'frozen', False))
@@ -92,6 +101,9 @@ def run_assistance(image, model, conf, iou, progress=lambda text: None, *,
         arguments.extend((command, str(image), model, str(conf), str(iou), str(report), str(status)))
         options = ({'creationflags': getattr(subprocess, 'CREATE_NO_WINDOW', 0)} if os.name == 'nt'
                    else {'start_new_session': True})
+        # Keep extracted checkpoints and nuclear-helper scratch files inside
+        # this operation. Forced cancellation cannot run child finally blocks.
+        options['env'] = dict(os.environ, TEMP=directory, TMP=directory, TMPDIR=directory)
         job = _job_for_child()
         if job is not None:
             options['creationflags'] |= 0x4  # CREATE_SUSPENDED; assign the job before it can spawn helpers.
@@ -99,10 +111,12 @@ def run_assistance(image, model, conf, iou, progress=lambda text: None, *,
         last_stage = None
         deadline = time.monotonic() + timeout
         try:
+            check_cancelled()
             process = subprocess.Popen(arguments, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, **options)
             if job is not None:
                 job.start(process)
             while process.poll() is None:
+                check_cancelled()
                 if time.monotonic() >= deadline:
                     raise TimeoutError('Model assistance exceeded 15 minutes; no annotations were changed.')
                 try:
@@ -115,6 +129,7 @@ def run_assistance(image, model, conf, iou, progress=lambda text: None, *,
                 except (OSError, ValueError, TypeError, AttributeError):
                     pass
                 time.sleep(0.25)
+            check_cancelled()
             if status.is_file() and status.stat().st_size <= MAX_STATUS_BYTES:
                 try:
                     value = json.loads(status.read_text(encoding='utf-8')).get('stage')
@@ -130,6 +145,7 @@ def run_assistance(image, model, conf, iou, progress=lambda text: None, *,
             finally:
                 if process is not None:
                     _stop_tree(process)
+        check_cancelled()
         if not report.is_file() or report.stat().st_size > MAX_REPORT_BYTES:
             raise RuntimeError('The model worker did not return a valid result.')
         result = json.loads(report.read_text(encoding='utf-8'))
@@ -137,4 +153,5 @@ def run_assistance(image, model, conf, iou, progress=lambda text: None, *,
             raise RuntimeError('The model worker returned an invalid result.')
         if process.returncode and result['success']:
             raise RuntimeError('The model worker exited unexpectedly.')
+        check_cancelled()
         return result

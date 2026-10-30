@@ -2769,21 +2769,30 @@ class AutoAnnotateWorker(QThread):
     stage_signal = pyqtSignal(str)
     finished_signal = pyqtSignal(dict)
     error_signal = pyqtSignal(str)
+    cancelled_signal = pyqtSignal()
 
     def __init__(self, current_file, model_type="cellpose", parent=None):
         super().__init__(parent)
         self.current_file = current_file
         self.model_type = model_type
+        from threading import Event
+        self._cancel_request = Event()
+
+    def cancel(self):
+        self._cancel_request.set()
 
     def run(self):
+        from tempo_assistance_runtime import AssistanceCancelled, run_assistance
         try:
             self.status_signal.emit('Loading model…')
             conf_val = float(tempo_preferences.get("annotator", "confidence_threshold", 0.15))
             iou_val = float(tempo_preferences.get("annotator", "nms_iou_threshold", 0.40))
             
-            from tempo_assistance_runtime import run_assistance
             json_response = run_assistance(self.current_file, self.model_type, conf_val, iou_val,
-                                           progress=self.status_signal.emit, stage=self.stage_signal.emit)
+                                           progress=self.status_signal.emit, stage=self.stage_signal.emit,
+                                           cancel_requested=self._cancel_request.is_set)
+            if self._cancel_request.is_set():
+                raise AssistanceCancelled('Model stopped; no annotations were changed.')
                     
             if not json_response:
                 raise RuntimeError('The model worker did not return a result.')
@@ -2792,6 +2801,8 @@ class AutoAnnotateWorker(QThread):
                 raise Exception(json_response.get("error", "Unknown error"))
                 
             self.finished_signal.emit(json_response)
+        except AssistanceCancelled:
+            self.cancelled_signal.emit()
         except Exception as e:
             self.error_signal.emit(str(e))
 
@@ -3241,20 +3252,24 @@ class AnnotatorTab(QWidget):
         self.btn_auto_nano = QPushButton("Count Cells")
         set_button_color(self.btn_auto_nano, '#0088CC')
         self.btn_auto_nano.setToolTip("Nano scout: estimate individual-cell counts and detect groups.")
-        self.btn_auto_nano.clicked.connect(lambda: self.start_auto_annotation("scout"))
+        self.btn_auto_nano.clicked.connect(lambda: self.toggle_auto_annotation("scout"))
 
         self.btn_auto_stardist = QPushButton("Suggest Nuclei")
         set_button_color(self.btn_auto_stardist, '#9B51E0')
         self.btn_auto_stardist.setToolTip("StarDist: suggest purple nuclear outlines for review.")
-        self.btn_auto_stardist.clicked.connect(lambda: self.start_auto_annotation("stardist"))
+        self.btn_auto_stardist.clicked.connect(lambda: self.toggle_auto_annotation("stardist"))
 
         self.btn_auto_cellpose = QPushButton("Outline Cells")
         set_button_color(self.btn_auto_cellpose, '#E67E22')
         self.btn_auto_cellpose.setToolTip("Generate cell masks with Cellpose.")
-        self.btn_auto_cellpose.clicked.connect(lambda: self.start_auto_annotation("cellpose"))
+        self.btn_auto_cellpose.clicked.connect(lambda: self.toggle_auto_annotation("cellpose"))
 
         for button in (self.btn_auto_nano, self.btn_auto_stardist, self.btn_auto_cellpose):
             button.setStyleSheet('font-weight: bold;')
+            button.setProperty('modelStartTip', button.toolTip())
+        for role, button in (('scout', self.btn_auto_nano), ('stardist', self.btn_auto_stardist),
+                             ('cellpose', self.btn_auto_cellpose)):
+            button.pressed.connect(lambda selected=role: self.remember_auto_action(selected))
 
         auto_btn_grid.addWidget(self.btn_auto_nano, 0, 0)
         auto_btn_grid.addWidget(self.btn_auto_stardist, 1, 0)
@@ -4659,6 +4674,19 @@ class AnnotatorTab(QWidget):
         self.btn_nuclear_edit.setEnabled(bool(self.current_file and not pending))
         self.btn_auto_cellpose.setEnabled(enabled and not getattr(self,'_nuclear_only',False))
         self.btn_auto_stardist.setEnabled(enabled)
+        request = getattr(self, '_auto_pending', None)
+        for role, button, normal, stop in (
+                ('scout', self.btn_auto_nano, 'Count Cells', 'Stop Counting'),
+                ('stardist', self.btn_auto_stardist, 'Suggest Nuclei', 'Stop Finding Nuclei'),
+                ('cellpose', self.btn_auto_cellpose, 'Outline Cells', 'Stop Outlining')):
+            running = bool(request and request.get('role', 'cellpose') == role)
+            stopping = bool(running and request.get('cancel_requested'))
+            button.setText('Stopping…' if stopping else stop if running else normal)
+            button.setToolTip('' if running else button.property('modelStartTip'))
+            if running:
+                # Stopping remains available if the reservation expires while
+                # inference is running, including for read-only scout counts.
+                button.setEnabled(not stopping)
         self.btn_nuclear_submit.setEnabled(enabled and not getattr(self,'_nuclear_busy',False))
         self.shared_browser.update_actions()
         if enabled or pending or nuclear_only:
@@ -4723,6 +4751,21 @@ class AnnotatorTab(QWidget):
                 self.on_class_changed(self.list_classes.currentRow())
             self.update_submission_readiness()
 
+    def remember_auto_action(self, model_type):
+        self._auto_action_press = (model_type, getattr(self, '_auto_pending', None))
+
+    def toggle_auto_annotation(self, model_type):
+        request = getattr(self, '_auto_pending', None)
+        pressed = getattr(self, '_auto_action_press', None)
+        self._auto_action_press = None
+        if pressed and pressed[0] == model_type and pressed[1] is not request:
+            return  # A Stop gesture must not start a new job after an outcome.
+        if request is not None:
+            if request.get('role', 'cellpose') == model_type:
+                self.cancel_auto_annotation()
+            return
+        self.start_auto_annotation(model_type)
+
     def start_auto_annotation(self, model_type="cellpose"):
         if (self._current_file_readonly and model_type != 'scout') or getattr(self, '_auto_pending', None):
             return
@@ -4760,7 +4803,32 @@ class AnnotatorTab(QWidget):
         self.auto_worker.stage_signal.connect(lambda stage: self.on_auto_annotation_stage(stage, request))
         self.auto_worker.finished_signal.connect(lambda result: self.on_auto_annotate_finished(result, request))
         self.auto_worker.error_signal.connect(lambda error: self.on_auto_annotate_error(error, request))
+        self.auto_worker.cancelled_signal.connect(lambda: self.on_auto_annotate_cancelled(request))
         self.auto_worker.start()
+
+    def cancel_auto_annotation(self):
+        request = getattr(self, '_auto_pending', None)
+        if request is None or request.get('cancel_requested'):
+            return
+        # Mark the request before signalling the worker. A success signal may
+        # already be queued; it must not commit a result after Stop was clicked.
+        request['cancel_requested'] = True
+        self.auto_progress.stopping()
+        self.set_auto_buttons_enabled(False)
+        self.auto_worker.cancel()
+
+    def on_auto_annotate_cancelled(self, request=None):
+        pending = getattr(self, '_auto_pending', None)
+        if request is not None and request is not pending:
+            return
+        self._auto_pending = None
+        self.auto_progress.finish()
+        self.auto_error.clear()
+        self.set_auto_buttons_enabled(not self._current_file_readonly)
+        if self.auto_request_is_current(pending):
+            self.lbl_auto_status.setText('Model stopped; current annotations kept.')
+        else:
+            self.clear_detection_feedback()
 
     def begin_nuclear_edit(self):
         if not self.current_file or not self.is_universal_mode or not self.can_change_annotation_image():
@@ -4864,14 +4932,14 @@ class AnnotatorTab(QWidget):
                     and self.is_universal_mode == request['universal'])
 
     def on_auto_annotation_status(self, text, request):
-        if (request is getattr(self, '_auto_pending', None) and self.auto_request_is_current(request)
+        if (request and not request.get('cancel_requested') and request is getattr(self, '_auto_pending', None) and self.auto_request_is_current(request)
                 and self.get_current_boxes() == request['boxes']
                 and (not self._current_file_readonly or request.get('role') == 'scout')):
             self.lbl_auto_status.setText(text)
             self.lbl_auto_status.hide()
 
     def on_auto_annotation_stage(self, stage, request):
-        if (request is getattr(self, '_auto_pending', None) and self.auto_request_is_current(request)
+        if (request and not request.get('cancel_requested') and request is getattr(self, '_auto_pending', None) and self.auto_request_is_current(request)
                 and self.get_current_boxes() == request['boxes']
                 and (not self._current_file_readonly or request.get('role') == 'scout')):
             self.auto_progress.note_stage(stage)
@@ -4879,6 +4947,19 @@ class AnnotatorTab(QWidget):
     def on_auto_annotate_finished(self, json_response, request=None):
         pending = getattr(self, '_auto_pending', None)
         if request is not None and request is not pending:
+            return
+        pressed = getattr(self, '_auto_action_press', None)
+        if pressed and pressed[1] is pending and pending is not None:
+            buttons = {'scout': self.btn_auto_nano, 'stardist': self.btn_auto_stardist,
+                       'cellpose': self.btn_auto_cellpose}
+            if buttons[pressed[0]].isDown():
+                # Let an in-progress Stop click finish before committing its
+                # competing model result. A released, cancelled gesture can
+                # still apply the result normally on the next event turn.
+                QTimer.singleShot(20, lambda: self.on_auto_annotate_finished(json_response, pending))
+                return
+        if pending and pending.get('cancel_requested'):
+            self.on_auto_annotate_cancelled(pending)
             return
         request = pending
         self._auto_pending = None

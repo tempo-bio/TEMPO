@@ -4,6 +4,7 @@ from pathlib import Path
 import runpy
 import sys
 import tempfile
+import threading
 import unittest
 from unittest.mock import Mock, patch
 
@@ -11,6 +12,52 @@ import tempo_assistance_runtime as runtime
 
 
 class AssistanceLaunchTests(unittest.TestCase):
+    def test_cancel_before_launch_never_starts_a_model(self):
+        with patch.object(runtime.subprocess, 'Popen') as launch:
+            for model in ('scout', 'stardist', 'cellpose'):
+                with self.subTest(model=model), self.assertRaises(runtime.AssistanceCancelled):
+                    runtime.run_assistance('image.png', model, .15, .4, cancel_requested=lambda:True)
+        launch.assert_not_called()
+
+    def test_cancel_while_running_settles_worker_tree(self):
+        cancelled = threading.Event()
+        process = Mock(returncode=None, poll=Mock(return_value=None))
+        def launch(*args, **kwargs):
+            cancelled.set()
+            return process
+        with patch.object(runtime.subprocess, 'Popen', side_effect=launch), \
+             patch.object(runtime, '_job_for_child', return_value=None), \
+             patch.object(runtime, '_stop_tree') as stop:
+            with self.assertRaises(runtime.AssistanceCancelled):
+                runtime.run_assistance('image.png','cellpose',.15,.4,cancel_requested=cancelled.is_set)
+        stop.assert_called_once_with(process)
+
+    def test_cancel_after_worker_success_discards_the_completed_result(self):
+        cancelled = threading.Event()
+        process = Mock(returncode=0, poll=Mock(return_value=0))
+        def launch(arguments, **kwargs):
+            Path(arguments[-2]).write_text('{"success":true,"boxes":[]}')
+            cancelled.set()
+            return process
+        with patch.object(runtime.subprocess, 'Popen', side_effect=launch), \
+             patch.object(runtime, '_job_for_child', return_value=None), \
+             patch.object(runtime, '_stop_tree') as stop:
+            with self.assertRaises(runtime.AssistanceCancelled):
+                runtime.run_assistance('image.png','scout',.15,.4,cancel_requested=cancelled.is_set)
+        stop.assert_called_once_with(process)
+
+    def test_cancel_during_cleanup_cannot_return_a_success(self):
+        cancelled = threading.Event()
+        process = Mock(returncode=0, poll=Mock(return_value=0))
+        def launch(arguments, **kwargs):
+            Path(arguments[-2]).write_text('{"success":true,"boxes":[]}')
+            return process
+        with patch.object(runtime.subprocess, 'Popen', side_effect=launch), \
+             patch.object(runtime, '_job_for_child', return_value=None), \
+             patch.object(runtime, '_stop_tree', side_effect=lambda child:cancelled.set()):
+            with self.assertRaises(runtime.AssistanceCancelled):
+                runtime.run_assistance('image.png','stardist',.15,.4,cancel_requested=cancelled.is_set)
+
     def test_parent_polls_real_status_and_reads_file_result(self):
         seen = []
         stages = []

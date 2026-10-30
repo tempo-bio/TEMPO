@@ -64,6 +64,7 @@ class ModelAssistanceProgress(QWidget):
         self._last_stage = None
         self._phase = 0
         self._operation = None
+        self._stopping = False
         self._fitting = False
         self.hide()
 
@@ -71,6 +72,7 @@ class ModelAssistanceProgress(QWidget):
         if operation not in _OPERATIONS:
             raise ValueError('Unknown model assistance operation.')
         self._operation = operation
+        self._stopping = False
         self._phase = 0
         self._last_stage = None
         self._started = time.monotonic() if now is None else float(now)
@@ -83,7 +85,7 @@ class ModelAssistanceProgress(QWidget):
         self._timer.start()
 
     def note_stage(self, stage, *, now=None):
-        if self._operation is None or stage not in _STAGES:
+        if self._operation is None or self._stopping or stage not in _STAGES:
             return
         phase = _STAGES[stage]
         if phase < self._phase:
@@ -108,13 +110,19 @@ class ModelAssistanceProgress(QWidget):
         current = time.monotonic() if now is None else float(now)
         elapsed = max(0, int(current - self._started))
         self.elapsed.setText(f'{elapsed // 60}m {elapsed % 60:02d}s elapsed')
-        if current - self._last_stage_at >= 30 and self._phase == 0:
+        if self._stopping:
+            self.detail.setText('Stopping the model…')
+        elif current - self._last_stage_at >= 30 and self._phase == 0:
             self.detail.setText('Waiting for model preparation; TEMPO is responding.')
         elif current - self._last_stage_at >= 30 and self._phase == 1:
             self.detail.setText('Waiting for a model result; TEMPO is responding.')
         elif current - self._last_stage_at >= 30 and self._phase == 2:
             self.detail.setText('Waiting for annotation results; TEMPO is responding.')
         self._fit_content()
+
+    def stopping(self):
+        self._stopping = True
+        self.refresh()
 
     def _fit_content(self):
         # The inspector scroll area may otherwise compress a wrapped status
@@ -137,5 +145,6 @@ class ModelAssistanceProgress(QWidget):
     def finish(self):
         self._timer.stop()
         self._operation = None
+        self._stopping = False
         self._started = None
         self.hide()
