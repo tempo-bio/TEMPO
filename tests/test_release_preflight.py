@@ -39,7 +39,12 @@ class ReleasePreflightTests(unittest.TestCase):
         self.assertIn("$env:PREFLIGHT_RESULT -ne 'success'", release)
         fast = (ROOT / '.github/workflows/windows-preflight.yml').read_text(encoding='utf-8')
         self.assertIn('python -S -m unittest -v tests.test_assistance_launch tests.test_release_preflight', fast)
-        self.assertNotIn('pip install', fast)
+        self.assertIn(r'python -m venv "$env:RUNNER_TEMP\tempo-preflight-python"', fast)
+        self.assertIn("if line.startswith('psutil @ ')", fast)
+        self.assertIn('-m pip install --no-deps --require-hashes', fast)
+        self.assertIn('tests.test_model_assistance_runtime.AssistanceRuntimeTests.test_cancel_stops_real_helper_descendants', fast)
+        self.assertIn('tests.test_model_assistance_runtime.AssistanceRuntimeTests.test_failed_parent_cannot_leave_a_running_helper', fast)
+        self.assertNotIn('-r requirements-windows.lock', fast)
 
 
 if __name__ == '__main__':

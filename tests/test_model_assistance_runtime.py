@@ -6,9 +6,17 @@ import tempfile
 import subprocess
 import time
 import unittest
+from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 import tempo_assistance_runtime as runtime
+
+
+def worker_subprocess(launch):
+    # Override only the assistance launch. Windows cleanup also uses subprocess;
+    # patching its shared Popen redirects taskkill into the worker fixture.
+    return SimpleNamespace(Popen=launch, DEVNULL=subprocess.DEVNULL,
+                           CREATE_NO_WINDOW=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
 
 
 class AssistanceRuntimeTests(unittest.TestCase):
@@ -25,7 +33,8 @@ class AssistanceRuntimeTests(unittest.TestCase):
             def launch(arguments, **kwargs):
                 owned.append(Path(kwargs['env']['TEMP']))
                 return real_popen([sys.executable, '-c', parent], **kwargs)
-            with patch.object(runtime.subprocess, 'Popen', side_effect=launch):
+            with patch.object(runtime, 'subprocess', worker_subprocess(launch)):
+                self.assertIs(subprocess.Popen, real_popen, 'Cleanup must retain the real process launcher.')
                 with self.assertRaises(runtime.AssistanceCancelled):
                     runtime.run_assistance('fixture.png','cellpose',.15,.4,
                                            cancel_requested=started.exists,timeout=5)
@@ -66,7 +75,8 @@ class AssistanceRuntimeTests(unittest.TestCase):
                       'sys.exit(1)')
             def launch(arguments, **kwargs):
                 return real_popen([sys.executable, '-c', parent], **kwargs)
-            with patch.object(runtime.subprocess, 'Popen', side_effect=launch):
+            with patch.object(runtime, 'subprocess', worker_subprocess(launch)):
+                self.assertIs(subprocess.Popen, real_popen, 'Cleanup must retain the real process launcher.')
                 with self.assertRaisesRegex(RuntimeError, 'valid result'):
                     runtime.run_assistance('fixture.png', 'scout', .15, .4, timeout=5)
             self.assertTrue(started.exists())

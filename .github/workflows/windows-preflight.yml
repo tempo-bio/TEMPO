@@ -26,3 +26,23 @@ jobs:
         run: |
           python -S -m unittest -v tests.test_assistance_launch tests.test_release_preflight
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Prepare minimal process-control test environment
+        run: |
+          python -m venv "$env:RUNNER_TEMP\tempo-preflight-python"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -c @'
+          from pathlib import Path
+          import os
+          rows = [line for line in Path('requirements-windows.lock').read_text().splitlines()
+                  if line.startswith('psutil @ ')]
+          if len(rows) != 1 or ' --hash=sha256:' not in rows[0]:
+              raise SystemExit('Expected one checksummed psutil requirement.')
+          Path(os.environ['RUNNER_TEMP'], 'tempo-preflight-psutil.txt').write_text(rows[0] + '\n')
+          '@
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & "$env:RUNNER_TEMP\tempo-preflight-python\Scripts\python.exe" -m pip install --no-deps --require-hashes -r "$env:RUNNER_TEMP\tempo-preflight-psutil.txt"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Check actual Windows helper cancellation and cleanup
+        run: |
+          & "$env:RUNNER_TEMP\tempo-preflight-python\Scripts\python.exe" -m unittest -v tests.test_model_assistance_runtime.AssistanceRuntimeTests.test_cancel_stops_real_helper_descendants tests.test_model_assistance_runtime.AssistanceRuntimeTests.test_failed_parent_cannot_leave_a_running_helper
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
