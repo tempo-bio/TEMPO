@@ -693,7 +693,6 @@ class CaptureTools(QWidget):
             self.parameter_labels.append(QLabel(label))
             value_font = QFont(self.font()); value_font.setPointSizeF(self.font().pointSizeF()*19/16)
             control.setFont(value_font)
-            control.setStyleSheet('QDoubleSpinBox { color: #d2f0e6; padding: 4px; } QDoubleSpinBox:disabled { color: #d2f0e6; }')
             control.setSizePolicy(QSizePolicy.Policy.Ignored,QSizePolicy.Policy.Fixed)
             control.setMinimumWidth(control.fontMetrics().horizontalAdvance(control.text())+30)
             control.setAccessibleName(label)
@@ -793,8 +792,24 @@ class CaptureTools(QWidget):
         self.stop_button.clicked.connect(self.emergency_stop); layout.addWidget(self.stop_button)
         self.capture.well_id.currentTextChanged.connect(self.selection_changed)
         self.capture.fov_id.valueChanged.connect(self.field_changed)
+        self.apply_theme()
         self.refresh_controls()
         self.arrange_parameters()
+
+    def apply_theme(self):
+        from tempo_ui import get_current_theme
+        t = get_current_theme()
+        digits = t.get('stim_digits', '#d2f0e6')
+        bg = t.get('base', '#111923')
+        border = t.get('input_border', '#465467')
+        disabled = t.get('disabled_text', '#99a3b0')
+        style = f'QDoubleSpinBox {{ color: {digits}; background: {bg}; font-weight: bold; padding: 4px; border: 1px solid {border}; border-radius: 3px; }} QDoubleSpinBox:disabled {{ color: {disabled}; }}'
+        for control in (self.amplitude, self.frequency, self.width):
+            control.setStyleSheet(style)
+        if hasattr(self, 'scope_preview'):
+            self.scope_preview.trace.update()
+        if hasattr(self, 'pre_mode'):
+            self.pre_mode.update()
 
     def arrange_parameters(self, *args):
         controls = (self.amplitude,self.frequency,self.width)

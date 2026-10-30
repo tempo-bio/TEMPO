@@ -4,7 +4,7 @@ import os
 import sys
 from html import escape
 from PyQt6.QtCore import QObject, QEvent, Qt, QSize, QRectF, QPoint, QTimer, pyqtSignal
-from PyQt6.QtGui import QPalette, QColor, QTextOption, QPainter, QPen
+from PyQt6.QtGui import QPalette, QColor, QTextOption, QPainter, QPen, QBrush, QPainterPath
 from PyQt6.QtWidgets import QApplication, QAbstractButton, QCheckBox, QSlider, QDialog, QMessageBox, QTextEdit, QFrame, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QToolButton, QToolTip, QSizePolicy, QLayout, QGroupBox, QGridLayout, QFormLayout, QLineEdit, QTabWidget, QScrollArea, QProxyStyle, QStyle, QStyleOptionButton
 
 
@@ -382,12 +382,17 @@ class SlidingChoice(QSlider):
         cell=(self.width()-4)/2
         position=self.value() if self._drag_position is None else self._drag_position
         overlay=QRectF(2+cell*position,2,cell,self.height()-4)
-        painter.setPen(QPen(QColor(124,228,186,130 if self.isEnabled() else 55),1))
-        painter.setBrush(QColor(124,228,186,24 if self.isEnabled() else 10))
+        t = get_current_theme()
+        border = t.get('sliding_border', QColor(124,228,186,130 if self.isEnabled() else 55))
+        fill = t.get('sliding_fill', QColor(124,228,186,24 if self.isEnabled() else 10))
+        painter.setPen(QPen(border, 1.8 if self.isEnabled() else 1.0))
+        painter.setBrush(fill if self.isEnabled() else QColor(0,0,0,0))
         painter.drawRoundedRect(overlay,4,4)
         painter.setFont(self.font())
+        text_color = t.get('sliding_text', '#edf2f7')
+        disabled_color = t.get('disabled_text', '#99a3b0')
         for index,label in enumerate(self.labels):
-            painter.setPen(QColor('#edf2f7' if self.isEnabled() else '#99a3b0'))
+            painter.setPen(QColor(text_color if self.isEnabled() else disabled_color))
             painter.drawText(QRectF(2+index*cell,0,cell,self.height()),Qt.AlignmentFlag.AlignCenter,label)
 
     def mousePressEvent(self,event):
@@ -409,6 +414,85 @@ class SlidingChoice(QSlider):
         choice=(1 if self._drag_position>=.5 else 0) if self._dragged else int(event.position().x()>=self.width()/2)
         self._drag_position=None
         self.setValue(choice); self.update(); event.accept()
+
+
+class ThemeSegmentedChoice(QWidget):
+    """Mutually exclusive segmented buttons for theme selection."""
+    themeChanged = pyqtSignal(str)
+
+    def __init__(self, options, current_value='dark', parent=None):
+        super().__init__(parent)
+        self.options = tuple(options)
+        self._current_value = current_value if current_value in self.options else 'dark'
+        self.buttons = {}
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        for i, opt in enumerate(self.options):
+            label = {"dark": "Dark", "light": "Light", "oatmeal": "Oatmeal"}.get(opt, opt.capitalize())
+            btn = QPushButton(label)
+            btn.setCheckable(True)
+            btn.setAutoExclusive(True)
+            btn.setProperty('themeOption', opt)
+            if opt == self._current_value:
+                btn.setChecked(True)
+            btn.clicked.connect(lambda checked, o=opt: self._on_clicked(o))
+            layout.addWidget(btn)
+            self.buttons[opt] = btn
+        self.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
+        self.update_styles()
+
+    def _on_clicked(self, opt):
+        if self._current_value != opt:
+            self._current_value = opt
+            self.update_styles()
+            self.themeChanged.emit(opt)
+
+    def value(self):
+        return self._current_value
+
+    def setValue(self, val):
+        if val in self.buttons and self._current_value != val:
+            self._current_value = val
+            self.buttons[val].setChecked(True)
+            self.update_styles()
+
+    def update_styles(self):
+        t = get_current_theme()
+        opts = self.options
+        for i, opt in enumerate(opts):
+            btn = self.buttons[opt]
+            is_checked = (opt == self._current_value)
+            btn.setChecked(is_checked)
+            radius_style = []
+            if i == 0:
+                radius_style.append("border-top-right-radius: 0; border-bottom-right-radius: 0; border-right: none;")
+            elif i == len(opts) - 1:
+                radius_style.append("border-top-left-radius: 0; border-bottom-left-radius: 0;")
+            else:
+                radius_style.append("border-radius: 0; border-right: none;")
+            
+            if is_checked:
+                bg = t['action_green']
+                fg = '#FFFFFF'
+                weight = 'font-weight: bold;'
+            else:
+                bg = t['button_default']
+                fg = t['text']
+                weight = ''
+            btn.setStyleSheet(f'''
+                QPushButton {{
+                    {' '.join(radius_style)}
+                    background: {bg};
+                    color: {fg};
+                    border: 1px solid {t['border']};
+                    padding: 5px 14px;
+                    {weight}
+                }}
+                QPushButton:hover {{
+                    background: {t['button_hover'] if not is_checked else bg};
+                }}
+            ''')
 
 
 class InformationSlot(QWidget):
@@ -546,52 +630,249 @@ def format_model_metric(record):
 
 
 UI_REVISION = 'presentation-2026-10-14-r11'
+
+THEMES = {
+    'dark': {
+        'name': 'dark',
+        'label': 'Dark',
+        'window': '#19212C',
+        'window_text': '#EDF2F7',
+        'base': '#111923',
+        'alternate_base': '#202C3A',
+        'text': '#EDF2F7',
+        'button': '#29384A',
+        'button_text': '#EDF2F7',
+        'button_default': '#333333',
+        'button_hover': '#354B61',
+        'button_pressed': '#1B2938',
+        'button_border': '#526174',
+        'border': '#3C4959',
+        'input_border': '#465467',
+        'disabled_text': '#99A3B0',
+        'disabled_bg': '#252B34',
+        'disabled_border': '#39414C',
+        'highlight': '#315776',
+        'highlighted_text': '#FFFFFF',
+        'tab_bg': '#222E3D',
+        'tab_text': '#D6DFE9',
+        'tab_selected_bg': '#315776',
+        'tab_selected_text': '#FFFFFF',
+        'tooltip_bg': '#253447',
+        'tooltip_text': '#FFFFFF',
+        'tooltip_border': '#71859C',
+        'progress_bg': '#252E3A',
+        'progress_chunk': '#357F70',
+        'checkbox_indicator_bg': '#111923',
+        'checkbox_checked_bg': '#26675C',
+        'checkbox_border': '#8495A9',
+        'action_green': '#3EA685',
+        'desc_blue': '#79C0FF',
+        'guidance_mint': '#7CE4BA',
+        'stim_digits': '#D2F0E6',
+        'plot_bg': '#1E1E1E',
+        'plot_curve1': '#79C0FF',
+        'plot_curve2': '#7CE4BA',
+        'scope_bg': '#101820',
+        'scope_grid': '#2C3D4D',
+        'scope_baseline': '#73879A',
+        'scope_trace': '#65DFA5',
+        'scope_text': '#D3DFEB',
+        'scope_warn': '#F2B36F',
+        'sliding_border': QColor(124, 228, 186, 130),
+        'sliding_fill': QColor(124, 228, 186, 24),
+        'sliding_text': '#EDF2F7',
+    },
+    'light': {
+        'name': 'light',
+        'label': 'Light',
+        'window': '#F3F4F6',
+        'window_text': '#0F172A',
+        'base': '#FFFFFF',
+        'alternate_base': '#E5E7EB',
+        'text': '#0F172A',
+        'button': '#E2E8F0',
+        'button_text': '#0F172A',
+        'button_default': '#E2E8F0',
+        'button_hover': '#CBD5E1',
+        'button_pressed': '#94A3B8',
+        'button_border': '#CBD5E1',
+        'border': '#CBD5E1',
+        'input_border': '#94A3B8',
+        'disabled_text': '#64748B',
+        'disabled_bg': '#F1F5F9',
+        'disabled_border': '#CBD5E1',
+        'highlight': '#93C5FD',
+        'highlighted_text': '#0F172A',
+        'tab_bg': '#E2E8F0',
+        'tab_text': '#334155',
+        'tab_selected_bg': '#FFFFFF',
+        'tab_selected_text': '#0F172A',
+        'tooltip_bg': '#1E293B',
+        'tooltip_text': '#F8FAFC',
+        'tooltip_border': '#475569',
+        'progress_bg': '#E2E8F0',
+        'progress_chunk': '#2B8A6E',
+        'checkbox_indicator_bg': '#FFFFFF',
+        'checkbox_checked_bg': '#2B8A6E',
+        'checkbox_border': '#64748B',
+        'action_green': '#2B8A6E',
+        'desc_blue': '#0369A1',
+        'guidance_mint': '#15803D',
+        'stim_digits': '#0F172A',
+        'plot_bg': '#FFFFFF',
+        'plot_curve1': '#0284C7',
+        'plot_curve2': '#0D9488',
+        'scope_bg': '#FFFFFF',
+        'scope_grid': '#CBD5E1',
+        'scope_baseline': '#94A3B8',
+        'scope_trace': '#0284C7',
+        'scope_text': '#0F172A',
+        'scope_warn': '#C2410C',
+        'sliding_border': QColor(43, 138, 110, 180),
+        'sliding_fill': QColor(43, 138, 110, 35),
+        'sliding_text': '#0F172A',
+    },
+    'oatmeal': {
+        'name': 'oatmeal',
+        'label': 'Oatmeal',
+        'window': '#CEBEA5',       # raw kraft cardboard
+        'window_text': '#282119',  # dark walnut ink
+        'base': '#DDD0BD',         # aged notebook page
+        'alternate_base': '#C4B399',# pressed chipboard
+        'text': '#282119',         # dark walnut ink
+        'button': '#BCAB91',       # cardstock button
+        'button_text': '#282119',
+        'button_default': '#BCAB91',
+        'button_hover': '#C8B79E',
+        'button_pressed': '#A8977F',
+        'button_border': '#8F7D65',
+        'border': '#8F7D65',       # defined score line
+        'input_border': '#8F7D65',
+        'disabled_text': '#6E6150',# graphite pencil
+        'disabled_bg': '#C2B198',
+        'disabled_border': '#A8977F',
+        'highlight': '#9E886D',    # toasted kraft tint
+        'highlighted_text': '#18130E',
+        'tab_bg': '#C2B198',
+        'tab_text': '#3D3328',
+        'tab_selected_bg': '#DDD0BD',
+        'tab_selected_text': '#282119',
+        'tooltip_bg': '#382E25',   # deep aged leather
+        'tooltip_text': '#F2E9DD',
+        'tooltip_border': '#706050',
+        'progress_bg': '#C2B198',
+        'progress_chunk': '#2D593E',
+        'checkbox_indicator_bg': '#DDD0BD',
+        'checkbox_checked_bg': '#2D593E',
+        'checkbox_border': '#6E6150',
+        'action_green': '#2D593E', # deep archival forest green button
+        'desc_blue': '#1A4366',    # Deep archival navy/cyan ink (contrast 6.5:1 on #DDD0BD)
+        'guidance_mint': '#1B5E35',# Deep pine green ink (contrast 5.8:1 on #DDD0BD)
+        'stim_digits': '#1A3B2B',  # Deep dark spruce for voltage, freq, pulse width
+        'plot_bg': '#E2D5C0',      # warm aged paper graticule screen
+        'plot_curve1': '#1A4366',  # deep archival indigo
+        'plot_curve2': '#8A3B14',  # deep terracotta
+        'scope_bg': '#E2D5C0',     # oscilloscope screen matching warm graticule
+        'scope_grid': '#C2AF94',   # sepia graticule divisions
+        'scope_baseline': '#7C694E',# defined sepia baseline
+        'scope_trace': '#1A4366',  # crisp dark blueprint indigo trace
+        'scope_text': '#282119',   # dark ink captions
+        'scope_warn': '#8A3B14',   # dark terracotta warning
+        'sliding_border': QColor(45, 89, 62, 210), # rich dark forest border
+        'sliding_fill': QColor(45, 89, 62, 45),    # subtle forest tint
+        'sliding_text': '#282119', # dark ink choice text
+    }
+}
+
+_ACTIVE_THEME = 'dark'
+
+def get_current_theme_name():
+    global _ACTIVE_THEME
+    return _ACTIVE_THEME
+
+def get_current_theme():
+    return THEMES.get(get_current_theme_name(), THEMES['dark'])
+
+def description_color():
+    return get_current_theme().get('desc_blue', '#79C0FF')
+
+def guidance_color():
+    return get_current_theme().get('guidance_mint', '#7CE4BA')
+
 ACTION_GREEN = '#3EA685'
 DESCRIPTION_BLUE = '#79C0FF'
 GUIDANCE_MINT = '#7CE4BA'
 
-APP_STYLE = '''
-QWidget { outline: none; }
-QPushButton { background: #333333; color: #edf2f7; border: 1px solid #526174;
- border-radius: 4px; padding: 6px 10px; }
-QPushButton:hover { background: #354b61; border-color: #8db5d9; }
-QPushButton:pressed { background: #1b2938; }
-QPushButton, QToolButton { outline: none; }
-QToolButton { border: 1px solid #526174; }
-#tempoToolsMenu QPushButton { background: #2f4052; outline: none; }
-#tempoToolsMenu QPushButton:hover { background: #354b61; border-color: #8db5d9; }
-#tempoToolsMenu QPushButton:pressed { background: #1b2938; border-color: #526174; }
-QPushButton[primary="true"]:enabled { background: ACTION_GREEN_TOKEN; border-color: ACTION_GREEN_TOKEN; color: white; }
-QPushButton[plateWell="true"] { padding: 0; min-height: 26px; max-height: 26px; font-size: 11px; }
-QPushButton:disabled { color: #99a3b0; background: #252b34; border-color: #39414c; }
-QLineEdit, QTextEdit, QListWidget, QTableWidget, QSpinBox, QDoubleSpinBox, QComboBox {
- background: #111923; color: #edf2f7; border: 1px solid #465467; border-radius: 3px; padding: 4px; }
+def get_theme_palette(theme_name='dark'):
+    t = THEMES.get(theme_name, THEMES['dark'])
+    palette = QPalette()
+    for role, color in [(QPalette.ColorRole.Window, t['window']),
+                        (QPalette.ColorRole.WindowText, t['window_text']),
+                        (QPalette.ColorRole.Base, t['base']),
+                        (QPalette.ColorRole.AlternateBase, t['alternate_base']),
+                        (QPalette.ColorRole.Text, t['text']),
+                        (QPalette.ColorRole.Button, t['button']),
+                        (QPalette.ColorRole.ButtonText, t['button_text']),
+                        (QPalette.ColorRole.Highlight, t['highlight']),
+                        (QPalette.ColorRole.HighlightedText, t['highlighted_text'])]:
+        palette.setColor(role, QColor(color))
+    for role in (QPalette.ColorRole.Text, QPalette.ColorRole.WindowText, QPalette.ColorRole.ButtonText):
+        palette.setColor(QPalette.ColorGroup.Disabled, role, QColor(t['disabled_text']))
+    return palette
+
+def build_app_style(theme_name='dark'):
+    t = THEMES.get(theme_name, THEMES['dark'])
+    action_green = t['action_green']
+    checkbox_svg = (Path(__file__).parent / 'assets' / 'checkbox-check.svg').as_posix()
+    
+    style = f'''
+QWidget {{ outline: none; }}
+QLabel {{ color: {t['window_text']}; }}
+QPushButton {{ background: {t['button_default']}; color: {t['button_text']}; border: 1px solid {t['button_border']};
+ border-radius: 4px; padding: 6px 10px; }}
+QPushButton:hover {{ background: {t['button_hover']}; border-color: {t['button_border']}; }}
+QPushButton:pressed {{ background: {t['button_pressed']}; }}
+QPushButton, QToolButton {{ outline: none; }}
+QToolButton {{ border: 1px solid {t['button_border']}; color: {t['button_text']}; background: {t['button_default']}; }}
+#tempoToolsMenu QPushButton {{ background: {t['button']}; outline: none; }}
+#tempoToolsMenu QPushButton:hover {{ background: {t['button_hover']}; border-color: {t['button_border']}; }}
+#tempoToolsMenu QPushButton:pressed {{ background: {t['button_pressed']}; border-color: {t['button_border']}; }}
+QPushButton[primary="true"]:enabled {{ background: {action_green}; border-color: {action_green}; color: white; }}
+QPushButton[plateWell="true"] {{ padding: 0; min-height: 26px; max-height: 26px; font-size: 11px; }}
+QPushButton:disabled {{ color: {t['disabled_text']}; background: {t['disabled_bg']}; border-color: {t['disabled_border']}; }}
+QLineEdit, QTextEdit, QListWidget, QTableWidget, QSpinBox, QDoubleSpinBox, QComboBox {{
+ background: {t['base']}; color: {t['text']}; border: 1px solid {t['input_border']}; border-radius: 3px; padding: 4px; }}
 QLineEdit:disabled, QTextEdit:disabled, QListWidget:disabled, QTableWidget:disabled,
-QSpinBox:disabled, QDoubleSpinBox:disabled, QComboBox:disabled {
- background: #252b34; color: #99a3b0; border-color: #39414c; }
-QTextEdit[filename="true"] { background: transparent; border: none; padding: 0; }
-QAbstractItemView::item:selected { background: #315776; color: #ffffff; }
-QGroupBox { border: 1px solid #3c4959; border-radius: 4px; margin-top: 9px; padding-top: 4px; }
-QGroupBox::title { subcontrol-origin: margin; left: 9px; padding: 0 4px; }
-QTabWidget::pane { border: 1px solid #3c4959; }
-QTabBar::tab { padding: 7px 10px; background: #222e3d; color: #d6dfe9; }
-QTabBar::tab:selected { background: #315776; color: #ffffff; }
-QProgressBar { background: #252e3a; border: 1px solid #465467; border-radius: 3px; color: #edf2f7; text-align: center; min-height: 18px; }
-QProgressBar::chunk { background: #357f70; }
-QCheckBox { spacing: 7px; }
-QCheckBox::indicator { width: 16px; height: 16px; border: 1px solid #8495a9; border-radius: 3px; background: #111923; }
-QCheckBox::indicator:hover { border-color: #91c9f7; }
-QCheckBox::indicator:checked { background: #26675c; image: url("CHECKBOX_IMAGE"); }
-QCheckBox::indicator:disabled { border-color: #526174; background: #252b34; }
-QToolTip { background: #253447; color: #ffffff; border: 1px solid #71859c; padding: 5px; }
-'''.replace('ACTION_GREEN_TOKEN', ACTION_GREEN).replace('CHECKBOX_IMAGE', (Path(__file__).parent / 'assets' / 'checkbox-check.svg').as_posix())
-for color in ('#2D9CDB', ACTION_GREEN, '#F2994A', '#E74C3C', '#1A5276', '#0088CC',
-              '#9B51E0', '#E67E22', '#AA00FF', '#4A5568', '#253447'):
-    APP_STYLE += f'''
+QSpinBox:disabled, QDoubleSpinBox:disabled, QComboBox:disabled {{
+ background: {t['disabled_bg']}; color: {t['disabled_text']}; border-color: {t['disabled_border']}; }}
+QTextEdit[filename="true"] {{ background: transparent; border: none; padding: 0; }}
+QAbstractItemView::item:selected {{ background: {t['highlight']}; color: {t['highlighted_text']}; }}
+QGroupBox {{ border: 1px solid {t['border']}; border-radius: 4px; margin-top: 9px; padding-top: 4px; background: {t['alternate_base']}; }}
+QGroupBox::title {{ subcontrol-origin: margin; left: 9px; padding: 0 4px; color: {t['window_text']}; }}
+QTabWidget::pane {{ border: 1px solid {t['border']}; background: {t['window']}; }}
+QTabBar::tab {{ padding: 7px 10px; background: {t['tab_bg']}; color: {t['tab_text']}; }}
+QTabBar::tab:selected {{ background: {t['tab_selected_bg']}; color: {t['tab_selected_text']}; }}
+QProgressBar {{ background: {t['progress_bg']}; border: 1px solid {t['input_border']}; border-radius: 3px; color: {t['text']}; text-align: center; min-height: 18px; }}
+QProgressBar::chunk {{ background: {t['progress_chunk']}; }}
+QCheckBox {{ spacing: 7px; color: {t['window_text']}; }}
+QCheckBox::indicator {{ width: 16px; height: 16px; border: 1px solid {t['checkbox_border']}; border-radius: 3px; background: {t['checkbox_indicator_bg']}; }}
+QCheckBox::indicator:hover {{ border-color: {t['highlight']}; }}
+QCheckBox::indicator:checked {{ background: {t['checkbox_checked_bg']}; image: url("{checkbox_svg}"); }}
+QCheckBox::indicator:disabled {{ border-color: {t['disabled_border']}; background: {t['disabled_bg']}; }}
+QToolTip {{ background: {t['tooltip_bg']}; color: {t['tooltip_text']}; border: 1px solid {t['tooltip_border']}; padding: 5px; }}
+QScrollArea {{ background: {t['window']}; border: none; }}
+QScrollArea > QWidget > QWidget {{ background: {t['window']}; }}
+'''
+    for color in ('#2D9CDB', action_green, '#F2994A', '#E74C3C', '#1A5276', '#0088CC',
+                  '#9B51E0', '#E67E22', '#AA00FF', '#4A5568', '#253447'):
+        style += f'''
 QPushButton[actionColor="{color}"]:enabled {{ background: {color}; color: white; border-color: {color}; }}
 QPushButton[actionColor="{color}"]:enabled:hover {{ background: {QColor(color).lighter(112).name()}; }}
 QPushButton[actionColor="{color}"]:enabled:pressed {{ background: {QColor(color).darker(115).name()}; }}
 '''
+    return style
+
+APP_STYLE = build_app_style('dark')
 
 
 def set_button_color(button, color):
@@ -678,34 +959,46 @@ def prepare_offscreen_fonts(app):
     return app._tempo_font_evidence
 
 
-def install_ui(app=None):
+def apply_theme(theme_name='dark', app=None):
+    app = app or QApplication.instance()
+    if app is None:
+        return
+    theme_name = theme_name if theme_name in THEMES else 'dark'
+    global _ACTIVE_THEME, ACTION_GREEN, DESCRIPTION_BLUE, GUIDANCE_MINT, APP_STYLE
+    _ACTIVE_THEME = theme_name
+    t = THEMES[theme_name]
+    ACTION_GREEN = t['action_green']
+    DESCRIPTION_BLUE = t['desc_blue']
+    GUIDANCE_MINT = t['guidance_mint']
+    APP_STYLE = build_app_style(theme_name)
+    app.setPalette(get_theme_palette(theme_name))
+    app.setStyleSheet(APP_STYLE)
+    app.setProperty('tempoTheme', theme_name)
+    for window in app.topLevelWidgets():
+        window.style().unpolish(window)
+        window.style().polish(window)
+        window.update()
+
+
+def install_ui(app=None, theme_name=None):
     app = app or QApplication.instance()
     if app is None:
         return
     prepare_offscreen_fonts(app)
-    if hasattr(app, '_tempo_interactions'):
-        return
-    app._tempo_style = FocusNeutralStyle(app.style().objectName() or 'Fusion')
-    app.setStyle(app._tempo_style)
-    app._tempo_interactions = InteractionStyle(app)
-    app.installEventFilter(app._tempo_interactions)
-    palette = QPalette()
-    for role, color in [(QPalette.ColorRole.Window, '#19212c'),
-                        (QPalette.ColorRole.WindowText, '#edf2f7'),
-                        (QPalette.ColorRole.Base, '#111923'),
-                        (QPalette.ColorRole.AlternateBase, '#202c3a'),
-                        (QPalette.ColorRole.Text, '#edf2f7'),
-                        (QPalette.ColorRole.Button, '#29384a'),
-                        (QPalette.ColorRole.ButtonText, '#edf2f7'),
-                        (QPalette.ColorRole.Highlight, '#315776'),
-                        (QPalette.ColorRole.HighlightedText, '#ffffff')]:
-        palette.setColor(role, QColor(color))
-    for role in (QPalette.ColorRole.Text, QPalette.ColorRole.WindowText, QPalette.ColorRole.ButtonText):
-        palette.setColor(QPalette.ColorGroup.Disabled, role, QColor('#99a3b0'))
-    app.setPalette(palette)
-    app.setStyleSheet(APP_STYLE)
-    app.setProperty('tempoUiRevision', UI_REVISION)
-    app.setProperty('tempoUiSource', str(Path(__file__).resolve()))
+    if not hasattr(app, '_tempo_interactions'):
+        app._tempo_style = FocusNeutralStyle(app.style().objectName() or 'Fusion')
+        app.setStyle(app._tempo_style)
+        app._tempo_interactions = InteractionStyle(app)
+        app.installEventFilter(app._tempo_interactions)
+        app.setProperty('tempoUiRevision', UI_REVISION)
+        app.setProperty('tempoUiSource', str(Path(__file__).resolve()))
+    if theme_name is None:
+        try:
+            from tempo_config import tempo_preferences
+            theme_name = tempo_preferences.get('appearance', 'theme', 'dark')
+        except Exception:
+            theme_name = 'dark'
+    apply_theme(theme_name, app)
 
 
 class WrappingCheckBox(QCheckBox):
