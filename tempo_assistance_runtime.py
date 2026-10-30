@@ -4,11 +4,11 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
-import signal
 import subprocess
 import sys
 import tempfile
 import time
+from tempo_process import job_for_child as _job_for_child, stop_tree as _stop_tree
 
 
 STAGES = {
@@ -64,28 +64,6 @@ def assist_command(image, model, conf, iou, result_path, status_path, *, require
         return 1
 
 
-def _stop_tree(process):
-    if process.poll() is not None:
-        return
-    if os.name == 'nt':
-        try:
-            subprocess.run(['taskkill', '/PID', str(process.pid), '/T', '/F'],
-                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=15,
-                           creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
-        except (OSError, subprocess.TimeoutExpired):
-            process.kill()
-    else:
-        try:
-            os.killpg(process.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-    try:
-        process.wait(timeout=15)
-    except subprocess.TimeoutExpired:
-        process.kill()
-        process.wait(timeout=15)
-
-
 def run_assistance(image, model, conf, iou, progress=lambda text: None, *,
                    stage=lambda code: None, timeout=TIMEOUT_SECONDS):
     """Poll actual child stages; bound native hangs and never launch a dashboard."""
@@ -94,10 +72,12 @@ def run_assistance(image, model, conf, iou, progress=lambda text: None, *,
     executable = sys.executable
     command = '--assist-model'
     frozen = bool(getattr(sys, 'frozen', False))
+    prefix = []
     if not frozen and sys.platform == 'darwin' and '.venv_x86' in executable:
         native = Path(__file__).resolve().parent / '.venv' / 'bin' / 'python'
         if native.is_file():
             executable = str(native)
+            prefix = ['arch', '-arm64']
     if model == 'cellpose' and sys.platform == 'win32' and getattr(sys, 'frozen', False):
         from tempo_nvidia_runtime import active_executable
         worker = active_executable()
@@ -106,16 +86,22 @@ def run_assistance(image, model, conf, iou, progress=lambda text: None, *,
     with tempfile.TemporaryDirectory(prefix='tempo-assistance-') as directory:
         report = Path(directory) / 'result.json'
         status = Path(directory) / 'status.json'
-        arguments = [str(executable)]
+        arguments = [*prefix, str(executable)]
         if not frozen:
             arguments.append(str(Path(__file__).resolve().with_name('tempo_gui.py')))
         arguments.extend((command, str(image), model, str(conf), str(iou), str(report), str(status)))
         options = ({'creationflags': getattr(subprocess, 'CREATE_NO_WINDOW', 0)} if os.name == 'nt'
                    else {'start_new_session': True})
-        process = subprocess.Popen(arguments, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, **options)
+        job = _job_for_child()
+        if job is not None:
+            options['creationflags'] |= 0x4  # CREATE_SUSPENDED; assign the job before it can spawn helpers.
+        process = None
         last_stage = None
         deadline = time.monotonic() + timeout
         try:
+            process = subprocess.Popen(arguments, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, **options)
+            if job is not None:
+                job.start(process)
             while process.poll() is None:
                 if time.monotonic() >= deadline:
                     raise TimeoutError('Model assistance exceeded 15 minutes; no annotations were changed.')
@@ -138,7 +124,12 @@ def run_assistance(image, model, conf, iou, progress=lambda text: None, *,
                 except (OSError, ValueError, TypeError, AttributeError):
                     pass
         finally:
-            _stop_tree(process)
+            try:
+                if job is not None:
+                    job.close()
+            finally:
+                if process is not None:
+                    _stop_tree(process)
         if not report.is_file() or report.stat().st_size > MAX_REPORT_BYTES:
             raise RuntimeError('The model worker did not return a valid result.')
         result = json.loads(report.read_text(encoding='utf-8'))

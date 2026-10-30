@@ -30,11 +30,39 @@ class UninstallDialogTests(unittest.TestCase):
     def setUp(self):
         self.app = APP
 
+    def test_pending_uninstall_keeps_options_visible_at_small_and_large_font_sizes(self):
+        for font in (11, 18):
+            with self.subTest(font=font):
+                parent = QMainWindow()
+                parent.request_close_action = lambda action: setattr(parent, '_close_action', action)
+                parent.cancel_close_action = lambda: setattr(parent, '_close_action', None)
+                with patch('tempo_uninstall.find_windows_uninstaller', return_value=Path('C:/Programs/TEMPO/unins000.exe')):
+                    dialog = UninstallTempoDialog(parent)
+                dialog.setStyleSheet(f'QWidget {{ font-size: {font}pt; }}')
+                dialog.resize(480, 300)
+                dialog.execute_uninstall(); dialog.show(); APP.processEvents()
+                for checkbox in (dialog.cb_prefs, dialog.cb_creds):
+                    self.assertTrue(checkbox.visibleRegion().contains(checkbox.rect()))
+                    self.assertGreaterEqual(checkbox.height(), checkbox.sizeHint().height())
+                self.assertGreaterEqual(dialog.notice.height(), dialog.notice.heightForWidth(dialog.notice.width()))
+                self.assertTrue(dialog.btn_cancel.visibleRegion().contains(dialog.btn_cancel.rect()))
+                widgets = [dialog.layout().itemAt(index).widget() for index in range(dialog.layout().count())]
+                widgets = [widget for widget in widgets if widget is not None]
+                for above, below in zip(widgets, widgets[1:]):
+                    self.assertLess(above.geometry().bottom(), below.geometry().top())
+                dialog.reject(); close_fixture(dialog); close_fixture(parent)
+
     def test_find_windows_uninstaller(self):
         with patch.object(sys, 'platform', 'linux'), patch.object(sys, 'frozen', False, create=True):
             self.assertIsNone(find_windows_uninstaller())
 
-        with patch.object(sys, 'platform', 'win32'), patch.object(Path, 'exists', return_value=True):
+        for platform, frozen in (('win32', False), ('darwin', True), ('linux', True)):
+            with self.subTest(platform=platform, frozen=frozen), \
+                 patch.object(sys, 'platform', platform), patch.object(sys, 'frozen', frozen, create=True), \
+                 patch.object(Path, 'exists') as lookup:
+                self.assertIsNone(find_windows_uninstaller())
+                lookup.assert_not_called()
+        with patch.object(sys, 'platform', 'win32'), patch.object(sys, 'frozen', True, create=True), patch.object(Path, 'exists', return_value=True):
             uninstaller = find_windows_uninstaller()
             self.assertIsNotNone(uninstaller)
             self.assertTrue(str(uninstaller).endswith('unins000.exe'))
@@ -73,11 +101,12 @@ class UninstallDialogTests(unittest.TestCase):
     def test_execute_uninstall_launches_process_and_cleans_requested_data(self):
         parent = QMainWindow()
         self.addCleanup(close_fixture, parent)
-        parent.close = Mock()
+        parent.close = Mock(return_value=True)
 
         fake_uninstaller = Path('/fake/path/unins000.exe')
         with patch('tempo_uninstall.find_windows_uninstaller', return_value=fake_uninstaller), \
              patch.object(Path, 'exists', return_value=True), \
+             patch.object(Path, 'is_file', return_value=True), \
              patch('tempo_secure_store.delete_hf_token') as mock_del_token, \
              patch('tempo_hub.tempo_hub') as mock_hub, \
              patch('os.path.exists', return_value=True), \
@@ -99,7 +128,36 @@ class UninstallDialogTests(unittest.TestCase):
             mock_popen.assert_called_once()
             self.assertIn(str(fake_uninstaller), mock_popen.call_args[0][0])
             parent.close.assert_called_once()
-            mock_quit.assert_called_once()
+            mock_quit.assert_not_called()
+
+    def test_rejected_close_preserves_data_and_does_not_launch_uninstaller(self):
+        parent = QMainWindow()
+        parent.close = Mock(return_value=False)
+        with patch('tempo_uninstall.find_windows_uninstaller', return_value=Path('/fixture/unins000.exe')), \
+             patch('tempo_secure_store.delete_hf_token') as delete, patch('os.remove') as remove, \
+             patch('subprocess.Popen') as launch:
+            dialog = UninstallTempoDialog(parent)
+            dialog.cb_creds.setChecked(True); dialog.cb_prefs.setChecked(True)
+            dialog.execute_uninstall()
+            delete.assert_not_called(); remove.assert_not_called(); launch.assert_not_called()
+            dialog.reject()
+            self.assertFalse(dialog._close_poll.isActive())
+        del parent.close
+        close_fixture(dialog); close_fixture(parent)
+
+    def test_cleanup_failure_is_visible_and_keeps_uninstaller_unlaunched(self):
+        parent = QMainWindow()
+        with patch('tempo_uninstall.find_windows_uninstaller', return_value=Path('/fixture/unins000.exe')), \
+             patch('tempo_secure_store.delete_hf_token', side_effect=RuntimeError('Unlock secure storage and retry.')), \
+             patch('subprocess.Popen') as launch:
+            dialog = UninstallTempoDialog(parent)
+            dialog.cb_creds.setChecked(True)
+            dialog.execute_uninstall()
+            self.assertIn('Unlock secure storage', dialog.notice.text())
+            self.assertTrue(dialog.isVisible())
+            self.assertTrue(dialog.btn_uninstall.isEnabled())
+            launch.assert_not_called()
+        close_fixture(dialog); close_fixture(parent)
 
     def test_settings_tab_tools_menu_has_uninstall_action(self):
         settings = gui.SettingsTab()

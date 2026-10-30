@@ -11,6 +11,15 @@ import tempo_startup_diagnostics as diagnostics
 
 
 class StartupDiagnosticsTests(unittest.TestCase):
+    def test_unwritable_optional_report_does_not_abort_startup(self):
+        arguments = ['TEMPO.exe', '--diagnose-startup', 'unwritable.json']
+        with patch.object(diagnostics, '_recorder', None), \
+             patch.object(diagnostics.StartupRecorder, 'flush', side_effect=PermissionError('denied')):
+            diagnostics.start_from_arguments(arguments)
+            self.assertIsNone(diagnostics._recorder)
+            self.assertEqual(arguments, ['TEMPO.exe'])
+            diagnostics.record('dashboard.shown')
+
     def test_progress_lock_owner_matches_thread_and_inspection_does_not_acquire(self):
         lock = threading.RLock()
         class Progress:

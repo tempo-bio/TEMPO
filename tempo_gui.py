@@ -7248,7 +7248,7 @@ class TempoDashboard(QMainWindow):
         self.update_result_actions()
         if getattr(self, '_quit_after_processing', False):
             self._quit_after_processing = False
-            QTimer.singleShot(0, self.close)
+            QTimer.singleShot(0, self._retry_close)
 
     def cancel_processing(self):
         if getattr(self, 'worker', None) and self.worker.isRunning():
@@ -7513,20 +7513,43 @@ class TempoDashboard(QMainWindow):
             self.refresh_processing_queue()
             self.queue_feedback.setText('Entry removed from the queue. The recording file was kept.')
 
+    def _retry_close(self):
+        if not getattr(self, '_cancel_close_retry', False):
+            self.close()
+
+    def _resume_after_close_action(self):
+        self._quit_annotation_confirmation = None
+        self.tab_annotator._shutdown_requested = False
+        self.tab_annotator.lease_timer.start()
+        if any(record.get('sync_pending') or record.get('nuclear_sync_pending')
+               for record in self.tab_annotator.universal_annotations.values()):
+            self.tab_annotator._sync_timer.start(1000)
+        self.tab_maintainer.timer.start()
+
+    def request_close_action(self, action):
+        """Run an exit action only after the normal shutdown guards settle."""
+        self._close_action = action
+        self._cancel_close_retry = False
+        return self.close()
+
+    def cancel_close_action(self):
+        if getattr(self, '_close_action', None) is not None:
+            self._close_action = None
+            self._cancel_close_retry = True
+            self._quit_after_processing = False
+            self._resume_after_close_action()
+
     def capture_cleanup_finished(self, success):
         if success:
-            QTimer.singleShot(0, self.close)
+            QTimer.singleShot(0, self._retry_close)
         else:
-            self._quit_annotation_confirmation = None
-            self.tab_annotator._shutdown_requested = False
-            self.tab_annotator.lease_timer.start()
-            if any(record.get('sync_pending') for record in self.tab_annotator.universal_annotations.values()):
-                self.tab_annotator._sync_timer.start(1000)
-            self.tab_maintainer.timer.start()
+            self.cancel_close_action()
+            self._resume_after_close_action()
             self.statusBar().showMessage('Camera shutdown failed. See Acquisition for details.')
             self.tabs.setCurrentWidget(self.tab_capture)
 
     def closeEvent(self, event):
+        self._cancel_close_retry = False
         tasks = pending_task_titles()
         if tasks:
             self.statusBar().showMessage('Waiting for the current operation to finish: ' + tasks[0])
@@ -7543,6 +7566,8 @@ class TempoDashboard(QMainWindow):
                     'Cancel Processing and Quit'):
                     self._quit_after_processing = True
                     self.cancel_processing()
+                else:
+                    self.cancel_close_action()
             self.tabs.setCurrentWidget(self.tab_cruncher)
             return
         annotation_worker = getattr(self.tab_annotator, 'auto_worker', None)
@@ -7550,7 +7575,8 @@ class TempoDashboard(QMainWindow):
             self.statusBar().showMessage('Cell detection is still running. Quit again after it finishes; your current draft is retained.')
             self.tabs.setCurrentWidget(self.tab_annotator)
             event.ignore(); return
-        if getattr(self.tab_annotator, '_sync_busy', False):
+        if (getattr(self.tab_annotator, '_sync_busy', False)
+                or getattr(self.tab_annotator, '_nuclear_busy', False)):
             self.statusBar().showMessage('Waiting for the annotation sync outcome. Local drafts are retained; quit again when it finishes.')
             self.tabs.setCurrentWidget(self.tab_annotator)
             event.ignore(); return
@@ -7566,7 +7592,8 @@ class TempoDashboard(QMainWindow):
             event.ignore(); return
         save_uncertain = (getattr(self.tab_annotator, '_annotation_save_unconfirmed', False)
                           or not self.tab_annotator.btn_retry_import_save.isHidden())
-        pending_records={name:record for name,record in self.tab_annotator.universal_annotations.items() if record.get('sync_pending')}
+        pending_records={name:record for name,record in self.tab_annotator.universal_annotations.items()
+                         if record.get('sync_pending') or record.get('nuclear_sync_pending')}
         pending = not save_uncertain and bool(pending_records)
         confirmation=None
         if save_uncertain or pending:
@@ -7578,12 +7605,14 @@ class TempoDashboard(QMainWindow):
             if not confirm_action(self, 'Close with Unsaved Annotation Changes?',
                     'Some annotation or imported-image details could not be saved. Closing may lose those details. '
                     'Cancel to resolve the storage error before closing.', 'Close Anyway'):
+                self.cancel_close_action()
                 event.ignore(); return
             self._quit_annotation_confirmation=confirmation
         if pending and getattr(self,'_quit_annotation_confirmation',None)!=confirmation:
             if not confirm_action(self, 'Close with Unsynced Changes',
                     'Some annotations are saved on this computer but have not reached the shared dataset. '
                     'Close and keep the local copies, or cancel to allow syncing to finish.', 'Close and Keep Local Copies'):
+                self.cancel_close_action()
                 event.ignore(); return
             self._quit_annotation_confirmation=confirmation
         # Capture includes a persistent serial service. Request its stop before
@@ -7592,13 +7621,13 @@ class TempoDashboard(QMainWindow):
         if capture_tools is not None and not capture_tools.shutdown():
             self.statusBar().showMessage('Stopping capture and stimulation before closing…')
             event.ignore()
-            QTimer.singleShot(50, self.close)
+            QTimer.singleShot(50, self._retry_close)
             return
         threads = self.findChildren(QThread) + [worker]
         if any(thread is not None and not thread.wait(0) for thread in threads):
             self.statusBar().showMessage('Waiting for a worker to finish releasing its resources…')
             event.ignore()
-            QTimer.singleShot(50, self.close)
+            QTimer.singleShot(50, self._retry_close)
             return
         self.tab_annotator._shutdown_requested = True
         self.tab_annotator._sync_timer.stop()
@@ -7612,7 +7641,14 @@ class TempoDashboard(QMainWindow):
         capture_workers = [getattr(self.tab_capture, name, None) for name in ('acq_worker', 'scout_worker', '_cleanup_worker')]
         if any(thread is not None and not thread.wait(0) for thread in capture_workers):
             self.statusBar().showMessage('Waiting for acquisition resources to finish closing…')
-            event.ignore(); QTimer.singleShot(50, self.close); return
+            event.ignore(); QTimer.singleShot(50, self._retry_close); return
+        action = getattr(self, '_close_action', None)
+        if action is not None:
+            self._close_action = None
+            if not action():
+                self._resume_after_close_action()
+                event.ignore()
+                return
         if hasattr(self, 'activity_icon'):
             self.activity_icon.shutdown()
         super().closeEvent(event)

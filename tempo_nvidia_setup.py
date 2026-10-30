@@ -7,15 +7,16 @@ from pathlib import Path, PurePosixPath
 import re
 import shutil
 import stat
-import subprocess
 import sys
 import tempfile
 import urllib.request
 from urllib.parse import urlsplit
 import zipfile
+import uuid
 
 from tempo_config import get_base_dir, get_config_dir
 from tempo_release import VERSION, build_identity
+from tempo_process import run_model_worker
 
 
 _HASH = re.compile(r'^[0-9a-f]{64}$')
@@ -109,9 +110,7 @@ def _extract_checked(archive, target):
 def _probe(executable, descriptor, timeout=120):
     with tempfile.TemporaryDirectory(prefix='tempo-nvidia-probe-') as folder:
         report = Path(folder) / 'probe.json'
-        options = {'creationflags': subprocess.CREATE_NO_WINDOW} if os.name == 'nt' else {}
-        process = subprocess.run([str(executable), '--probe-cuda', str(report)],
-                                 capture_output=True, timeout=timeout, **options)
+        process = run_model_worker([str(executable), '--probe-cuda', str(report)], timeout=timeout)
         if process.returncode or not report.is_file() or report.stat().st_size > 16384:
             raise RuntimeError('NVIDIA runtime could not complete its GPU check.')
         result = json.loads(report.read_text(encoding='utf-8'))
@@ -145,6 +144,25 @@ def install_nvidia_runtime(report=lambda received, total: None, *, descriptor=No
         raise RuntimeError('This build does not include an NVIDIA runtime download.')
     root = runtime_root()
     root.mkdir(parents=True, exist_ok=True)
+    from tempo_annotation_store import session_lock
+    try:
+        with session_lock(root/'install'):
+            return _install_runtime(root, descriptor, report, open_url)
+    except BlockingIOError:
+        raise RuntimeError('Another TEMPO instance is installing NVIDIA support. Wait for it to finish, then retry.') from None
+
+
+def _bundle_matches(expected, installed):
+    if not installed.is_dir() or any(path.is_symlink() for path in installed.rglob('*')):
+        return False
+    expected_files = {path.relative_to(expected) for path in expected.rglob('*') if path.is_file()}
+    actual_files = {path.relative_to(installed) for path in installed.rglob('*') if path.is_file()}
+    return expected_files == actual_files and all(
+        (expected/name).stat().st_size == (installed/name).stat().st_size
+        and _digest(expected/name) == _digest(installed/name) for name in expected_files)
+
+
+def _install_runtime(root, descriptor, report, open_url):
     opener = open_url or urllib.request.urlopen
     with tempfile.TemporaryDirectory(prefix='nvidia-download-', dir=root) as folder:
         staging = Path(folder)
@@ -174,11 +192,19 @@ def install_nvidia_runtime(report=lambda received, total: None, *, descriptor=No
         _probe(executable, descriptor)
         bundle = f"{descriptor['commit']}-{descriptor['archive_sha256'][:12]}"
         destination = root / bundle
+        backup = None
         if destination.exists():
-            # An earlier verified install can be reused, but never overwritten.
-            installed = destination / descriptor['executable']
-            if not installed.is_file() or _digest(installed) != descriptor['executable_sha256']:
-                raise RuntimeError('An existing NVIDIA runtime folder is damaged.')
+            if not _bundle_matches(unpacked, destination):
+                backup = root/(bundle+'.repair-backup-'+uuid.uuid4().hex)
+                os.replace(destination, backup)
+                try:
+                    os.replace(unpacked, destination)
+                except OSError as error:
+                    try:
+                        os.replace(backup, destination)
+                    except OSError:
+                        raise RuntimeError(f'NVIDIA repair could not restore the previous folder. Recovery copy: {backup}') from error
+                    raise RuntimeError('NVIDIA repair could not replace files. Close other TEMPO instances and retry.') from error
         else:
             os.replace(unpacked, destination)
         _atomic_json(root / 'active.json', {
@@ -188,4 +214,6 @@ def install_nvidia_runtime(report=lambda received, total: None, *, descriptor=No
             'executable_sha256': descriptor['executable_sha256'],
             'archive_sha256': descriptor['archive_sha256'],
         })
+        if backup is not None:
+            shutil.rmtree(backup, ignore_errors=True)
     return True

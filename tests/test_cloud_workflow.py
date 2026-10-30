@@ -508,7 +508,8 @@ class CloudWorkflowTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError,'remote model checksum'):tempo_cloud_runner.summarize_release(self.root)
 
     def test_windows_bundle_can_prepare_a_cloud_request_from_packaged_sources(self):
-        repository = Path(__file__).resolve().parents[1]
+        from tests.packaging_fixtures import stage_spec_inputs
+        repository = stage_spec_inputs(Path(__file__).resolve().parents[1], self.root/'spec-source')
         hooks = types.ModuleType('PyInstaller.utils.hooks')
         hooks.collect_data_files = lambda name: []
         hooks.collect_submodules = lambda name: []
@@ -524,6 +525,10 @@ class CloudWorkflowTests(unittest.TestCase):
                      'EXE': lambda *a, **k: None, 'COLLECT': lambda *a, **k: None}
         with patch('scripts.windows_native_bundle.assemble_windows_cpp_runtime',side_effect=lambda binaries,root:binaries), \
              patch('scripts.windows_native_bundle.collect_wheel_libraries',return_value=([],[],{'success':True,'files':[]})), \
+             patch('scripts.collect_licenses.collect',return_value={'packages':[]}), \
+             patch.dict(os.environ, {'TEMPO_WINDOWS_PROFILE': 'cpu'}), \
+             patch.object(sys, 'path', list(sys.path)), \
+             patch.object(sys, 'platform', 'win32'), \
              patch.dict(sys.modules, {'PyInstaller': types.ModuleType('PyInstaller'),
                                      'PyInstaller.utils': types.ModuleType('PyInstaller.utils'),
                                      'PyInstaller.utils.hooks': hooks}):

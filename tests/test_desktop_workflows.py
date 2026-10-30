@@ -229,11 +229,12 @@ class DesktopTests(unittest.TestCase):
         from types import SimpleNamespace
         self.view._annotation_save_unconfirmed = True
         dashboard = SimpleNamespace(tab_maintainer=SimpleNamespace(review=None, pending_work=lambda: False), tab_annotator=self.view,
-                                    tab_capture=SimpleNamespace(cleanup=MagicMock()))
+                                    tab_capture=SimpleNamespace(cleanup=MagicMock()), cancel_close_action=MagicMock())
         event = MagicMock()
         with patch.object(tempo_gui, 'confirm_action', return_value=False) as confirm:
             tempo_gui.TempoDashboard.closeEvent(dashboard, event)
         event.ignore.assert_called_once()
+        dashboard.cancel_close_action.assert_called_once()
         dashboard.tab_capture.cleanup.assert_not_called()
         self.assertIn('could not be saved', confirm.call_args.args[2])
         self.assertEqual(confirm.call_args.args[3], 'Close Anyway')

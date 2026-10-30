@@ -19,6 +19,25 @@ APP = QApplication.instance() or QApplication([])
 
 
 class TransferContractTests(unittest.TestCase):
+    def test_real_xet_reporter_supports_aggregated_progress_without_console_tqdm(self):
+        from types import SimpleNamespace
+        from huggingface_hub.utils import _xet_progress_reporting as xet
+        reporter_type = getattr(xet, 'XetDownloadProgressReporter', None)
+        if reporter_type is None:
+            self.skipTest('Hub 2 Xet reporter is unavailable in this older local SDK')
+        events = []
+        progress = ModelTransferReporter(events.append, ['fixture.pt']).download_class('fixture.pt')
+        with patch('tqdm.std.tqdm.__new__', side_effect=AssertionError('Console progress constructed')):
+            with reporter_type(reconstruction_desc='fixture', transfer_desc='fixture', total=100,
+                               log_level=20, tqdm_class=progress) as report:
+                report.update_progress(SimpleNamespace(total_bytes_completed=60,
+                    total_transfer_bytes_completed=30, total_bytes_completion_rate=60,
+                    total_transfer_bytes_completion_rate=30, total_bytes=100))
+                self.assertIs(report.transfer_bar, report.reconstruction_bar)
+        self.assertEqual(events[-1].received, 60)
+        self.assertEqual(events[-1].transferred, 30)
+        self.assertEqual(events[-1].total, 100)
+
     def test_real_hub_http_transfer_reports_bytes_without_constructing_tqdm(self):
         data = b'model checkpoint bytes'
         for known_size in (True, False):

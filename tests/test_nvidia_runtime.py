@@ -75,25 +75,24 @@ class RuntimeTests(unittest.TestCase):
             self.assertEqual(command[0], str(executable))
             self.assertEqual(command[1], '--predict-cells')
             self.assertEqual(kwargs['timeout'], 900)
-            self.assertIs(kwargs['stdout'], runtime.subprocess.DEVNULL)
             Path(command[-1]).write_text(json.dumps(dict(success=True, result_kind='cells', boxes=[{'polygon': [[1, 2]]}])))
             return Mock(returncode=0)
         with patch.object(runtime, 'active_executable', return_value=executable), \
-             patch.object(runtime.subprocess, 'run', side_effect=subprocess_fixture):
+             patch.object(runtime, 'run_model_worker', side_effect=subprocess_fixture):
             result = runtime.run_cellpose(image, model)
         self.assertEqual(len(result['boxes']), 1)
 
     def test_child_failure_report_and_missing_output_are_distinct(self):
         executable, _ = self.install_fixture()
         with patch.object(runtime, 'active_executable', return_value=executable), \
-             patch.object(runtime.subprocess, 'run', return_value=Mock(returncode=1)):
+             patch.object(runtime, 'run_model_worker', return_value=Mock(returncode=1)):
             with self.assertRaisesRegex(RuntimeError, 'exited with code 1'):
                 runtime.run_cellpose('image', 'model')
         def failed(command, **kwargs):
             Path(command[-1]).write_text(json.dumps(dict(success=False, error='CUDA unavailable')))
             return Mock(returncode=1)
         with patch.object(runtime, 'active_executable', return_value=executable), \
-             patch.object(runtime.subprocess, 'run', side_effect=failed):
+             patch.object(runtime, 'run_model_worker', side_effect=failed):
             self.assertEqual(runtime.run_cellpose('image', 'model')['error'], 'CUDA unavailable')
 
     def test_worker_reports_failure_without_traceback_or_unbounded_output(self):

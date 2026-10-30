@@ -95,6 +95,7 @@ hidden_imports = [
     'tempo_onboarding',
     'tempo_first_run',
     'tempo_assistance_runtime',
+    'tempo_process',
     'tempo_assistance_progress',
     'tempo_nvidia_runtime',
     'tempo_nvidia_setup',

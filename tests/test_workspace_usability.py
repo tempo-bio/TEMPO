@@ -1,5 +1,6 @@
 """Real selection/hover behavior and isolated administrator/profile transactions."""
 import copy
+from contextlib import contextmanager
 from tests.hub_http_fixture import httpx
 import io
 import json
@@ -58,6 +59,14 @@ class SharedWorkspaceTests(unittest.TestCase):
         self.session = Mock()
         self.session.get.side_effect = lambda url, **kwargs: httpx.Response(
             200, content=self.path.read_bytes(), request=httpx.Request('GET', url))
+        @contextmanager
+        def stream(method, url, **kwargs):
+            response = self.session.get(url, **kwargs)
+            try:
+                yield response
+            finally:
+                response.close()
+        self.session.stream.side_effect = stream
         session_patch = patch('tempo_shared_settings.get_session', return_value=self.session)
         session_patch.start(); self.addCleanup(session_patch.stop)
 
@@ -145,6 +154,19 @@ class SharedWorkspaceTests(unittest.TestCase):
             200, content=b' ' * 65537, request=httpx.Request('GET', url))
         with self.assertRaisesRegex(ValueError, 'too large'):
             fetch_shared_settings(self.hub)
+
+    def test_settings_size_limit_stops_streaming_before_reading_the_entire_body(self):
+        blocks = []
+        class Body(httpx.SyncByteStream):
+            def __iter__(self):
+                for _ in range(100):
+                    blocks.append(8192)
+                    yield b' ' * 8192
+        client = httpx.Client(transport=httpx.MockTransport(lambda request: httpx.Response(200, stream=Body())))
+        with client, patch('tempo_shared_settings.get_session', return_value=client):
+            with self.assertRaisesRegex(ValueError, 'too large'):
+                fetch_shared_settings(self.hub)
+        self.assertEqual(sum(blocks), 65536+8192)
 
     def test_new_organization_admin_needs_no_identity_constant(self):
         self.hub.api.whoami.return_value['id'] = 'new-admin-id'

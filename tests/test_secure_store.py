@@ -140,6 +140,31 @@ class SecureStoreTests(unittest.TestCase):
         self.assertEqual(self.vault.value, TOKEN)
         store.delete_hf_token()
         self.assertIsNone(self.vault.value)
+
+    def test_delete_reports_backend_failure_and_retained_credential(self):
+        self.vault.value = TOKEN
+        with patch.object(self.vault, 'delete_password', side_effect=OSError('locked')):
+            with self.assertRaises(store.CredentialStorageError):
+                store.delete_hf_token()
+        self.assertEqual(self.vault.value, TOKEN)
+
+    def test_delete_also_removes_an_unmigrated_active_legacy_token(self):
+        self.seed()
+        store.delete_hf_token()
+        self.assertIsNone(self.vault.value)
+        self.assertFalse(self.active.exists())
+        self.assertNotIn(TOKEN, self.saved.read_text())
+        self.assertIn(OTHER, self.saved.read_text())
+
+    def test_delete_verifies_readback_and_preserves_token_when_legacy_cleanup_fails(self):
+        self.vault.value = TOKEN
+        with patch.object(self.vault, 'delete_password'):
+            with self.assertRaisesRegex(store.CredentialStorageError, 'still contains'):
+                store.delete_hf_token()
+        with patch.object(store, 'remove_legacy_copies', side_effect=store.CredentialStorageError('Legacy cleanup failed')):
+            with self.assertRaises(store.CredentialStorageError):
+                store.delete_hf_token()
+        self.assertEqual(self.vault.value, TOKEN)
         # Verify subsequent delete does not raise even if vault is empty
         store.delete_hf_token()
         self.assertIsNone(self.vault.value)

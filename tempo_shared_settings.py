@@ -83,13 +83,20 @@ def _read(hub, revision, *, missing_ok=False):
         url = hf_hub_url(repo_id=CONTROL_REPO, repo_type='model',
                          filename=CONTROL_FILE, revision=revision)
         startup_stage('settings.download.started')
-        response = get_session().get(url, headers=build_hf_headers(token=hub.token),
-                                     follow_redirects=True)
-        startup_stage('settings.download.response', status=response.status_code, count=len(response.content))
-        hf_raise_for_status(response)
-        if len(response.content) > 65536:
-            raise ValueError('The shared settings file is too large.')
-        document = response.json()
+        with get_session().stream('GET', url, headers=build_hf_headers(token=hub.token),
+                                  follow_redirects=True) as response:
+            # Error bodies are also bounded before asking the SDK to classify
+            # them; never buffer an unbounded response on this startup path.
+            body = bytearray()
+            for block in response.iter_bytes(chunk_size=8192):
+                body.extend(block)
+                if len(body) > 65536:
+                    raise ValueError('The shared settings file is too large.')
+            startup_stage('settings.download.response', status=response.status_code, count=len(body))
+            bounded = type(response)(response.status_code, headers=response.headers,
+                                     content=bytes(body), request=response.request)
+            hf_raise_for_status(bounded)
+            document = json.loads(body)
         startup_stage('settings.json.parsed')
     except EntryNotFoundError:
         startup_stage('settings.file.missing')

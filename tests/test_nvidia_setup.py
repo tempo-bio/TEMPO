@@ -79,6 +79,21 @@ class NvidiaSetupTests(unittest.TestCase):
             with patch.object(setup, 'release_descriptor', return_value={**descriptor, 'archive_sha256': 'b' * 64}):
                 self.assertIsNone(runtime.active_executable())
 
+    def test_gpu_check_uses_owned_headless_worker_and_validates_its_report(self):
+        from types import SimpleNamespace
+        descriptor = {'commit':'a'*40, 'app_version':VERSION}
+        result = dict(success=True, commit='a'*40, app_version=VERSION, cuda_version='12.6')
+        def launch(command, **options):
+            self.assertEqual(command[:2], ['fixture-worker.exe', '--probe-cuda'])
+            self.assertEqual(options, {'timeout':120})
+            Path(command[-1]).write_text(json.dumps(result))
+            return SimpleNamespace(returncode=0)
+        with patch.object(setup, 'run_model_worker', side_effect=launch):
+            self.assertEqual(setup._probe(Path('fixture-worker.exe'), descriptor), result)
+            result['commit'] = 'b'*40
+            with self.assertRaisesRegex(RuntimeError, 'did not pass'):
+                setup._probe(Path('fixture-worker.exe'), descriptor)
+
     def test_download_and_probe_failures_leave_prior_runtime_active(self):
         old = {'schema_version': 1, 'version': 'previous'}
         (self.root/'active.json').write_text(json.dumps(old))
@@ -93,6 +108,45 @@ class NvidiaSetupTests(unittest.TestCase):
                     setup.install_nvidia_runtime(descriptor=descriptor,
                         open_url=lambda request, timeout: _Response(archive, self.url))
         self.assertEqual(json.loads((self.root/'active.json').read_text()), old)
+
+    def test_reinstall_repairs_support_libraries_even_when_executable_is_unchanged(self):
+        output = io.BytesIO()
+        with zipfile.ZipFile(output, 'w') as archive:
+            archive.writestr('TEMPO/TEMPO.exe', b'fixed-worker')
+            archive.writestr('TEMPO/_internal/support.dll', b'valid-library')
+        data = output.getvalue(); descriptor = self.descriptor(data)
+        with patch.object(setup, 'runtime_root', return_value=self.root), \
+             patch.object(setup, '_probe', return_value={'success': True}):
+            install = lambda: setup.install_nvidia_runtime(descriptor=descriptor,
+                open_url=lambda *a, **k: _Response(data, self.url))
+            install()
+            state = json.loads((self.root/'active.json').read_text())
+            library = self.root/state['bundle']/'TEMPO/_internal/support.dll'
+            library.write_bytes(b'corrupted-library')
+            install()
+        self.assertEqual(library.read_bytes(), b'valid-library')
+        self.assertEqual(json.loads((self.root/'active.json').read_text()), state)
+        self.assertFalse(list(self.root.glob('*.repair-backup-*')))
+
+    def test_failed_repair_restores_previous_bundle_and_activation(self):
+        data = _archive(); descriptor = self.descriptor(data)
+        bundle = descriptor['commit']+'-'+descriptor['archive_sha256'][:12]
+        installed = self.root/bundle/'TEMPO/TEMPO.exe'
+        installed.parent.mkdir(parents=True); installed.write_bytes(b'old-damaged-executable')
+        (self.root/'active.json').write_text('{"previous":true}')
+        original = setup.os.replace
+        def replace(source, target):
+            if Path(source).name == 'unpacked':
+                raise PermissionError('in use')
+            return original(source, target)
+        with patch.object(setup, 'runtime_root', return_value=self.root), \
+             patch.object(setup, '_probe', return_value={'success': True}), \
+             patch.object(setup.os, 'replace', side_effect=replace):
+            with self.assertRaisesRegex(RuntimeError, 'Close other TEMPO'):
+                setup.install_nvidia_runtime(descriptor=descriptor,
+                    open_url=lambda *a, **k: _Response(data, self.url))
+        self.assertEqual(installed.read_bytes(), b'old-damaged-executable')
+        self.assertEqual(json.loads((self.root/'active.json').read_text()), {'previous':True})
 
     def test_archive_rejects_traversal_links_and_duplicate_casefolded_members(self):
         with tempfile.TemporaryDirectory() as folder:

@@ -1154,12 +1154,20 @@ class TempoHub:
         models = _model_records(manifest)
         if not models:
             return 0
-        from tempo_model_transfer import ModelTransferReporter
-        reporter = ModelTransferReporter(progress, models)
         if target_dir is None:
             from tempo_model_catalog import installed_model_dir
             target_dir = installed_model_dir(self.get_models_repo())
         os.makedirs(target_dir, exist_ok=True)
+        from tempo_annotation_store import session_lock
+        try:
+            with session_lock(Path(target_dir)/'.model-install'):
+                return self._install_model_release(manifest, models, target_dir, local_sources, progress)
+        except BlockingIOError:
+            raise RuntimeError('Another TEMPO instance is installing models. Wait for it to finish, then retry.') from None
+
+    def _install_model_release(self, manifest, models, target_dir, local_sources, progress):
+        from tempo_model_transfer import ModelTransferReporter
+        reporter = ModelTransferReporter(progress, models)
         folder = tempfile.mkdtemp(dir=target_dir, prefix='.model-update-')
         retain_backups = False
         try:

@@ -7,9 +7,9 @@ import math
 import os
 from pathlib import Path
 import re
-import subprocess
 import sys
 import tempfile
+from tempo_process import run_model_worker
 
 
 SCHEMA = 1
@@ -93,8 +93,7 @@ def run_cellpose(image_path, model_path, conf=0.15, iou=0.40):
         report = Path(directory) / 'result.json'
         command = [str(worker), '--predict-cells', str(Path(image_path).resolve()),
                    str(Path(model_path).resolve()), str(conf), str(iou), str(report)]
-        completed = subprocess.run(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                                   timeout=900, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+        completed = run_model_worker(command, timeout=900)
         if completed.returncode:
             if report.is_file():
                 result = _read_report(report)

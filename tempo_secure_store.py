@@ -200,16 +200,18 @@ def delete_hf_token():
     """Safely remove the active Hugging Face token from native secure storage."""
     with _LOCK:
         backend = native_backend()
-        try:
-            token = _read(backend)
-        except Exception:
-            token = None
+        token = _read(backend)
+        if token is None:
+            token = _load_token(backend, migrate=True)
+        if token is None:
+            return
+        # Keep a verified credential available if legacy cleanup needs a retry.
+        remove_legacy_copies(token)
         try:
             backend.delete_password(SERVICE, ACCOUNT)
         except Exception:
-            pass
-        if token:
-            try:
-                remove_legacy_copies(token)
-            except Exception:
-                pass
+            # A backend can delete successfully but lose its acknowledgement.
+            if _read(backend) is not None:
+                raise CredentialStorageError('The saved token could not be removed. Unlock secure storage and retry.') from None
+        if _read(backend) is not None:
+            raise CredentialStorageError('Secure storage still contains the saved token. Retry removal.')

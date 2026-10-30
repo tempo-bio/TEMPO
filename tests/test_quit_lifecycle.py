@@ -256,9 +256,29 @@ def quit_probe(scenario):
                 print('CAMERA_QUIT_DEFERRED', flush=True)
                 QTimer.singleShot(100, auxiliary_released.set)
                 return
-            if scenario in ('annotation_quit', 'sync_quit') and not scenario_state:
+            if scenario == 'uninstall_guard' and not scenario_state:
+                window.tab_annotator._nuclear_busy = True
+                calls = []
+                def finish():
+                    assert not window.tab_annotator._nuclear_busy
+                    calls.append(True)
+                    print('EXIT_ACTION_AFTER_SAVE', flush=True)
+                    return True
+                assert not window.request_close_action(finish)
+                assert not calls and window.isVisible()
+                window.cancel_close_action()
+                window._retry_close()
+                assert window.isVisible() and not calls
+                print('EXIT_ACTION_CANCELLED_SAFELY', flush=True)
+                window.tab_annotator._nuclear_busy = False
+                scenario_state.append('settled')
+                QTimer.singleShot(100, lambda: window.request_close_action(finish))
+                return
+            if scenario in ('annotation_quit', 'sync_quit', 'nuclear_quit') and not scenario_state:
                 if scenario == 'sync_quit':
                     window.tab_annotator._sync_busy = True
+                if scenario == 'nuclear_quit':
+                    window.tab_annotator._nuclear_busy = True
                 app.quit()
                 assert window.isVisible()
                 print('APPLICATION_QUIT_DEFERRED', flush=True)
@@ -268,6 +288,7 @@ def quit_probe(scenario):
                         QTimer.singleShot(20, settle)
                         return
                     window.tab_annotator._sync_busy = False
+                    window.tab_annotator._nuclear_busy = False
                     QTimer.singleShot(0, app.quit)
                 scenario_state.append('settling')
                 QTimer.singleShot(100, settle)
@@ -425,6 +446,15 @@ class QuitProcessTests(unittest.TestCase):
     def test_application_quit_waits_for_cloud_sync_outcome(self):
         result = self.run_scenario('sync_quit')
         self.assertIn('APPLICATION_QUIT_DEFERRED', result.stdout)
+
+    def test_application_quit_waits_for_nuclear_sync_outcome(self):
+        result = self.run_scenario('nuclear_quit')
+        self.assertIn('APPLICATION_QUIT_DEFERRED', result.stdout)
+
+    def test_exit_actions_wait_for_save_and_can_be_cancelled(self):
+        result = self.run_scenario('uninstall_guard')
+        self.assertIn('EXIT_ACTION_AFTER_SAVE', result.stdout)
+        self.assertIn('EXIT_ACTION_CANCELLED_SAFELY', result.stdout)
 
     def test_application_quit_waits_for_protected_modal_write_result(self):
         result = self.run_scenario('modal_write_quit')

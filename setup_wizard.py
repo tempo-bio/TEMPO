@@ -20,7 +20,7 @@ from PyQt6.QtWidgets import (
 from tempo_config import tempo_preferences
 from tempo_credentials import safe_profile_name
 from tempo_secure_store import save_hf_token, CredentialStorageError
-from tempo_shared_settings import CONTROL_REPO
+from tempo_shared_settings import CONTROL_REPO, fetch_shared_settings, apply_shared_settings
 from tempo_hub import tempo_hub, configure_desktop_http
 from tempo_tasks import run_read_task, run_task, run_background, run_inline_task
 from tempo_ui import ErrorDetails, FlowRow
@@ -211,6 +211,7 @@ class SetupWizardDialog(QDialog):
     def __init__(self, parent=None, account_only=False):
         super().__init__(parent)
         self.account_only = account_only
+        self._initial_workspace = parent is None and not account_only
         self._oauth_generation = 0
         self._oauth_attempt = None
         self._oauth_preparing = False
@@ -220,6 +221,7 @@ class SetupWizardDialog(QDialog):
         self._model_task = None
         self._diagnostics_task = None
         self._models_ready = False
+        self._nvidia_ready = False
         self._requirements_ready = False
         self.setWindowTitle("Account Setup" if account_only else "TEMPO Setup")
         font = self.font()
@@ -692,8 +694,9 @@ class SetupWizardDialog(QDialog):
         if self._model_task is not None:
             return
         if self._models_ready:
-            self.stack.setCurrentWidget(self.ready_page)
-            return
+            if not (self.nvidia_option.isVisible() and self.nvidia_option.isChecked()) or self._nvidia_ready:
+                self.stack.setCurrentWidget(self.ready_page)
+                return
         self.model_error.clear()
         self.model_progress.begin(self.model_statuses)
         self.model_progress.show()
@@ -751,6 +754,7 @@ class SetupWizardDialog(QDialog):
             self.nvidia_progress_label.show()
             self.nvidia_progress.hide()
         elif error is None and self._nvidia_selected:
+            self._nvidia_ready = True
             self.nvidia_progress_label.setText('NVIDIA acceleration ready')
             self.nvidia_progress_label.show()
             self.nvidia_progress.hide()
@@ -1027,11 +1031,22 @@ class SetupWizardDialog(QDialog):
                 def check_access():
                     api = HfApi(token=token)
                     api.whoami()
-                    api.repo_info(repo_id=tempo_hub.get_dataset_repo(), repo_type='dataset')
-                    api.auth_check(repo_id=tempo_hub.get_dataset_repo(), repo_type='dataset', write=True)
-                    api.repo_info(repo_id=tempo_hub.get_models_repo(), repo_type='model')
-                    api.repo_info(repo_id=CONTROL_REPO, repo_type='model')
-                run_read_task(self, 'Checking shared dataset and model access…', check_access)
+                    workspace = None
+                    if self._initial_workspace:
+                        from tempo_hub import TempoHub
+                        candidate = TempoHub(token)
+                        candidate.api = api
+                        workspace = fetch_shared_settings(candidate)
+                    settings = workspace['settings'] if workspace is not None else {}
+                    dataset = settings.get('hf_dataset_repo', tempo_hub.get_dataset_repo())
+                    models = settings.get('hf_models_repo', tempo_hub.get_models_repo())
+                    api.repo_info(repo_id=dataset, repo_type='dataset')
+                    api.auth_check(repo_id=dataset, repo_type='dataset', write=True)
+                    api.repo_info(repo_id=models, repo_type='model')
+                    if not self._initial_workspace:
+                        api.repo_info(repo_id=CONTROL_REPO, repo_type='model')
+                    return workspace
+                workspace = run_read_task(self, 'Checking shared dataset and model access…', check_access)
                 # Validate remotely before replacing the OS-protected credential.
                 recovery = 'Cloud credentials could not be saved. Review the details and retry saving your account.'
                 if new_token:
@@ -1045,6 +1060,9 @@ class SetupWizardDialog(QDialog):
                 self._refresh_account_identity()
                 self.txt_token.mark_saved()
                 self._refresh_token_status()
+                if workspace is not None:
+                    recovery = 'The account was saved, but shared workspace settings could not be saved. Check profile-folder access and retry.'
+                    apply_shared_settings(workspace)
             recovery = ('Cloud credentials were saved, but the annotation profile could not be saved. Check folder permissions and save again.'
                         if new_token else 'The annotation profile could not be saved. Check folder permissions and try again.')
             previous_profile = tempo_preferences.get('collaboration', 'collaborator_id')

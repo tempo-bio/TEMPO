@@ -201,58 +201,58 @@ class PackagingCommandTests(unittest.TestCase):
         self.assertFalse(evaluate_gates({'build':{'outcome':'success'}},['build','verify'])['success'])
         self.assertTrue(evaluate_gates({'build':{'outcome':'success'},'verify':{'outcome':'success'}},['build','verify'])['success'])
 
+    def test_windows_spec_rejects_missing_build_inputs_and_nvidia_needs_no_descriptor(self):
+        from tests.packaging_fixtures import SPEC_CAPTURE_SCRIPT, stage_spec_inputs
+        repository = Path(__file__).resolve().parents[1]
+        cases = [('cpu', 'nvidia-runtime.json', 'verified NVIDIA runtime descriptor'),
+                 ('cpu', 'build-provenance.json', 'build-provenance.json'),
+                 ('nvidia-cu126', 'nvidia-runtime.json', None)]
+        for profile, missing, error in cases:
+            with self.subTest(profile=profile, missing=missing), tempfile.TemporaryDirectory() as directory:
+                root = stage_spec_inputs(repository, Path(directory)/'source')
+                (root/'Output'/missing).unlink()
+                result = subprocess.run([sys.executable, '-I', '-c', SPEC_CAPTURE_SCRIPT, str(root/'tempo.spec')],
+                                        cwd=directory, capture_output=True, text=True, timeout=30,
+                                        env=dict(os.environ, TEMPO_WINDOWS_PROFILE=profile))
+                if error:
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn(error, result.stderr)
+                else:
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertTrue(json.loads(result.stdout)['scripts'])
+
     def test_spec_loads_project_helpers_without_checkout_on_search_path(self):
         root = Path(__file__).resolve().parents[1]
         # Execute the real spec in an isolated subprocess, replacing only the
         # PyInstaller machinery. This checks its entry-point path handling and
         # data declarations without producing a macOS application.
-        script = '''
-import json, sys, types
-from pathlib import Path
-hooks = types.ModuleType('PyInstaller.utils.hooks')
-hooks.collect_data_files = lambda name: []
-hooks.collect_submodules = lambda name: []
-hooks.copy_metadata = lambda name: []
-sys.modules['PyInstaller'] = types.ModuleType('PyInstaller')
-sys.modules['PyInstaller.utils'] = types.ModuleType('PyInstaller.utils')
-sys.modules['PyInstaller.utils.hooks'] = hooks
-native = types.ModuleType('scripts.windows_native_bundle')
-native.assemble_windows_cpp_runtime = lambda binaries,root: binaries
-native.collect_wheel_libraries = lambda **kwargs: ([],[],{'success':True,'files':[]})
-sys.modules['scripts.windows_native_bundle'] = native
-captured = {}
-def analysis(scripts, **kwargs):
-    captured.update(scripts=scripts, **kwargs)
-    return types.SimpleNamespace(pure=[], scripts=[], binaries=[], datas=[])
-namespace = dict(SPEC=sys.argv[1], Analysis=analysis, PYZ=lambda *a,**k:None,
-                 EXE=lambda *a,**k:None, COLLECT=lambda *a,**k:None)
-exec(compile(Path(sys.argv[1]).read_bytes(), sys.argv[1], 'exec'), namespace)
-print(json.dumps(captured))
-'''
+        from tests.packaging_fixtures import SPEC_CAPTURE_SCRIPT, stage_spec_inputs
         with tempfile.TemporaryDirectory() as directory:
-            result = subprocess.run([sys.executable, '-I', '-c', script, str(root/'tempo.spec')],
-                                    cwd=directory, capture_output=True, text=True, timeout=30)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        declarations = json.loads(result.stdout)
-        self.assertTrue(set(tempo_release.RUNTIME_IMPORTS).issubset(declarations['hiddenimports']))
-        self.assertTrue({'tempo_logo', 'tempo_activity_icon', 'tempo_onboarding'}.issubset(declarations['hiddenimports']))
-        self.assertEqual(declarations['scripts'], [str(root/'tempo_gui.py')])
-        self.assertEqual(declarations['pathex'], [str(root)])
-        declared = {Path(source).relative_to(root).as_posix(): destination
-                    for source, destination in declarations['datas']}
-        for name in tempo_cloud.BUNDLE_FILES:
-            self.assertIn(name, declared)
-            self.assertEqual(declared[name], str(Path(name).parent))
-        self.assertEqual(declared['assets'], 'assets')
-        for name in ('tempo_icon.png', 'tempo_icon.ico', 'tempo_shell_icon.png', 'tempo_logo_base.png'):
-            self.assertTrue((root/'assets'/name).is_file(), name)
-        self.assertEqual(declared['docs/TRAINING_WORKFLOW.md'], 'docs')
-        for name in ('GETTING_STARTED.md', 'CREDENTIAL_SECURITY.md', 'COLLABORATION_WORKFLOW.md',
-                     'WORKSPACE_ADMINISTRATION.md', 'CAPTURE_QUALITY.md'):
-            self.assertEqual(declared['docs/' + name], 'docs')
-        self.assertEqual(declared['README.md'], '.')
-        for source, destination in declarations['datas']:
-            self.assertTrue(Path(source).exists(), source)
+            root = stage_spec_inputs(root, Path(directory)/'source')
+            result = subprocess.run([sys.executable, '-I', '-c', SPEC_CAPTURE_SCRIPT, str(root/'tempo.spec')],
+                                    cwd=directory, capture_output=True, text=True, timeout=30,
+                                    env=dict(os.environ, TEMPO_WINDOWS_PROFILE='cpu'))
+            self.assertEqual(result.returncode, 0, result.stderr)
+            declarations = json.loads(result.stdout)
+            self.assertTrue(set(tempo_release.RUNTIME_IMPORTS).issubset(declarations['hiddenimports']))
+            self.assertTrue({'tempo_logo', 'tempo_activity_icon', 'tempo_onboarding'}.issubset(declarations['hiddenimports']))
+            self.assertEqual(declarations['scripts'], [str(root/'tempo_gui.py')])
+            self.assertEqual(declarations['pathex'], [str(root)])
+            declared = {Path(source).relative_to(root).as_posix(): destination
+                        for source, destination in declarations['datas']}
+            for name in tempo_cloud.BUNDLE_FILES:
+                self.assertIn(name, declared)
+                self.assertEqual(declared[name], str(Path(name).parent))
+            self.assertEqual(declared['assets'], 'assets')
+            for name in ('tempo_icon.png', 'tempo_icon.ico', 'tempo_shell_icon.png', 'tempo_logo_base.png'):
+                self.assertTrue((root/'assets'/name).is_file(), name)
+            self.assertEqual(declared['docs/TRAINING_WORKFLOW.md'], 'docs')
+            for name in ('GETTING_STARTED.md', 'CREDENTIAL_SECURITY.md', 'COLLABORATION_WORKFLOW.md',
+                         'WORKSPACE_ADMINISTRATION.md', 'CAPTURE_QUALITY.md'):
+                self.assertEqual(declared['docs/' + name], 'docs')
+            self.assertEqual(declared['README.md'], '.')
+            for source, destination in declarations['datas']:
+                self.assertTrue(Path(source).exists(), source)
 
 
 class RuntimeReportTests(unittest.TestCase):

@@ -145,6 +145,7 @@ class SetupModelUpdateTests(unittest.TestCase):
         self.addCleanup(patch.stopall)
         patch.object(setup.tempo_hub, 'publish_collaborator_profile', return_value=True).start()
         patch.object(setup, 'run_background', return_value=None).start()
+        patch.object(setup, 'fetch_shared_settings', return_value=None).start()
         patch.object(updates.QTimer, 'singleShot').start()
         patch.object(updates, 'run_task', side_effect=lambda parent, title, action: action()).start()
         self.temp = tempfile.TemporaryDirectory()

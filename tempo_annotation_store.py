@@ -1,5 +1,6 @@
 """Bounded, revision-checked local annotation writes shared by GUI and checkout."""
 import json
+import errno
 import copy
 import os
 import tempfile
@@ -85,7 +86,12 @@ def session_lock(path):
                 if not stream.tell():
                     stream.write(b'\0'); stream.flush()
                 stream.seek(0)
-                msvcrt.locking(stream.fileno(), msvcrt.LK_NBLCK, 1)
+                try:
+                    msvcrt.locking(stream.fileno(), msvcrt.LK_NBLCK, 1)
+                except OSError as error:
+                    if error.errno in (errno.EACCES, errno.EAGAIN, errno.EDEADLK):
+                        raise BlockingIOError('Another operation is saving annotations. Retry after it finishes.') from None
+                    raise
             else:
                 import fcntl
                 fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)

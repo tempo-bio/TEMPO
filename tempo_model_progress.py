@@ -68,6 +68,7 @@ class ModelProgressWidget(QWidget):
         self.stage = 'checking'
         self.filename = ''
         self.received, self.total = 0, None
+        self.transferred = None
         self.samples = deque()
         self.last_data = None
         self.phase.setText('Checking model release…')
@@ -89,6 +90,7 @@ class ModelProgressWidget(QWidget):
                 self.last_data = None
                 self.transfer.clear()
                 self.received, self.total = 0, None
+                self.transferred = None
         titles = {'checking': 'Checking download cache…', 'downloading': 'Downloading models',
                   'verifying': 'Verifying model files', 'verified': 'Verifying model files',
                   'installing': 'Installing verified models', 'complete': 'Models installed',
@@ -100,12 +102,15 @@ class ModelProgressWidget(QWidget):
             self.rows[event.filename].setText(states.get(event.stage, event.stage))
         if event.stage == 'downloading':
             now = time.monotonic()
-            if event.received < self.received:
+            measured = event.transferred if event.transferred is not None else event.received
+            previous = self.transferred if self.transferred is not None else self.received
+            if measured < previous:
                 self.samples.clear()  # Server restarted a range request.
-            if self.last_data is None or event.received != self.received:
+            if self.last_data is None or event.received != self.received or measured != previous:
                 self.last_data = now
             self.received, self.total = event.received, event.total
-            self.samples.append((now, self.received))
+            self.transferred = event.transferred
+            self.samples.append((now, measured))
             while len(self.samples) > 2 and now-self.samples[0][0] > 5:
                 self.samples.popleft()
             if self.total:

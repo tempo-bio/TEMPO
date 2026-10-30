@@ -112,8 +112,13 @@ def start_from_arguments(arguments):
     global _recorder
     if len(arguments) == 3 and arguments[1] == '--diagnose-startup':
         _recorder = StartupRecorder(arguments[2])
-        _recorder.start()
-        atexit.register(_recorder.stop)
+        try:
+            _recorder.start()
+        except OSError:
+            _recorder.stop()
+            _recorder = None
+        else:
+            atexit.register(_recorder.stop)
         del arguments[1:]
 
 

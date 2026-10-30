@@ -4,6 +4,8 @@ from pathlib import Path
 import runpy
 import sys
 import tempfile
+import subprocess
+import time
 import unittest
 from unittest.mock import Mock, patch
 
@@ -40,6 +42,8 @@ class AssistanceRuntimeTests(unittest.TestCase):
             process.poll.side_effect = [None, 0, 0]
             return process
         with patch.object(runtime.subprocess, 'Popen', side_effect=launch), \
+             patch.object(runtime, '_job_for_child', return_value=None), \
+             patch.object(runtime, '_stop_tree'), \
              patch.object(runtime.time, 'sleep'):
             result = runtime.run_assistance('image.png', 'scout', .15, .4,
                                             progress=seen.append, stage=stages.append)
@@ -51,6 +55,7 @@ class AssistanceRuntimeTests(unittest.TestCase):
         process = Mock(returncode=None)
         process.poll.return_value = None
         with patch.object(runtime.subprocess, 'Popen', return_value=process), \
+             patch.object(runtime, '_job_for_child', return_value=None), \
              patch.object(runtime.time, 'monotonic', side_effect=[0, 901]), \
              patch.object(runtime, '_stop_tree') as stop:
             with self.assertRaisesRegex(TimeoutError, '15 minutes'):
@@ -67,9 +72,46 @@ class AssistanceRuntimeTests(unittest.TestCase):
         with patch.object(runtime.sys, 'platform', 'win32'), \
              patch.object(runtime.sys, 'frozen', True, create=True), \
              patch('tempo_nvidia_runtime.active_executable', return_value='C:/runtime/TEMPO.exe'), \
+             patch.object(runtime, '_job_for_child', return_value=None), \
+             patch.object(runtime, '_stop_tree'), \
              patch.object(runtime.subprocess, 'Popen', side_effect=launch):
             result = runtime.run_assistance('image.png', 'cellpose', .15, .4)
         self.assertTrue(result['success'])
+
+    def test_failed_parent_cannot_leave_a_running_helper(self):
+        real_popen = subprocess.Popen
+        with tempfile.TemporaryDirectory() as folder:
+            started, finished = Path(folder)/'started', Path(folder)/'finished'
+            child = ('import time;from pathlib import Path;Path('+repr(str(started))+').touch();'
+                     'time.sleep(0.7);Path('+repr(str(finished))+').touch()')
+            parent = ('import subprocess,sys,time;from pathlib import Path;'
+                      'subprocess.Popen([sys.executable,"-c",'+repr(child)+']);'
+                      'end=time.monotonic()+3\n'
+                      'while not Path('+repr(str(started))+').exists() and time.monotonic()<end: time.sleep(.01)\n'
+                      'sys.exit(1)')
+            def launch(arguments, **kwargs):
+                return real_popen([sys.executable, '-c', parent], **kwargs)
+            with patch.object(runtime.subprocess, 'Popen', side_effect=launch):
+                with self.assertRaisesRegex(RuntimeError, 'valid result'):
+                    runtime.run_assistance('fixture.png', 'scout', .15, .4, timeout=5)
+            self.assertTrue(started.exists())
+            time.sleep(1)
+            self.assertFalse(finished.exists())
+
+    def test_rosetta_launch_explicitly_requests_arm64(self):
+        def launch(arguments, **kwargs):
+            self.assertEqual(arguments[:3], ['arch', '-arm64', '/fixture/.venv/bin/python'])
+            Path(arguments[-2]).write_text('{"success":true,"boxes":[]}')
+            Path(arguments[-1]).write_text('{"stage":"result"}')
+            return Mock(returncode=0, poll=Mock(return_value=0))
+        with patch.object(runtime.sys, 'platform', 'darwin'), \
+             patch.object(runtime.sys, 'executable', '/fixture/.venv_x86/bin/python'), \
+             patch.object(runtime, '__file__', '/fixture/tempo_assistance_runtime.py'), \
+             patch.object(runtime.Path, 'is_file', return_value=True), \
+             patch.object(runtime, '_job_for_child', return_value=None), \
+             patch.object(runtime, '_stop_tree'), \
+             patch.object(runtime.subprocess, 'Popen', side_effect=launch):
+            self.assertTrue(runtime.run_assistance('fixture.png','scout',.15,.4)['success'])
 
     def test_early_command_exits_before_desktop_imports(self):
         source = Path(__file__).resolve().parents[1] / 'tempo_gui.py'

@@ -130,6 +130,7 @@ class PackagedWizardTests(IsolatedSetupState, unittest.TestCase):
             patch.object(setup.tempo_preferences, '_preferences', copy.deepcopy(DEFAULT_PREFERENCES)),
             patch.object(setup.tempo_hub, 'token', 'fixture-token'),
             patch.object(setup.tempo_hub, '_credentials_ready', True),
+            patch.object(setup, 'fetch_shared_settings', return_value=None),
         ):
             item.start(); self.addCleanup(item.stop)
 
@@ -238,6 +239,47 @@ class PackagedWizardTests(IsolatedSetupState, unittest.TestCase):
             self.assertTrue(wait_for_qt(lambda: view._model_task is None))
             install.assert_called_once()
         self.assertTrue(view._models_ready)
+
+    def test_nvidia_selected_after_model_install_is_not_skipped(self):
+        from tempo_model_catalog import MODEL_FILES
+        manifest = {'revision':'fixture', 'models':{name:{'sha256':'a'*64} for name in MODEL_FILES.values()}}
+        with patch('tempo_nvidia_setup.release_descriptor', return_value={'archive_size':1}):
+            view = self.view()
+        view.stack.setCurrentWidget(view.models_page); view.show(); APP.processEvents()
+        view._models_ready = True
+        view.nvidia_option.setChecked(True)
+        with patch.object(setup.tempo_hub, 'model_manifest', return_value=manifest), \
+             patch.object(setup.tempo_hub, 'download_model_release', return_value=3), \
+             patch('tempo_nvidia_setup.install_nvidia_runtime') as install:
+            view._install_models()
+            self.assertTrue(wait_for_qt(lambda: view._model_task is None))
+            install.assert_called_once()
+        self.assertTrue(view._nvidia_ready)
+
+    def test_first_signin_discovers_custom_repositories_before_checking_access(self):
+        from tempo_shared_settings import values
+        settings = dict(values(), hf_org_id='fixture-lab', hf_dataset_repo='fixture-lab/images', hf_models_repo='fixture-lab/models')
+        record = {'revision':'fixture', 'settings':settings}
+        view = self.view(); view.txt_collab_id.setText('Fixture Lab')
+        default = setup.tempo_hub.get_dataset_repo()
+        api = Mock()
+        def info(*, repo_id, **kwargs):
+            if repo_id == default:
+                raise PermissionError('Default repository is not this workspace')
+        api.repo_info.side_effect = info
+        with patch('huggingface_hub.HfApi', return_value=api), \
+             patch.object(setup, 'fetch_shared_settings', return_value=record) as discover, \
+             patch.object(setup, 'run_read_task', side_effect=lambda parent,title,action:action()), \
+             patch.object(setup, 'run_task', side_effect=lambda *a,**k:None), \
+             patch.object(setup.tempo_hub, '_init_credentials'), \
+             patch.object(setup.tempo_hub, 'authenticated_account', return_value='hf:fixture-account'), \
+             patch.object(setup.tempo_preferences, 'save', return_value=True), \
+             patch.object(setup, 'apply_shared_settings') as apply:
+            view._save_and_finish()
+        discover.assert_called_once()
+        api.auth_check.assert_called_once_with(repo_id='fixture-lab/images', repo_type='dataset', write=True)
+        apply.assert_called_once_with(record)
+        self.assertIs(view.stack.currentWidget(), view.models_page)
 
     def test_failed_optional_nvidia_download_can_be_skipped_without_losing_models(self):
         from tempo_model_catalog import MODEL_FILES

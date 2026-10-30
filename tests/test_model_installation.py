@@ -12,6 +12,61 @@ from tempo_hub import TempoHub
 
 
 class ModelInstallationTests(unittest.TestCase):
+    def test_windows_model_lock_reports_contention_and_releases_for_retry(self):
+        import errno
+        from types import SimpleNamespace
+        from unittest.mock import Mock
+        windows = SimpleNamespace(LK_NBLCK=1, LK_UNLCK=2,
+            locking=Mock(side_effect=[PermissionError(errno.EACCES, 'busy'), None, None]))
+        with patch('tempo_annotation_store.os', SimpleNamespace(name='nt')), \
+             patch.dict('sys.modules', {'msvcrt':windows}):
+            with self.assertRaisesRegex(RuntimeError, 'Another TEMPO instance'):
+                self.hub.download_model_release(self.manifest, self.root,
+                    local_sources={'yolo26n-scout.pt':self.source})
+            self.hub.download_model_release(self.manifest, self.root,
+                local_sources={'yolo26n-scout.pt':self.source})
+        self.assertEqual((self.root/'yolo26n-scout.pt').read_bytes(), self.source.read_bytes())
+
+    def test_overlapping_installations_cannot_publish_mixed_releases(self):
+        names = ('yolo26n-scout.pt', 'stardist_nuclei.zip')
+        sources, manifests = {}, {}
+        for version in ('A', 'B'):
+            sources[version], records = {}, {}
+            for name in names:
+                path = self.root/(version+name)
+                path.write_bytes((version+name).encode())
+                sources[version][name] = path
+                records[name] = {'sha256': self.hub.calculate_sha256(path)}
+            manifests[version] = {'revision': version, 'models': records}
+        attempted = []
+        def overlap(event):
+            if event.stage == 'installing' and event.filename == names[1]:
+                with self.assertRaisesRegex(RuntimeError, 'Another TEMPO instance'):
+                    self.hub.download_model_release(manifests['B'], self.root, local_sources=sources['B'])
+                attempted.append(True)
+        self.hub.download_model_release(manifests['A'], self.root, local_sources=sources['A'], progress=overlap)
+        self.assertEqual(attempted, [True])
+        for name in names:
+            self.assertEqual((self.root/name).read_bytes(), ('A'+name).encode())
+
+    def test_installation_lock_is_shared_across_processes(self):
+        import subprocess, sys, time
+        ready = self.root / 'lock-ready'
+        script = "from tempo_annotation_store import session_lock;import sys;from pathlib import Path\nwith session_lock(Path(sys.argv[1])/'.model-install'):\n Path(sys.argv[2]).touch();sys.stdin.read()"
+        child = subprocess.Popen([sys.executable, '-c', script, str(self.root), str(ready)],
+                                 stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        try:
+            deadline = time.monotonic() + 10
+            while not ready.exists() and child.poll() is None and time.monotonic() < deadline:
+                time.sleep(.01)
+            self.assertTrue(ready.exists(), 'The child did not acquire its lock within 10 seconds.')
+            with self.assertRaisesRegex(RuntimeError, 'Another TEMPO instance'):
+                self.hub.download_model_release(self.manifest, self.root,
+                    local_sources={'yolo26n-scout.pt': self.source})
+        finally:
+            child.communicate('', timeout=10)
+        self.assertEqual(child.returncode, 0)
+
 
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(); self.addCleanup(self.temp.cleanup)
