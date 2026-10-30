@@ -4,7 +4,7 @@ from PyQt6.QtCore import Qt, QRectF
 from PyQt6.QtGui import QColor, QPainter, QPainterPath, QPen, QKeySequence, QShortcut
 from PyQt6.QtWidgets import (QWidget, QDialog, QVBoxLayout, QHBoxLayout, QFormLayout,
     QComboBox, QPushButton, QLabel, QGroupBox, QSizePolicy, QTextBrowser)
-from tempo_ui import InformationButton, FlowRow
+from tempo_ui import InformationButton, FlowRow, get_current_theme
 
 TIME_DIVISIONS = (.00002,.00005,.0001,.0002,.0005,.001,.002,.005,.01,.02,.05,.1,.2,.5,1,2,5,10)
 VOLT_DIVISIONS = (.01,.02,.05,.1,.2,.5,1,2)
@@ -65,15 +65,16 @@ class ScopeTrace(QWidget):
             self.setMaximumHeight(max(self.minimumHeight(),height))
 
     def paintEvent(self,event):
+        t = get_current_theme()
         painter = QPainter(self)
-        painter.fillRect(self.rect(),QColor('#101820'))
+        painter.fillRect(self.rect(),QColor(t.get('scope_bg', '#101820')))
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         font = painter.font()
         if self.compact: font.setPointSizeF(max(8,font.pointSizeF()-1))
         painter.setFont(font)
         line_height = painter.fontMetrics().height()
         plot = QRectF(8,6,self.width()-16,max(20,self.height()-line_height-14))
-        painter.setPen(QPen(QColor('#2c3d4d'),1))
+        painter.setPen(QPen(QColor(t.get('scope_grid', '#2c3d4d')),1))
         for i in range(11):
             x = plot.left()+plot.width()*i/10
             painter.drawLine(int(x),int(plot.top()),int(x),int(plot.bottom()))
@@ -82,37 +83,39 @@ class ScopeTrace(QWidget):
             painter.drawLine(int(plot.left()),int(y),int(plot.right()),int(y))
         baseline = plot.bottom()-plot.height()/8
         y_value = lambda value: baseline-value/self.volt_div*plot.height()/8
-        painter.setPen(QPen(QColor('#73879a'),1))
+        painter.setPen(QPen(QColor(t.get('scope_baseline', '#73879a')),1))
         painter.drawLine(int(plot.left()),int(baseline),int(plot.right()),int(baseline))
         if self.mode == 'isolated':
-            painter.setPen(QColor('#d3dfeb'))
+            painter.setPen(QColor(t.get('scope_text', '#d3dfeb')))
             painter.drawText(plot,Qt.AlignmentFlag.AlignCenter|Qt.TextFlag.TextWordWrap,'Isolated · voltage is not predicted')
         elif self.pulse_width_s*self.frequency >= 1 and self.mode != 'constant':
-            painter.setPen(QColor('#f2b36f'))
+            painter.setPen(QColor(t.get('scope_warn', '#f2b36f')))
             painter.drawText(plot,Qt.AlignmentFlag.AlignCenter,'Width must be shorter than the period')
         else:
             start,end = -self.time_div,9*self.time_div
             points = waveform_segments(self.voltage,self.frequency,self.pulse_width_s,self.mode,start,end)
             painter.save(); painter.setClipRect(plot)
-            painter.setPen(QPen(QColor('#65dfa5'),1.8))
+            painter.setPen(QPen(QColor(t.get('scope_trace', '#65dfa5')),1.8))
             if points is None:
+                trace_color = QColor(t.get('scope_trace', '#65dfa5'))
+                trace_color.setAlpha(65)
                 painter.fillRect(QRectF(plot.left(),y_value(self.voltage),plot.width(),
-                    baseline-y_value(self.voltage)),QColor(101,223,165,65))
+                    baseline-y_value(self.voltage)), trace_color)
                 painter.drawText(plot,Qt.AlignmentFlag.AlignTop|Qt.AlignmentFlag.AlignHCenter,'Pulses overlap at this scale')
             else:
                 path = QPainterPath()
-                for index,(t,value) in enumerate(points):
-                    x = plot.left()+(t-start)/(end-start)*plot.width()
+                for index,(t_val,value) in enumerate(points):
+                    x = plot.left()+(t_val-start)/(end-start)*plot.width()
                     if index == 0: path.moveTo(x,y_value(value))
                     else: path.lineTo(x,y_value(value))
                 painter.drawPath(path)
             painter.restore()
             if not self.compact:
-                painter.setPen(QColor('#a9bacb'))
+                painter.setPen(QColor(t.get('scope_text', '#a9bacb')))
                 painter.drawText(QRectF(plot.left()+4,baseline-line_height,60,line_height),Qt.AlignmentFlag.AlignLeft,'0 V')
             if y_value(self.voltage) < plot.top():
-                painter.setPen(QColor('#f2b36f')); painter.drawText(plot,Qt.AlignmentFlag.AlignTop|Qt.AlignmentFlag.AlignHCenter,'Amplitude exceeds view')
-        painter.setPen(QColor('#d3dfeb'))
+                painter.setPen(QColor(t.get('scope_warn', '#f2b36f'))); painter.drawText(plot,Qt.AlignmentFlag.AlignTop|Qt.AlignmentFlag.AlignHCenter,'Amplitude exceeds view')
+        painter.setPen(QColor(t.get('scope_text', '#d3dfeb')))
         caption = time_label(self.time_div) + f'   {self.volt_div:g} V/div'
         painter.drawText(QRectF(8,self.height()-line_height-4,self.width()-16,line_height),Qt.AlignmentFlag.AlignCenter,caption)
 

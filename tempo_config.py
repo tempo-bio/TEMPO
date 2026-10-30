@@ -73,6 +73,17 @@ CONFIG_PATH = os.path.join(CONFIG_DIR, "tempo_preferences.json")
 
 DEFAULT_PREFERENCES = {
     "appearance": {
+        "theme": {
+            "value": "dark",
+            "options": ["dark", "light", "oatmeal"],
+            "option_labels": {
+                "dark": "Dark",
+                "light": "Light",
+                "oatmeal": "Oatmeal",
+            },
+            "label": "Theme",
+            "description": "Visual palette for window surfaces, controls, and physiological plots.",
+        },
         "animate_activity_icon": {
             "value": False,
             "label": "Animate Dock/taskbar icon while working",

@@ -110,7 +110,7 @@ from tempo_annotations import (normalize_record, validate_annotations, pixel_rec
                                merge_image_records, canonical_image_name)
 from tempo_regions import object_type, region_counts, scout_qualifies
 from tempo_tasks import run_read_task, run_task, run_background, TaskThread, pending_task_titles
-from tempo_ui import confirm_action, FilenameLabel, ErrorDetails, InformationButton, InformationSlot, FilePickerRow, set_button_color, FlowLayout, FlowRow, SettingRow, MetricForm, StatisticsTabs, statistic_description, InlineNotice, ContentTabs, CompactWorkspace, SelectorRow, install_help, ContainedToolsMenu, ACTION_GREEN, DESCRIPTION_BLUE, GUIDANCE_MINT
+from tempo_ui import confirm_action, FilenameLabel, ErrorDetails, InformationButton, InformationSlot, FilePickerRow, set_button_color, FlowLayout, FlowRow, SettingRow, MetricForm, StatisticsTabs, statistic_description, InlineNotice, ContentTabs, CompactWorkspace, SelectorRow, install_help, ContainedToolsMenu, ACTION_GREEN, DESCRIPTION_BLUE, GUIDANCE_MINT, ThemeSegmentedChoice, description_color, guidance_color, apply_theme, get_current_theme
 from tempo_ui import PreviewStatusLabel
 from tempo_plot import LifecycleAxisItem, PlotWidget, ColorBarItem, add_plot, add_item
 
@@ -6284,6 +6284,8 @@ class SettingsTab(QWidget):
         for widget in self.widgets.values():
             if isinstance(widget, QCheckBox):
                 widget.toggled.connect(self.update_save_state)
+            elif hasattr(widget, 'themeChanged'):
+                widget.themeChanged.connect(self.update_save_state)
             elif isinstance(widget, QComboBox):
                 widget.currentIndexChanged.connect(self.update_save_state)
             elif isinstance(widget, (QSpinBox, QDoubleSpinBox)):
@@ -6391,14 +6393,20 @@ class SettingsTab(QWidget):
                     row_layout.addWidget(chk)
                     self.widgets[(cat_key, item_key)] = chk
                 elif "options" in item_spec:
-                    combo = QComboBox()
-                    combo.setMinimumWidth(140)
-                    combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
-                    for opt in item_spec["options"]:
-                        combo.addItem(item_spec.get("option_labels", {}).get(str(opt), str(opt)), opt)
-                    combo.setCurrentIndex(combo.findData(val))
-                    row_layout.addWidget(combo)
-                    self.widgets[(cat_key, item_key)] = combo
+                    if (cat_key, item_key) == ('appearance', 'theme'):
+                        choice = ThemeSegmentedChoice(item_spec["options"], val)
+                        row_layout.addWidget(choice)
+                        self.widgets[(cat_key, item_key)] = choice
+                        choice.themeChanged.connect(self._on_theme_changed)
+                    else:
+                        combo = QComboBox()
+                        combo.setMinimumWidth(140)
+                        combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
+                        for opt in item_spec["options"]:
+                            combo.addItem(item_spec.get("option_labels", {}).get(str(opt), str(opt)), opt)
+                        combo.setCurrentIndex(combo.findData(val))
+                        row_layout.addWidget(combo)
+                        self.widgets[(cat_key, item_key)] = combo
                 elif isinstance(val, float):
                     dspin = QDoubleSpinBox()
                     from decimal import Decimal
@@ -6455,11 +6463,12 @@ class SettingsTab(QWidget):
                 notes_layout.setContentsMargins(0, 0, 0, 0)
                 notes_layout.setSpacing(2)
 
-                # Subtext 1: Description with readable tech-cyan indicator color
+                # Subtext 1: Description with readable theme-aware indicator color
                 desc_text = item_spec.get("description", "") if cat_key != 'collaboration' else ''
                 if desc_text:
                     desc_lbl = QLabel(desc_text)
-                    desc_lbl.setStyleSheet(f'color: {DESCRIPTION_BLUE};')
+                    desc_lbl.setProperty('settingRole', 'description')
+                    desc_lbl.setStyleSheet(f'color: {description_color()};')
                     desc_lbl.setWordWrap(True)
                     notes_layout.addWidget(desc_lbl)
                     font = desc_lbl.font(); font.setItalic(True); desc_lbl.setFont(font)
@@ -6467,8 +6476,9 @@ class SettingsTab(QWidget):
                 guidance = SETTING_GUIDANCE.get((cat_key, item_key))
                 if guidance:
                     rec_lbl = QLabel(guidance)
+                    rec_lbl.setProperty('settingRole', 'guidance')
                     rec_lbl.setWordWrap(True)
-                    rec_lbl.setStyleSheet(f'color: {GUIDANCE_MINT};')
+                    rec_lbl.setStyleSheet(f'color: {guidance_color()};')
                     font = rec_lbl.font(); font.setItalic(True); rec_lbl.setFont(font)
                     notes_layout.addWidget(rec_lbl)
 
@@ -6518,6 +6528,8 @@ class SettingsTab(QWidget):
         for key, widget in self.widgets.items():
             if isinstance(widget, QCheckBox):
                 value = widget.isChecked()
+            elif hasattr(widget, 'value') and not isinstance(widget, (QSpinBox, QDoubleSpinBox)):
+                value = widget.value()
             elif isinstance(widget, QComboBox):
                 value = widget.currentData() if widget.currentData() is not None else widget.currentText()
             elif isinstance(widget, (QSpinBox, QDoubleSpinBox)):
@@ -6526,6 +6538,29 @@ class SettingsTab(QWidget):
                 value = widget.text()
             values[key] = value
         return values
+
+    def _on_theme_changed(self, theme_name):
+        self.update_save_state()
+        window = self.window()
+        if hasattr(window, 'apply_theme_preferences'):
+            window.apply_theme_preferences(theme_name)
+        else:
+            apply_theme(theme_name, QApplication.instance())
+        self.update_notes_styles()
+
+    def update_notes_styles(self):
+        d_col = description_color()
+        g_col = guidance_color()
+        for lbl in self.findChildren(QLabel):
+            role = lbl.property('settingRole')
+            if role == 'description':
+                lbl.setStyleSheet(f'color: {d_col};')
+            elif role == 'guidance':
+                lbl.setStyleSheet(f'color: {g_col};')
+        if ('appearance', 'theme') in self.widgets:
+            theme_choice = self.widgets[('appearance', 'theme')]
+            if hasattr(theme_choice, 'update_styles'):
+                theme_choice.update_styles()
 
     def update_save_state(self, *_):
         self._update_shared_action()
@@ -6861,6 +6896,7 @@ class TempoDashboard(QMainWindow):
         self.tab_settings = SettingsTab()
         self.tab_settings.settings_saved.connect(self.tab_analyzer.apply_display_preferences)
         self.tab_settings.settings_saved.connect(tempo_backend.apply_data_folder)
+        self.tab_settings.settings_saved.connect(self.apply_theme_preferences)
         
         self.tabs.addTab(self.tab_capture, "Acquisition")
         self.tabs.addTab(self.tab_annotator, "Segmentation Annotation")
@@ -6887,7 +6923,32 @@ class TempoDashboard(QMainWindow):
         self.activity_icon = ActivityIconController(QApplication.instance(), self)
         self.tab_settings.settings_saved.connect(self.activity_icon.apply_preferences)
         self.activity_icon.apply_preferences()
+        self.apply_theme_preferences()
         QTimer.singleShot(0, self.refresh_account_indicator)
+
+    def apply_theme_preferences(self, theme_name=None):
+        if theme_name is None:
+            theme_name = tempo_preferences.get('appearance', 'theme', 'dark')
+        apply_theme(theme_name, QApplication.instance())
+        t = get_current_theme()
+        if hasattr(self.tab_analyzer, 'glw'):
+            self.tab_analyzer.glw.setBackground(t['plot_bg'])
+        if hasattr(self.tab_analyzer, 'summary_plot'):
+            self.tab_analyzer.summary_plot.setBackground(t['plot_bg'])
+            if hasattr(self.tab_analyzer, 'summary_curve'):
+                self.tab_analyzer.summary_curve.setPen(pg.mkPen(t['plot_curve1'], width=2))
+        if hasattr(self.tab_analyzer, 'mini_plot'):
+            self.tab_analyzer.mini_plot.setBackground(t['plot_bg'])
+            if hasattr(self.tab_analyzer, 'wave_curve'):
+                self.tab_analyzer.wave_curve.setPen(pg.mkPen(t['plot_curve2'], width=2))
+        if hasattr(self.tab_capture, 'capture_controls'):
+            self.tab_capture.capture_controls.apply_theme()
+        if hasattr(self.tab_capture, 'feed_label'):
+            self.tab_capture.feed_label.setStyleSheet(
+                f'background-color: {t["base"]}; color: {t["text"]}; border: 1px solid {t["border"]}; font-size: 18px;'
+            )
+        if hasattr(self.tab_settings, 'update_notes_styles'):
+            self.tab_settings.update_notes_styles()
 
     def edit_notebook_url(self):
         self.tabs.setCurrentWidget(self.tab_settings)
