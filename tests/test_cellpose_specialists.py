@@ -243,6 +243,30 @@ class CellposeSpecialistTests(unittest.TestCase):
         self.assertEqual(points.min(axis=0).tolist(), [20, 18])
         self.assertEqual(points.max(axis=0).tolist(), [26, 24])
 
+    def test_cpu_prediction_avoids_emulated_bfloat16_for_both_specialists(self):
+        import torch
+        target = self.bundle()
+        owner = self
+        for device in ('cpu', torch.device('cpu:0'), 'cuda:1', 'mps'):
+            with self.subTest(device=str(device)):
+                calls = []
+                class Model:
+                    def __init__(self, **kwargs):
+                        calls.append(kwargs)
+                        self.name = Path(kwargs['pretrained_model']).read_bytes().decode()
+                    def eval(self, image, **kwargs):
+                        return (owner.healthy if self.name == 'healthy' else owner.dead,)
+                fake = types.ModuleType('cellpose')
+                fake.models = types.SimpleNamespace(CellposeModel=Model)
+                with patch.dict('sys.modules', {'cellpose': fake}), \
+                     patch.object(adapter, 'release_model_memory'):
+                    result = adapter.predict_batch(target, [self.healthy], device)
+                self.assertEqual(len(calls), 2)
+                for call in calls:
+                    self.assertEqual(call['device'], torch.device(device))
+                    self.assertEqual(call['use_bfloat16'], torch.device(device).type != 'cpu')
+                self.assertEqual([instance.class_id for instance in result[0]], [0, 1])
+
     def test_benchmark_penalizes_wrong_classes_despite_perfect_outlines(self):
         self.partition('test', [(0, 1)])
         correct = adapter.merge_specialists(self.healthy, self.dead)

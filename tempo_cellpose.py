@@ -377,7 +377,10 @@ def predict_batch(path, images, device, *, processed=False, helper_mode="normal"
     with checkpoint_paths(path) as paths:
         for name, checkpoint in paths.items():
             model = models.CellposeModel(pretrained_model=str(checkpoint), device=torch.device(device),
-                                         gpu=str(device).startswith('cuda'))
+                                         gpu=str(device).startswith('cuda'),
+                                         # BF16 arithmetic is emulated on many CPUs, including
+                                         # Ryzen Zen 3. Keep GPU precision at Cellpose's default.
+                                         use_bfloat16=torch.device(device).type != 'cpu')
             try:
                 predictions = []
                 for index, image in enumerate(images):
