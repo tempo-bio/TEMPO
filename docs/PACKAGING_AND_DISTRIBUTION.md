@@ -2,7 +2,7 @@
 
 TEMPO is bundled as a 64-bit Windows executable with PyInstaller and distributed through an Inno Setup installer. Python and the locked application runtimes are included. Developer preferences and account credentials are not part of the declared payload.
 
-For installation instructions and the consequences of the unsigned v1.0.0 installer, see [Install on Windows](../README.md#install-on-windows).
+For installation instructions and unsigned-installer guidance, see [Getting started](GETTING_STARTED.md#install-on-windows).
 
 ## Run a test build
 

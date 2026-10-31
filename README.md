@@ -2,54 +2,33 @@
 
 TEMPO is a desktop application for microscopy acquisition and cell-motion analysis. Use it to annotate cells, process recordings, inspect contraction traces and measurements, and train detection and segmentation models from reviewed annotations.
 
-Camera control supports Micro-Manager and USB cameras; motorized stages use Micro-Manager. Configure and validate acquisition and stimulation with your microscope hardware before collecting experimental data.
+Camera control supports Micro-Manager and USB cameras; motorized stages use Micro-Manager.
 
 Shared images, reservations, annotations, and training records are stored in a private Hugging Face workspace. Access to TEMPO's source code does not grant access to that workspace.
 
 ## Install on Windows
 
-Download `TEMPO_Setup_v1.0.0.exe` from the project's [Releases page](https://github.com/tempo-bio/TEMPO/releases). The installer is for 64-bit Windows and includes Python and the application libraries.
-
-### Unsigned installer
-
-The v1.0.0 installer has no code-signing certificate. Windows cannot verify its publisher from a digital signature and may show **Unknown publisher** or **Windows protected your PC**. Smart App Control or your organization's security policy may block it entirely.
-
-Download only from the TEMPO release page. To check that your download matches the release, compare its SHA-256 value with the installer entry in `SHA256SUMS.txt`. In PowerShell, from the download folder:
-
-```powershell
-Get-FileHash .\TEMPO_Setup_v1.0.0.exe -Algorithm SHA256
-```
-
-If the values differ, do not run the file. The checksum can detect a changed or incomplete download. It cannot verify who published the file or whether it is safe. Proceed only if you trust the source and your device policy permits it. On a managed computer, ask IT if installation is blocked. Do not disable Windows security protections to install TEMPO.
-
-See Microsoft's guidance on [SmartScreen warnings](https://learn.microsoft.com/en-us/windows/apps/package-and-deploy/smartscreen-reputation).
+Download the 64-bit Windows installer from the [latest release](https://github.com/tempo-bio/TEMPO/releases/latest). Python and the application libraries are included.
 
 ### First launch
 
 1. Run the installer. The default location is `%LOCALAPPDATA%\Programs\TEMPO`.
-2. Open TEMPO from the Start menu or the optional desktop shortcut.
-3. In the v1.0.0 release, open **Guided Setup** from Settings → Application Tools. Builds made from the updated source open Setup on first launch and resume saved progress if you close it. The updated model step offers an optional NVIDIA acceleration download for cell outlines when its matching runtime is published; leave the checkbox clear to use CPU processing.
-4. Enter **Your name or laboratory** and choose **Sign in with Hugging Face**. Approve access to the workspace organizations in your browser, return to TEMPO, and save your account. If browser sign-in is unavailable, choose **Use an access token**. Use your own account; do not share tokens between collaborators.
-5. Install the models and choose **Open TEMPO**. **Account Setup** and **Guided Setup** remain available in Settings → Application Tools.
+2. Open TEMPO from the Start menu or desktop shortcut.
+3. Follow Guided Setup to connect your Hugging Face account and install the models.
 
-Choose **Need an account?** for account creation and workspace access instructions. Maintainers configuring browser sign-in should follow [workspace administration](docs/WORKSPACE_ADMINISTRATION.md#browser-sign-in-application).
+Optional NVIDIA acceleration for Cellpose outlining is available during setup. You can add it later through **Settings → Application Tools → Guided Setup**.
 
-Camera acquisition requires compatible vendor drivers and Micro-Manager adapters. Image annotation does not require a connected camera.
+See [Getting started](docs/GETTING_STARTED.md) for workspace access, model installation, and your first shared annotation. If Windows shows an unsigned-publisher warning, see [Unsigned Windows installer](docs/GETTING_STARTED.md#unsigned-windows-installer).
 
-See [Getting started](docs/GETTING_STARTED.md) for account setup and your first shared annotation.
+### Updating TEMPO
+
+Close TEMPO and run the new installer using your existing installation folder. Recordings, analysis files, downloaded models, and saved account settings are retained.
 
 ### Uninstall TEMPO
 
-To uninstall TEMPO on Windows:
+Use **Settings → Application Tools → Uninstall TEMPO…**, Windows **Settings → Apps → Installed apps**, or the **Uninstall TEMPO** Start menu entry. The in-app dialog lets you choose whether to remove saved preferences and Hugging Face sign-in details.
 
-1. **From within TEMPO (Recommended)**:
-   Open **Settings → Application Tools → Uninstall TEMPO...**. Review your user data options (with checkboxes to optionally remove saved preferences or stored Hugging Face authentication tokens), then choose **Uninstall and Exit**. TEMPO closes automatically and runs the Windows uninstaller.
-2. **From Windows Settings**:
-   Open **Windows Settings → Apps → Installed apps** (or *Add or Remove Programs*), find **TEMPO**, and select **Uninstall**.
-3. **From the Start Menu**:
-   Open the Start Menu, locate the **TEMPO** folder, and select **Uninstall TEMPO**.
-
-Personal recordings and analysis outputs in your data folder (default: `Documents\TEMPO`) are kept safe and will not be removed. Confirm that all local annotation drafts are synchronized before uninstalling.
+Recordings and analysis outputs in your data folder are retained. Check that annotation drafts have synced before uninstalling. See [Uninstall TEMPO](docs/GETTING_STARTED.md#uninstall-tempo) for the available methods and data-removal choices.
 
 ## Start annotating
 
@@ -82,7 +61,7 @@ evidence. See [recording storage, focus and quality review](docs/CAPTURE_QUALITY
 
 ## Maintainer training workflow
 
-Model training runs in Colab. It requires maintainer access to the private workspace and notebook; most TEMPO users will not have this access. A maintainer approves annotated images, opens the configured notebook, and follows its reported progress from TEMPO. Colab uses its own `HF_TOKEN` secret.
+Maintainers train detection and segmentation models in Colab using approved annotations. Training requires maintainer access to the workspace and its configured notebook; progress and results are available in TEMPO.
 
 The [training guide](docs/TRAINING_WORKFLOW.md) documents setup, dataset selection, model comparisons, cancellation, and recovery for current and future maintainers.
 

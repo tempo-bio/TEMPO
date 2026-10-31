@@ -50,6 +50,8 @@ To prevent IDE static analysis noise, false-positive import errors (e.g., `Canno
 
 ## 4. Presentation Decisions and Visual Review
 
+The UI-copy rules in this section concern the application interface. Use section 5 to choose the purpose, structure, and level of detail for other writing formats.
+
 * Add UI text only when it answers a question the user needs answered at that point, helps them choose a value, or explains a necessary action. If a label or button already communicates it, omit the extra sentence.
 * Do not narrate internal wiring, implementation work, permission checks, or routine synchronization in helper text. Avoid messages such as “Administrator verified” or “Open Notebook uses the shared value.” Show a permission restriction when it explains an unavailable action; show sync status when it affects whether work was saved or needs attention.
 * Prefer deleting redundant copy to polishing or relocating it. Do not turn an unnecessary paragraph into a tooltip or information icon. Keep useful scientific definitions, units, recommendations, and instructions where the user needs them.
@@ -74,3 +76,34 @@ To prevent IDE static analysis noise, false-positive import errors (e.g., `Canno
 * Allocate space by task priority: an expected-signal plot must remain readable before expanding history. Empty lists use compact contextual states rather than large blank frames, and recent history has bounded height with access to the complete record. Check empty and populated geometry separately. See [Carbon empty states](https://www.carbondesignsystem.com/building-blocks/core/patterns/empty-states).
 * Informational and live-adjustment windows use native dismissal and standard keyboard shortcuts, without redundant Close buttons. Keep Save/Apply/Cancel when they describe actual commit or cancellation behavior; retain firmware-upload close guards during flashing.
 * Visual acceptance must include meaningful populated camera properties, controls in their correct panels, readable waveform divisions and scale labels, empty and long histories, real help interaction, and reachable recording/stopping actions. Check ordinary, wide, small-window, and larger-font layouts. Passing geometry assertions is necessary evidence, not visual approval.
+
+---
+
+## 5. Writing: Purpose, Audience, and Format
+
+Before writing or revising copy, reread this section and the rules for its destination. Establish what kind of artifact it is, who will read it, what they need from it, and its scope. A release note, button label, setup guide, scientific explanation, and private support reply have different jobs. Choose the opening, structure, vocabulary, and level of detail for that job.
+
+### Apply the rules for the artifact
+
+| Writing type | Purpose and required content |
+| --- | --- |
+| **Release notes / changelog** | Explain what changed in the released version and why it matters. Review the complete diff from the previous release, covering significant performance improvements, features, fixes, and version-specific compatibility or migration changes. Lead with the changes. Link to installation and reference documentation. Include technical mechanisms when they explain a material improvement; avoid vague claims such as “performance improvements” when the actual change is known. |
+| **README / project overview** | Explain what TEMPO does, who it serves, its principal workflows, and where to start. Organize for readers encountering the project for the first time. Put detailed procedures and the version history in their dedicated documents. |
+| **Installation / quickstart** | Help a first-time reader reach a working starting state. Give supported prerequisites, ordered steps, and recognizable outcomes. Separate fresh installation from upgrading an existing installation; do not assume the reader already has TEMPO running or has followed a previous conversation. |
+| **Application UI** | Help someone act or understand the current state at that point in the workflow. Apply section 4: concise labels, necessary instructions and units, actionable errors, and visible save or hardware consequences. Put focused definitions and secondary explanations in the appropriate help control. |
+| **User guides / scientific help** | Teach a workflow or explain a scientific concept. Include the procedures, definitions, units, assumptions, examples, interpretation, limitations, and troubleshooting needed to use it correctly. Full explanations can be appropriate; compact UI-label rules do not require terse guides. |
+| **Troubleshooting / private support** | Diagnose the reported symptoms in the actual environment. Exact paths, hardware details, temporary diagnostic tools, and conditional steps can be appropriate in a private reply. Public troubleshooting guides must state the applicable symptoms and conditions and provide reusable, supported recovery steps. |
+| **Developer documentation / PR descriptions** | Help maintainers implement, review, or operate the system. Explain relevant architecture, mechanisms, tradeoffs, interfaces, commands, and validation. Technical detail belongs here when it supports a maintenance or review decision; the UI rule against implementation narration is not a blanket prohibition on explaining code. |
+| **Scientific / performance reports** | State the question, methods, data, conditions, results, and limitations. Report units and relevant hardware or software conditions. Distinguish component benchmarks from complete workflows and measured results from inference; do not turn one machine's timing into a universal speedup claim. |
+
+### Keep scope and context appropriate
+
+* Public artifacts must stand on their own for the intended reader. Keep private troubleshooting history, personal instructions, and temporary support helpers out unless the user explicitly requests their publication and they serve the public artifact's purpose. Translate a support incident into the general shipped fix when documenting a release.
+* Apply scope deliberately: a changelog covers changes in that version; an installation guide covers setup; a scientific guide explains interpretation. Put stable background instructions and limitations in the relevant reference material. Include a limitation in release notes when it materially affects that release, rather than automatically appending a generic warning section.
+* Include implementation details, examples, or explanations when they help that artifact's audience. Remove irrelevant detail and duplication without deleting useful substance to meet a blanket brevity rule.
+* Verify claims against the released code, supported workflow, or relevant evidence. Do not invent benefits, omit substantial shipped improvements, or use the latest chat recap as a substitute for reviewing the release scope.
+
+### Review the actual text
+
+* Review the final text diff for purpose, audience, completeness, accuracy, and organization. Read it as someone who has not seen the conversation. Check whether the first paragraph and headings answer the questions readers came to that artifact to resolve.
+* Review content separately from its appearance. Inspect the rendered result where applicable, then read back the saved or published text to confirm users receive the reviewed version. A legible screenshot, passing tests, or a completed checklist does not establish editorial quality.
