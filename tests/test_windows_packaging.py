@@ -221,6 +221,24 @@ class PackagingCommandTests(unittest.TestCase):
                     self.assertEqual(result.returncode, 0, result.stderr)
                     self.assertTrue(json.loads(result.stdout)['scripts'])
 
+    def test_cpu_spec_rejects_unpublishable_or_mismatched_nvidia_descriptor(self):
+        from tests.packaging_fixtures import SPEC_CAPTURE_SCRIPT, stage_spec_inputs
+        repository = Path(__file__).resolve().parents[1]
+        for failure in ('legacy', 'oversized', 'revision'):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as directory:
+                root = stage_spec_inputs(repository, Path(directory)/'source')
+                path = root/'Output/nvidia-runtime.json'
+                value = json.loads(path.read_text())
+                if failure == 'legacy':value['schema_version'] = 1
+                if failure == 'oversized':value['parts'][0]['size'] = 2*1024**3
+                if failure == 'revision':value['commit'] = 'b'*40
+                path.write_text(json.dumps(value))
+                result = subprocess.run([sys.executable, '-I', '-c', SPEC_CAPTURE_SCRIPT, str(root/'tempo.spec')],
+                                        cwd=directory, capture_output=True, text=True, timeout=30,
+                                        env=dict(os.environ, TEMPO_WINDOWS_PROFILE='cpu'))
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn('NVIDIA download', result.stderr)
+
     def test_spec_loads_project_helpers_without_checkout_on_search_path(self):
         root = Path(__file__).resolve().parents[1]
         # Execute the real spec in an isolated subprocess, replacing only the
@@ -236,6 +254,7 @@ class PackagingCommandTests(unittest.TestCase):
             declarations = json.loads(result.stdout)
             self.assertTrue(set(tempo_release.RUNTIME_IMPORTS).issubset(declarations['hiddenimports']))
             self.assertTrue({'tempo_logo', 'tempo_activity_icon', 'tempo_onboarding'}.issubset(declarations['hiddenimports']))
+            self.assertIn('tempo_nvidia_manifest', declarations['hiddenimports'])
             self.assertEqual(declarations['scripts'], [str(root/'tempo_gui.py')])
             self.assertEqual(declarations['pathex'], [str(root)])
             declared = {Path(source).relative_to(root).as_posix(): destination

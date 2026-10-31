@@ -44,7 +44,7 @@ print(json.dumps(captured))
 def stage_spec_inputs(source, target):
     source, target = Path(source).resolve(), Path(target).resolve()
     required = set(BUNDLE_FILES) | {
-        'tempo.spec', 'tempo_release.py', 'tempo_gui.py', 'LICENSE', 'README.md',
+        'tempo.spec', 'tempo_release.py', 'tempo_gui.py', 'tempo_nvidia_manifest.py', 'LICENSE', 'README.md',
         'requirements-windows.lock', 'requirements-windows-nvidia.lock',
         'installer/dependency-sources.json', 'installer/dependency-sources-nvidia.json',
         'installer/windows-native-runtime.json',
@@ -62,9 +62,10 @@ def stage_spec_inputs(source, target):
     (output/'third-party-licenses').mkdir()
     (output/'build-provenance.json').write_text(json.dumps({'commit': 'a'*40, 'profile': 'cpu'}))
     (output/'nvidia-runtime.json').write_text(json.dumps({
-        'schema_version': 1, 'profile': 'nvidia-cu126', 'app_version': '1.0.1',
+        'schema_version': 2, 'profile': 'nvidia-cu126', 'app_version': '1.0.1',
         'commit': 'a'*40, 'archive_size': 1, 'archive_sha256': 'b'*64,
-        'archive_url': 'https://github.com/tempo-bio/TEMPO/releases/download/v1.0.1/TEMPO_NVIDIA_Runtime_v1.0.1.zip',
+        'parts': [{'url': 'https://github.com/tempo-bio/TEMPO/releases/download/v1.0.1/TEMPO_NVIDIA_Runtime_v1.0.1.zip.part001',
+                   'size': 1, 'sha256': 'b'*64}],
         'executable': 'TEMPO/TEMPO.exe', 'executable_sha256': 'c'*64,
     }))
     return target

@@ -4,7 +4,6 @@ import hashlib
 import json
 import os
 from pathlib import Path, PurePosixPath
-import re
 import shutil
 import stat
 import sys
@@ -17,11 +16,9 @@ import uuid
 from tempo_config import get_base_dir, get_config_dir
 from tempo_release import VERSION, build_identity
 from tempo_process import run_model_worker
+from tempo_nvidia_manifest import MAX_DESCRIPTOR, validate_descriptor
 
 
-_HASH = re.compile(r'^[0-9a-f]{64}$')
-_ASSET = re.compile(r'^https://github\.com/tempo-bio/TEMPO/releases/download/v[0-9]+\.[0-9]+\.[0-9]+/TEMPO_NVIDIA_Runtime_v[0-9]+\.[0-9]+\.[0-9]+\.zip$')
-_MAX_ARCHIVE = 8 * 1024**3
 _MAX_EXPANDED = 16 * 1024**3
 
 
@@ -35,25 +32,14 @@ def release_descriptor():
         return None
     path = Path(get_base_dir()) / 'assets' / 'nvidia-runtime.json'
     try:
-        if path.stat().st_size > 4096:
+        if path.stat().st_size > MAX_DESCRIPTOR:
             return None
         value = json.loads(path.read_text(encoding='utf-8'))
     except (OSError, ValueError):
         return None
-    if (not isinstance(value, dict) or value.get('schema_version') != 1
-            or value.get('profile') != 'nvidia-cu126'
-            or value.get('app_version') != VERSION
-            or not isinstance(value.get('commit'), str)
-            or not re.fullmatch(r'[0-9a-f]{40}', value['commit'])
-            or value.get('commit') != build_identity().get('commit')
-            or not isinstance(value.get('archive_url'), str)
-            or not _ASSET.fullmatch(value['archive_url'])
-            or value['archive_url'].split('/download/', 1)[-1].split('/', 1)[0] != 'v' + VERSION
-            or type(value.get('archive_size')) is not int
-            or not 0 < value['archive_size'] <= _MAX_ARCHIVE
-            or value.get('executable') != 'TEMPO/TEMPO.exe'
-            or not all(isinstance(value.get(key), str) and _HASH.fullmatch(value[key])
-                       for key in ('archive_sha256', 'executable_sha256'))):
+    try:
+        validate_descriptor(value, version=VERSION, commit=build_identity().get('commit'))
+    except ValueError:
         return None
     return value
 
@@ -142,6 +128,7 @@ def install_nvidia_runtime(report=lambda received, total: None, *, descriptor=No
     descriptor = descriptor or release_descriptor()
     if descriptor is None:
         raise RuntimeError('This build does not include an NVIDIA runtime download.')
+    validate_descriptor(descriptor, version=VERSION, commit=descriptor.get('commit'))
     root = runtime_root()
     root.mkdir(parents=True, exist_ok=True)
     from tempo_annotation_store import session_lock
@@ -167,21 +154,31 @@ def _install_runtime(root, descriptor, report, open_url):
     with tempfile.TemporaryDirectory(prefix='nvidia-download-', dir=root) as folder:
         staging = Path(folder)
         archive = staging / 'runtime.zip'
-        request = urllib.request.Request(descriptor['archive_url'], headers={'User-Agent': 'TEMPO/' + VERSION})
         received = 0
         digest = hashlib.sha256()
-        with opener(request, timeout=30) as response, archive.open('wb') as output:
-            final_url = urlsplit(response.geturl())
-            if final_url.scheme != 'https' or final_url.hostname not in (
-                    'github.com', 'release-assets.githubusercontent.com', 'objects.githubusercontent.com'):
-                raise ValueError('NVIDIA runtime download redirected outside GitHub.')
-            while block := response.read(1024 * 1024):
-                received += len(block)
-                if received > descriptor['archive_size']:
-                    raise ValueError('NVIDIA runtime download exceeded its declared size.')
-                digest.update(block)
-                output.write(block)
-                report(received, descriptor['archive_size'])
+        parts = descriptor.get('parts') if descriptor['schema_version'] == 2 else [dict(
+            url=descriptor['archive_url'], size=descriptor['archive_size'], sha256=descriptor['archive_sha256'])]
+        with archive.open('wb') as output:
+            for part in parts:
+                request = urllib.request.Request(part['url'], headers={'User-Agent': 'TEMPO/' + VERSION})
+                part_received = 0
+                part_digest = hashlib.sha256()
+                with opener(request, timeout=30) as response:
+                    final_url = urlsplit(response.geturl())
+                    if final_url.scheme != 'https' or final_url.hostname not in (
+                            'github.com', 'release-assets.githubusercontent.com', 'objects.githubusercontent.com'):
+                        raise ValueError('NVIDIA runtime download redirected outside GitHub.')
+                    while block := response.read(1024 * 1024):
+                        part_received += len(block)
+                        if part_received > part['size']:
+                            raise ValueError('NVIDIA runtime download exceeded its declared size.')
+                        received += len(block)
+                        digest.update(block)
+                        part_digest.update(block)
+                        output.write(block)
+                        report(received, descriptor['archive_size'])
+                if part_received != part['size'] or part_digest.hexdigest() != part['sha256']:
+                    raise ValueError('NVIDIA runtime download failed its release checksum.')
         if received != descriptor['archive_size'] or digest.hexdigest() != descriptor['archive_sha256']:
             raise ValueError('NVIDIA runtime download failed its release checksum.')
         unpacked = staging / 'unpacked'

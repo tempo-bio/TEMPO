@@ -48,6 +48,97 @@ class NvidiaSetupTests(unittest.TestCase):
                     executable='TEMPO/TEMPO.exe',
                     executable_sha256=hashlib.sha256(b'fixed-worker').hexdigest())
 
+    def multipart(self, data):
+        descriptor = self.descriptor(data)
+        descriptor.update(schema_version=2, parts=[])
+        descriptor.pop('archive_url')
+        payloads = {}
+        size = max(1, (len(data)+2)//3)
+        for index, start in enumerate(range(0, len(data), size), 1):
+            content = data[start:start+size]
+            url = f'{self.url}.part{index:03d}'
+            descriptor['parts'].append(dict(url=url, size=len(content), sha256=hashlib.sha256(content).hexdigest()))
+            payloads[url] = content
+        return descriptor, payloads
+
+    def test_multipart_download_is_combined_verified_and_activated_with_aggregate_progress(self):
+        data = _archive()
+        descriptor, payloads = self.multipart(data)
+        requested, progress = [], []
+        def opener(request, timeout):
+            self.assertEqual(timeout, 30)
+            requested.append(request.full_url)
+            return _Response(payloads[request.full_url], request.full_url)
+        with patch.object(setup, 'runtime_root', return_value=self.root), \
+             patch.object(setup, '_probe', return_value={'success':True}) as probe:
+            self.assertTrue(setup.install_nvidia_runtime(lambda *value: progress.append(value),
+                descriptor=descriptor, open_url=opener))
+        self.assertEqual(requested, [part['url'] for part in descriptor['parts']])
+        self.assertEqual(progress[-1], (len(data), len(data)))
+        self.assertEqual([value[0] for value in progress], sorted(value[0] for value in progress))
+        self.assertTrue(all(value[1] == len(data) for value in progress))
+        probe.assert_called_once()
+        marker = json.loads((self.root/'active.json').read_text())
+        executable = self.root/marker['bundle']/marker['executable']
+        self.assertEqual(executable.read_bytes(), b'fixed-worker')
+        self.assertFalse(list(self.root.glob('nvidia-download-*')))
+        with patch.object(runtime, 'runtime_root', return_value=self.root), \
+             patch.object(runtime.sys, 'platform', 'win32'), \
+             patch.object(runtime.sys, 'frozen', True, create=True), \
+             patch.object(setup, 'release_descriptor', return_value=descriptor), \
+             patch('tempo_release.build_identity', return_value={'commit':'a'*40}):
+            self.assertEqual(runtime.active_executable(), executable.resolve())
+
+    def test_multipart_transfer_failures_preserve_existing_activation_and_remove_partial_downloads(self):
+        from urllib.error import HTTPError
+        data = _archive()
+        descriptor, payloads = self.multipart(data)
+        target = descriptor['parts'][1]['url']
+        old = '{"previous":"active"}'
+        for failure in ('short', 'long', 'corrupt', 'missing', 'timeout', 'redirect'):
+            (self.root/'active.json').write_text(old)
+            def opener(request, timeout):
+                content, url = payloads[request.full_url], request.full_url
+                if request.full_url == target:
+                    if failure == 'short': content = content[:-1]
+                    if failure == 'long': content += b'extra'
+                    if failure == 'corrupt': content = content[:-1]+bytes([content[-1]^255])
+                    if failure == 'missing': raise HTTPError(url, 404, 'missing', {}, None)
+                    if failure == 'timeout': raise TimeoutError('download stalled')
+                    if failure == 'redirect': url = 'https://example.com/worker'
+                return _Response(content, url)
+            with self.subTest(failure=failure), patch.object(setup, 'runtime_root', return_value=self.root), \
+                 patch.object(setup, '_probe') as probe:
+                with self.assertRaises((ValueError, HTTPError, TimeoutError)):
+                    setup.install_nvidia_runtime(descriptor=descriptor, open_url=opener)
+                probe.assert_not_called()
+                self.assertEqual((self.root/'active.json').read_text(), old)
+                self.assertFalse(list(self.root.glob('nvidia-download-*')))
+
+    def test_packager_assets_install_without_manual_reassembly(self):
+        from scripts.package_nvidia_runtime import package, verify_descriptor
+        bundle = self.root/'bundle'
+        (bundle/'_internal/torch/lib').mkdir(parents=True)
+        (bundle/'TEMPO.exe').write_bytes(b'fixed-worker')
+        (bundle/'_internal/torch/lib/torch_cuda.dll').write_bytes(b'fixture CUDA A')
+        (bundle/'_internal/torch/lib/c10_cuda.dll').write_bytes(b'fixture CUDA B')
+        provenance = self.root/'provenance.json'
+        provenance.write_text(json.dumps(dict(commit='a'*40, profile='nvidia-cu126')))
+        output = self.root/'release-assets'
+        descriptor = package(bundle, output, tag='v'+VERSION, provenance=provenance, part_size=256)
+        self.assertEqual(verify_descriptor(output/'nvidia-runtime.json', commit='a'*40), descriptor)
+        requested = []
+        def opener(request, timeout):
+            requested.append(request.full_url)
+            path = output/request.full_url.rsplit('/', 1)[-1]
+            return _Response(path.read_bytes(), request.full_url)
+        with patch.object(setup, 'runtime_root', return_value=self.root/'installed'), \
+             patch.object(setup, '_probe', return_value={'success':True}):
+            self.assertTrue(setup.install_nvidia_runtime(descriptor=descriptor, open_url=opener))
+        self.assertEqual(requested, [part['url'] for part in descriptor['parts']])
+        marker = json.loads((self.root/'installed/active.json').read_text())
+        self.assertEqual((self.root/'installed'/marker['bundle']/'TEMPO/_internal/torch/lib/torch_cuda.dll').read_bytes(), b'fixture CUDA A')
+
     def test_verified_payload_is_activated_only_after_cuda_probe(self):
         archive = _archive()
         descriptor = self.descriptor(archive)
@@ -190,6 +281,12 @@ class NvidiaSetupTests(unittest.TestCase):
             path.write_text(json.dumps({**descriptor, 'archive_url': 'https://example.com/payload.zip'}))
             self.assertIsNone(setup.release_descriptor())
             path.write_text(json.dumps({**descriptor, 'commit': 'b' * 40}))
+            self.assertIsNone(setup.release_descriptor())
+            multipart, _ = self.multipart(_archive())
+            path.write_text(json.dumps(multipart))
+            self.assertEqual(setup.release_descriptor(), multipart)
+            multipart['parts'][0]['url'] = 'https://example.com/part001'
+            path.write_text(json.dumps(multipart))
             self.assertIsNone(setup.release_descriptor())
 
 

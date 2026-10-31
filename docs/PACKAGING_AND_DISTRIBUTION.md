@@ -27,15 +27,31 @@ These checks do not connect to microscope hardware, use real collaborator accoun
 | Artifact | Contents | Retention |
 | --- | --- | --- |
 | `Windows_install_payload` | Installer, SHA-256 checksum, source/dependency provenance, dependency source index, verification contract, and installation-check scripts | 3 days |
-| `Windows_NVIDIA_runtime` | Optional CUDA 12.6 inference runtime archive and the descriptor pinned into the installer | 7 days |
+| `Windows_NVIDIA_runtime` | Optional CUDA 12.6 runtime parts and the descriptor pinned into the installer | 7 days |
 | `TEMPO_Colab_Trainer` | Notebook regenerated from tested training sources | 7 days |
-| `Windows_test_evidence` | Regression output and machine-readable results | 3 days |
+| `Windows_test_evidence` | Regression output and machine-readable results | 7 days |
 | `Windows_prebuild_evidence` | Source checks and interface captures | 3 days |
 | `Windows_bundle_evidence` | Packaged-runtime checks and bundler diagnostics | 3 days |
 | `Windows_build_evidence` | Collected build reports, logs, and captures | 7 days |
 | `Windows_install_evidence` | Fresh-runner installation, runtime, and uninstall reports | 7 days |
 
-Download the payload before expiry. Keep the installer, checksum, and provenance together. The filename `TEMPO_Setup_v1.0.1.exe` alone does not identify which test build produced it. The optional NVIDIA runtime archive and its descriptor are separate workflow artifacts; the workflow does not publish them to the Releases page. Guided Setup can download the runtime only after that exact checksummed archive is published at the descriptor URL.
+Download the payload before expiry. Keep the installer, checksum, and provenance together. The filename `TEMPO_Setup_v1.0.1.exe` alone does not identify which test build produced it. The workflow does not publish release assets.
+
+The NVIDIA runtime is split into sequential `TEMPO_NVIDIA_Runtime_v1.0.1.zip.part001`, `.part002`, etc., each no larger than 1 GiB. Publish **every part named by `nvidia-runtime.json`** to the matching release tag, preserving filenames. Publish that descriptor alongside them for maintainers. Do not upload the outer Actions artifact ZIP or concatenate the parts into a single release asset: the complete runtime exceeds GitHub's individual file-size limit. Before publication, verify the downloaded artifact with:
+
+```powershell
+python -m scripts.package_nvidia_runtime --verify-descriptor path/to/nvidia-runtime.json --commit FULL_TESTED_COMMIT
+```
+
+Packaging verifies part sizes, ordered names, individual and combined checksums, and the worker executable. The CPU build repeats this check before bundling the descriptor. Guided Setup downloads and verifies all parts automatically, shows aggregate progress, then checks the GPU before activation. Users do not extract or combine parts themselves. They can opt in during first setup or later through **Settings → Application Tools → Guided Setup**.
+
+After uploading the assets to a public prerelease, verify the published part sizes, GitHub checksums, download URLs, and source tag before marking the release stable:
+
+```powershell
+python -m scripts.package_nvidia_runtime --verify-published path/to/nvidia-runtime.json --commit FULL_TESTED_COMMIT
+```
+
+Users of `v1.0.1-preview.1` need one manual installation of the updated installer to receive multipart download support. An existing runtime remains selected only when its identity matches the installed application; setup obtains the runtime built for the new installer. Changing the GitHub prerelease flag does not update an installed application.
 
 ## Installation, models, and hardware
 

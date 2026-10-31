@@ -14,7 +14,8 @@ root = Path(SPEC).resolve().parent
 sys.path.insert(0, str(root))
 from tempo_cloud import BUNDLE_FILES
 from tempo_model_catalog import MODEL_FILES
-from tempo_release import RUNTIME_IMPORTS
+from tempo_release import RUNTIME_IMPORTS, VERSION
+from tempo_nvidia_manifest import validate_descriptor
 from scripts.windows_build_profile import build_profile
 profile = build_profile() if sys.platform == 'win32' else None
 os.environ['YOLO_AUTOINSTALL'] = 'false'
@@ -79,6 +80,10 @@ if identity.is_file():
     datas.append((str(identity), 'assets'))
 elif sys.platform == 'win32':
     raise RuntimeError('Windows packaging requires Output/build-provenance.json')
+if sys.platform == 'win32' and profile.key == 'cpu':
+    validate_descriptor(json.loads(optional_runtime.read_text(encoding='utf-8')),
+                        version=VERSION, commit=json.loads(identity.read_text(encoding='utf-8'))['commit'],
+                        allow_legacy=False)
 for runtime in ('stardist', 'csbdeep', 'cellpose'):
     datas += collect_data_files(runtime)
 
@@ -99,6 +104,7 @@ hidden_imports = [
     'tempo_assistance_progress',
     'tempo_nvidia_runtime',
     'tempo_nvidia_setup',
+    'tempo_nvidia_manifest',
     'tempo_startup_diagnostics',
     'setup_wizard',
     'PyQt6.QtCore',
