@@ -108,6 +108,8 @@ class PacerService:
         self._thread = None
         self._board = None
         self._rx = bytearray()
+        self.investigation_protocol = None
+        self.firmware = ''
 
     @property
     def running(self):
@@ -177,6 +179,8 @@ class PacerService:
                     continue
                 status = PacerStatus.parse(reply)
                 self.status = status
+                self.firmware = str(reply.get('firmware', ''))
+                self.investigation_protocol = reply.get('si1_protocol')
                 if reply.get('result') == 'confirmation_required':
                     raise ConfirmationRequired('These values exceed the V2 device confirmation thresholds.')
                 if reply.get('result') != 'ok':
@@ -194,7 +198,9 @@ class PacerService:
                             (actual.amplitude_v, actual.frequency_hz, actual.pulse_width_ms),
                             (expected.amplitude_v, expected.frequency_hz, expected.pulse_width_ms))):
                         raise ConnectionError('Applied stimulation settings do not match the request.')
-                return status
+                # Investigation requests use this same port owner and heartbeat.
+                # Ordinary stimulation callers retain their existing status API.
+                return reply if command.startswith('si1 ') else status
         raise TimeoutError('No matching stimulator acknowledgment. Output is unconfirmed; install TEMPO’s V2 firmware if needed.')
 
     def _run(self):

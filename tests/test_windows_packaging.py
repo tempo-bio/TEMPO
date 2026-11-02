@@ -270,6 +270,8 @@ class PackagingCommandTests(unittest.TestCase):
                          'WORKSPACE_ADMINISTRATION.md', 'CAPTURE_QUALITY.md'):
                 self.assertEqual(declared['docs/' + name], 'docs')
             self.assertEqual(declared['README.md'], '.')
+            self.assertEqual(declared['docs/STIMULATION_INVESTIGATION_1.md'], 'docs')
+            self.assertEqual(declared['firmware/tempo_pacer/investigation_1.h'], 'firmware/tempo_pacer')
             for source, destination in declarations['datas']:
                 self.assertTrue(Path(source).exists(), source)
 

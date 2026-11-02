@@ -32,8 +32,16 @@ struct InterruptGuard {
 char input[128];
 size_t inputLength = 0;
 bool inputOverflow = false;
+#ifdef TEMPO_INVESTIGATION_1
+char outgoing[4096];
+#else
 char outgoing[640];
+#endif
 size_t outgoingLength = 0, outgoingOffset = 0;
+
+#ifdef TEMPO_INVESTIGATION_1
+#include "investigation_1.h"
+#endif
 
 void stimulus(bool high) {
   digitalWrite(SELECT_PIN, high ? HIGH : LOW);
@@ -42,6 +50,9 @@ void stimulus(bool high) {
 
 void stopOutput() {
   InterruptGuard guard;
+#ifdef TEMPO_INVESTIGATION_1
+  si1Cancel();
+#endif
   mode = REST;
   stimulus(false);
   digitalWrite(DISABLE_PIN, LOW);
@@ -121,6 +132,9 @@ void reply(uint32_t id, const char *result = "ok", const char *error = "") {
     (unsigned long)millis(), DAC_REFERENCE_V);
   outgoingOffset = 0;
   outgoingLength = n > 0 && (size_t)n < sizeof(outgoing) ? (size_t)n : 0;
+#ifdef TEMPO_INVESTIGATION_1
+  si1AppendReply();
+#endif
 }
 
 void handle(char *line) {
@@ -129,6 +143,9 @@ void handle(char *line) {
   if (end == line || *end != ' ') return;
   const char *command = end + 1;
   while (*command == ' ') ++command;
+#ifdef TEMPO_INVESTIGATION_1
+  if (!strncmp(command, "si1 ", 4)) { si1Handle((uint32_t)id, command + 4); return; }
+#endif
   bool known = true;
   if (!strcmp(command, "hello")) {
     stopOutput(); // Connecting/reconnecting can never energize an output.
@@ -193,6 +210,11 @@ void setup() {
   digitalWrite(MUX_DISABLE, HIGH); pinMode(MUX_DISABLE, OUTPUT);
   for (uint8_t pin : ADDRESS) { digitalWrite(pin, LOW); pinMode(pin, OUTPUT); }
   analogWriteResolution(12);
+#ifdef TEMPO_INVESTIGATION_1
+  analogReadResolution(14);
+  pinMode(A1, INPUT);
+  pinMode(A2, INPUT);
+#endif
   writeVoltage();
   selectChannel(0);
   stopOutput();
@@ -233,4 +255,8 @@ void loop() {
       outgoingOffset += Serial.write((const uint8_t *)outgoing + outgoingOffset, amount);
     }
   }
+#ifdef TEMPO_INVESTIGATION_1
+  // Acquisition never executes in the pulse/watchdog interrupt.
+  si1Service();
+#endif
 }

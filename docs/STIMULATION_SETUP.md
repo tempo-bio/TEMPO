@@ -3,6 +3,11 @@
 TEMPO supports the AU26 V2 stimulator: an Uno R4 Minima with the OPA340 buffer,
 CD74HC4053 output switch, and optional CD74HC4051 eight-channel multiplexer.
 
+For bench experiments without imaging, select **Stimulation Investigation 1** in
+Acquisition. It collects conditions, separate oscilloscope records, and raw Arduino
+records using optional development firmware. See the
+[investigation guide](STIMULATION_INVESTIGATION_1.md) for collection and setup.
+
 ## Install or update the Arduino
 
 1. Connect the Uno R4 Minima by USB. Finish any active capture or stimulation.

@@ -153,10 +153,11 @@ class FirmwareWorker(QThread):
     progress = pyqtSignal(str)
     outcome = pyqtSignal(object)
 
-    def __init__(self, service, port, parent=None):
+    def __init__(self, service, port, parent=None, investigation=False):
         super().__init__(parent)
         from tempo_firmware import FirmwareInstaller
         self.service, self.port = service, port
+        self.investigation = investigation
         self.verified_port = None
         self.installer = FirmwareInstaller(Path(get_config_dir()).parent/'arduino', self.progress.emit)
 
@@ -165,21 +166,30 @@ class FirmwareWorker(QThread):
             from tempo_firmware import verify_firmware
             if self.service:
                 self.service.close().result(timeout=3)
-            sketch = Path(__file__).resolve().parent/'firmware'/'tempo_pacer'
-            self.verified_port = self.installer.install(self.port, sketch,
-                lambda port: verify_firmware(port,serial_number=self.installer.serial_number))
+            verify = lambda port: verify_firmware(port, serial_number=self.installer.serial_number,
+                                                  investigation=self.investigation)
+            if self.investigation:
+                from stimulation_investigation_1.firmware import development_sketch
+                with development_sketch() as sketch:
+                    self.verified_port = self.installer.install(self.port, sketch, verify)
+            else:
+                sketch = Path(__file__).resolve().parent/'firmware'/'tempo_pacer'
+                self.verified_port = self.installer.install(self.port, sketch, verify)
             self.outcome.emit(None)
         except Exception as exc:
             self.outcome.emit(exc)
 
 
 class FirmwareDialog(QDialog):
-    def __init__(self, tools, section='outputs'):
+    def __init__(self, tools, section='outputs', investigation=False):
         super().__init__(tools)
         self.tools = tools
+        self.investigation = investigation
         self.worker = None
         self._close_after_cancel = False
         self.setWindowTitle('TEMPO · Install / Update Firmware')
+        if investigation:
+            self.setWindowTitle('TEMPO · Install Investigation Firmware')
         self.resize(470,300)
         layout = QVBoxLayout(self)
         instruction = QLabel('Connect the Uno R4 Minima by USB. Installation replaces its current sketch. Keep it connected until verification finishes.')
@@ -191,8 +201,12 @@ class FirmwareDialog(QDialog):
         self.status.setWordWrap(True); layout.addWidget(self.status)
         self.error = ErrorDetails(); layout.addWidget(self.error)
         self.install_button = QPushButton('Install / Update Firmware'); self.install_button.clicked.connect(self.install)
+        if investigation:
+            self.install_button.setText('Install Development Firmware')
         layout.addWidget(self.install_button)
         self.close_button = QPushButton('Close'); self.close_button.clicked.connect(self.close); layout.addWidget(self.close_button)
+        if investigation:
+            self.close_button.hide()
 
     def install(self):
         if self.worker and not self.worker.wait(0): return
@@ -200,18 +214,26 @@ class FirmwareDialog(QDialog):
             self.status.setText('Close this window, refresh the serial ports, and choose the Uno R4 Minima.'); return
         if self.tools.camera_busy() or self.tools.busy() or (self.tools.session and self.tools.session.active):
             self.status.setText('Finish capture and stimulation before updating firmware.'); return
-        self.worker = FirmwareWorker(self.tools.service,self.port.currentData(),self)
+        service = self.tools.service
+        status = service.status if service and service.connected else None
+        workspace = getattr(self.tools.capture, 'investigation_workspace', None)
+        if (status and status.mode not in ('REST_DISCHARGE', 'DISCONNECTED_HIZ')) or (workspace and workspace.capturing):
+            self.status.setText('Stop stimulation and Arduino capture before updating firmware.'); return
+        self.worker = FirmwareWorker(self.tools.service,self.port.currentData(),self, investigation=self.investigation)
         self.worker.progress.connect(self.progress)
         self.worker.outcome.connect(self.completed)
         self.worker.finished.connect(self.tools.refresh_controls)
         self.worker.finished.connect(self.finish_cancellation)
         self.install_button.setEnabled(False); self.close_button.setText('Cancel Setup'); self.port.setEnabled(False)
+        self.close_button.show()
         self.error.clear()
         self.worker.start()
         self.tools.refresh_controls()
 
     def completed(self, error):
         self.close_button.setEnabled(True); self.close_button.setText('Close'); self.port.setEnabled(True); self.install_button.setEnabled(True)
+        if self.investigation:
+            self.close_button.hide()
         if error: self.error.set_error(str(error),error)
         else:
             port = self.worker.verified_port
@@ -700,14 +722,22 @@ class CaptureTools(QWidget):
         self._parameter_columns = None
         box.addWidget(self.values_widget)
         self.channel_label = QLabel('Single output'); self.channel_label.setWordWrap(True)
-        output_row = QHBoxLayout(); output_row.addWidget(self.channel_label,1); output_row.addWidget(self.information)
+        output_row = self.channel_layout = QHBoxLayout(); output_row.addWidget(self.channel_label,1); output_row.addWidget(self.information)
         box.addLayout(output_row)
         self.pre_mode = SlidingChoice(('Manual','Timed'),('manual','timed'))
         self.pre_mode.setAccessibleName('Pre-pacing mode')
         self.pre_duration = QDoubleSpinBox(); self.pre_duration.setRange(0,86400); self.pre_duration.setSuffix(' s'); self.pre_duration.setSpecialValueText('Enter duration')
         self.pre_duration.setAccessibleName('Pre-pacing duration')
         self.pre_duration.setVisible(False); self.pre_mode.currentIndexChanged.connect(self.refresh_controls)
-        pre_heading = QLabel('Pre-pacing'); box.addWidget(pre_heading)
+        pre_heading = self.pre_heading = QLabel('Pre-pacing'); box.addWidget(pre_heading)
+        self.investigation_output_row = QWidget()
+        output_layout = self.investigation_output_layout = QHBoxLayout(self.investigation_output_row); output_layout.setContentsMargins(0, 0, 0, 0)
+        output_layout.addWidget(QLabel('Output'))
+        self.investigation_output = QComboBox()
+        for number in range(1, 9): self.investigation_output.addItem(str(number), number - 1)
+        output_layout.addWidget(self.investigation_output)
+        box.addWidget(self.investigation_output_row)
+        self.investigation_output_row.hide()
         pre_controls = QVBoxLayout(); pre_controls.addWidget(self.pre_mode); pre_controls.addWidget(self.pre_duration)
         box.addLayout(pre_controls)
         from tempo_stimulation_scope import ScopePreview
@@ -828,6 +858,9 @@ class CaptureTools(QWidget):
         return super().eventFilter(source,event)
 
     def request_output(self, checked):
+        if getattr(self.capture, 'investigation_mode', False):
+            self.request_investigation_output(checked)
+            return
         if self._starting_output or self._finish_pending:
             self._output_requested = False
             self.finish_well(interrupted=True,reason='Stimulation start cancelled.')
@@ -847,6 +880,37 @@ class CaptureTools(QWidget):
         self.counts_label.setText('Cell estimate unavailable.')
         self._latest_quality_at=''
         self.focus_label.setText('Focus: Unavailable · Beta')
+
+    def request_investigation_output(self, checked):
+        if not checked or self._starting_output or self._finish_pending:
+            self.finish_well(interrupted=True, reason='Investigation stimulation stopped.')
+            return
+        try:
+            if self.busy() or self.camera_busy() or self.firmware_busy(): return
+            if self.service is None or not self.service.connected:
+                raise ConnectionError('Connect the stimulator before starting output.')
+            parameters = self.parameters()
+            if not self._confirm(parameters): return
+            service = self.service
+            cancelled = self._session_cancel = threading.Event()
+            self._starting_output = self._output_requested = True
+            self.error.clear()
+            def start():
+                service.submit('stop').result(2)
+                if cancelled.is_set(): raise InterruptedError('Stimulation start cancelled.')
+                service.submit(parameters.command(parameters.needs_confirmation)).result(2)
+                if cancelled.is_set(): raise InterruptedError('Stimulation start cancelled.')
+                status = service.submit('pace').result(2)
+                if cancelled.is_set():
+                    service.submit('stop').result(2)
+                    raise InterruptedError('Stimulation start cancelled.')
+                return status
+            def started(_):
+                self._starting_output = False
+                self.refresh_controls()
+            self._async(start, started)
+        except Exception as exc: self.show_error(exc)
+        finally: self.refresh_controls()
 
     def capture_failure(self, message):
         if self._starting_output or (self.session and self.session.active):
@@ -909,6 +973,17 @@ class CaptureTools(QWidget):
         else:
             show()
 
+    def open_investigation_firmware(self):
+        if self.firmware_busy(): return
+        if self.busy() or self.camera_busy() or (self.session and self.session.active):
+            self.show_error(ValueError('Finish capture and stimulation before installing firmware.')); return
+        status = self.service.status if self.service and self.service.connected else None
+        workspace = getattr(self.capture, 'investigation_workspace', None)
+        if (status and status.mode not in ('REST_DISCHARGE', 'DISCONNECTED_HIZ')) or (workspace and workspace.capturing):
+            self.show_error(ValueError('Stop stimulation and Arduino capture before installing firmware.')); return
+        self._firmware_dialog = FirmwareDialog(self, investigation=True)
+        self._firmware_dialog.show()
+
     def automatic_running(self):
         worker = getattr(self.capture,'scout_worker',None)
         return worker is not None and (self.capture._pending_camera_worker is worker or
@@ -923,6 +998,9 @@ class CaptureTools(QWidget):
 
     def parameters(self, well=None):
         channel = 0
+        if getattr(self.capture, 'investigation_mode', False):
+            channel = self.investigation_output.currentData() if self.profile.get('multiplexer') else 0
+            return StimulusParameters(self.amplitude.value(), self.frequency.value(), self.width.value(), channel)
         if self.profile.get('multiplexer'):
             well = well or self.capture.well_id.currentText()
             channels = [int(ch) for ch,name in self.profile.get('channels',{}).items() if name == well]
@@ -1629,6 +1707,9 @@ class CaptureTools(QWidget):
         self.refresh_controls()
 
     def refresh_controls(self):
+        investigation = getattr(self.capture, 'investigation_mode', False)
+        workspace = getattr(self.capture, 'investigation_workspace', None)
+        raw_capture = workspace is not None and workspace.capturing
         active = self.session is not None and self.session.active
         automatic = self.automatic_running()
         busy = self.busy()
@@ -1637,16 +1718,25 @@ class CaptureTools(QWidget):
         camera = self.capture.core is not None or self.capture.cv_cap is not None
         pre = active and self.session.phase == 'pre_pacing'
         manual = pre and self.pre_mode.currentData() == 'manual'
-        stimulated = active and self.session.document['stimulated']
-        locked = stimulated or automatic or busy or self._finish_pending or self.firmware_busy() or self.diagnostics_open()
+        stimulated = (active and self.session.document['stimulated']) or bool(investigation and status and status.mode == 'PACING')
+        locked = stimulated or automatic or busy or raw_capture or self._finish_pending or self.firmware_busy() or self.diagnostics_open()
         self.update_scope()
         for control in (self.amplitude,self.frequency,self.width,self.pre_mode,self.pre_duration):
             control.setEnabled(not locked)
-        self.pre_duration.setVisible(self.pre_mode.currentData() == 'timed')
+        self.pre_heading.setVisible(not investigation)
+        self.pre_mode.setVisible(not investigation)
+        self.pre_duration.setVisible(not investigation and self.pre_mode.currentData() == 'timed')
+        self.investigation_output_row.setVisible(investigation)
+        self.investigation_output.setEnabled(not locked and bool(self.profile.get('multiplexer')))
+        self.channel_label.setVisible(not investigation)
+        if investigation and self.information.parentWidget() is not self.investigation_output_row:
+            self.investigation_output_layout.addWidget(self.information)
+        elif not investigation and self.information.parentWidget() is self.investigation_output_row:
+            self.channel_layout.addWidget(self.information)
         output_on = bool(status and status.mode == 'PACING' and stimulated and not self._starting_output)
         self.enabled.setChecked(output_on)
         self.enabled.setEnabled(bool(output_on or self._starting_output or self._finish_pending or
-            (connected and not self.camera_busy() and not busy and not automatic and not self.firmware_busy() and not self.diagnostics_open())))
+            (connected and not raw_capture and not self.camera_busy() and not busy and not automatic and not self.firmware_busy() and not self.diagnostics_open())))
         self.enabled.setAccessibleDescription('Requests stimulation on or off. Output state is shown separately.')
         self.setup_button.setEnabled(not self._shutdown_requested)
         self.output_setup_action.setEnabled(not locked)
@@ -1655,7 +1745,7 @@ class CaptureTools(QWidget):
         for control in (self.capture.well_id,self.capture.exp_id): control.setEnabled(not locked and not self.capture.is_recording)
         self.capture.fov_id.setEnabled(not self.capture.is_recording and not automatic and not busy)
         self.stop_button.setEnabled(bool(connected or active or automatic or self._starting_output))
-        self.field_group.setVisible(camera or self.session is not None)
+        self.field_group.setVisible(not investigation and (camera or self.session is not None))
         self.history.setVisible(self.history.count() > 0)
         rows = min(3 if self.capture.height() >= 900 else 1, self.history.count())
         self.history.setFixedHeight(sum(max(self.fontMetrics().height()+6,self.history.sizeHintForRow(i)) for i in range(max(0,self.history.count()-rows),self.history.count()))+6)
@@ -1678,7 +1768,7 @@ class CaptureTools(QWidget):
             elif not self.camera_busy():
                 self.capture.btn_record.setText('Record Field')
         if feed_unconfirmed: self.count_button.setEnabled(False)
-        self.automatic_group.setVisible(self._stage_present)
+        self.automatic_group.setVisible(not investigation and self._stage_present)
         self.auto_button.setText('Stopping…' if automatic and self._collection_stopping else ('Stop Automatic Collection' if automatic else 'Automatic Collection…'))
         collection_available = self._stage_present and camera and not busy and not self.camera_busy() and not self._finish_pending and not self.firmware_busy() and not self.diagnostics_open() and not feed_unconfirmed
         self.auto_button.setEnabled((automatic and not self._collection_stopping) or collection_available)
@@ -1707,6 +1797,8 @@ class CaptureTools(QWidget):
             confirmed_focus_stop=(getattr(collection,'focus_timed_out',False) is True and
                                   status is not None and status.mode=='REST_DISCHARGE')
             self.status.setText('Focus timeout · pacing stopped' if confirmed_focus_stop else 'Output unconfirmed')
+        elif stimulated and investigation:
+            self.status.setText('Pacing')
         elif stimulated:
             phase = 'Pre-pacing' if pre else 'Pacing'
             epoch=getattr(self.session,'pacing_epoch_at',None)

@@ -42,7 +42,9 @@ datas = [
     (str(root / 'docs/TRAINING_WORKFLOW.md'), 'docs'),
     (str(root / 'docs/MODEL_EVALUATION_WORKFLOW.md'), 'docs'),
     (str(root / 'docs/STIMULATION_SETUP.md'), 'docs'),
+    (str(root / 'docs/STIMULATION_INVESTIGATION_1.md'), 'docs'),
     (str(root / 'firmware/tempo_pacer/tempo_pacer.ino'), 'firmware/tempo_pacer'),
+    (str(root / 'firmware/tempo_pacer/investigation_1.h'), 'firmware/tempo_pacer'),
 ] + ultralytics_datas
 binaries = []
 if sys.platform == 'win32':

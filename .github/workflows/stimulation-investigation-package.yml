@@ -1,0 +1,75 @@
+name: Publish Stimulation Investigation 1 package
+
+on:
+  push:
+    branches: [codex/stimulation-investigation-1]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: stimulation-investigation-package
+  cancel-in-progress: false
+
+jobs:
+  verify-and-publish:
+    runs-on: windows-2025
+    timeout-minutes: 30
+    env:
+      QT_QPA_PLATFORM: offscreen
+      MPLBACKEND: Agg
+      HF_HUB_OFFLINE: '1'
+      PYTHONUTF8: '1'
+      PYTHONUNBUFFERED: '1'
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Check out package sources
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up the original application's Python version
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.13.16'
+          architecture: x64
+      - name: Check executable archive handling
+        run: |
+          python -m unittest tests.test_investigation_package
+          if ($LASTEXITCODE -ne 0) { throw 'Archive checks failed.' }
+      - name: Build and verify installation against stable v1.0.1
+        run: ./scripts/build_stimulation_package.ps1 -WorkDirectory "$env:RUNNER_TEMP/tempo-investigation" -OutputDirectory Output/investigation-package
+      - name: Install verified native registry client
+        run: |
+          $archive=Join-Path $env:RUNNER_TEMP 'oras.zip'
+          Invoke-WebRequest 'https://github.com/oras-project/oras/releases/download/v1.3.6/oras_1.3.6_windows_amd64.zip' -OutFile $archive
+          if ((Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant() -ne 'ec3d19f386d5d2f0892288772d7b242475a05332aafa64b6773378ca771d76d3') { throw 'Registry client checksum differs.' }
+          $directory=Join-Path $env:RUNNER_TEMP 'oras'
+          Expand-Archive -LiteralPath $archive -DestinationPath $directory
+          $directory | Out-File $env:GITHUB_PATH -Append -Encoding utf8
+      - name: Publish to GitHub Packages and verify public download
+        env:
+          GH_PACKAGE_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $env:GH_PACKAGE_TOKEN | oras login ghcr.io --username "$env:GITHUB_ACTOR" --password-stdin
+          if ($LASTEXITCODE -ne 0) { throw 'GitHub Packages sign-in failed.' }
+          try {
+            python -m scripts.publish_stimulation_package --package Output/investigation-package/TEMPO_Stimulation_Investigation_1_v0.1.0.zip --source-archive Output/investigation-package/TEMPO_Stimulation_Investigation_1_v0.1.0_source.zip --publish
+            if ($LASTEXITCODE -ne 0) { throw 'Publication or anonymous readback failed. If the package was newly created, check its visibility in GitHub Packages.' }
+          } finally {
+            oras logout ghcr.io
+          }
+      - name: Preserve package and verification results
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: stimulation-investigation-1-verified-package
+          path: |
+            Output/investigation-package/*.zip
+            Output/investigation-package/*.json
+            Output/investigation-package/*.txt
+            Output/investigation-package/evidence/
+          if-no-files-found: warn

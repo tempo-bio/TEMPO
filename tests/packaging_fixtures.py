@@ -49,6 +49,7 @@ def stage_spec_inputs(source, target):
         'installer/dependency-sources.json', 'installer/dependency-sources-nvidia.json',
         'installer/windows-native-runtime.json',
         'firmware/tempo_pacer/tempo_pacer.ino',
+        'firmware/tempo_pacer/investigation_1.h',
         'scripts/windows_build_profile.py', 'scripts/prepare_dependency_sources.py',
     }
     for name in required:
