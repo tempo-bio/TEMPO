@@ -29,7 +29,7 @@ function Copy-Atomic([string]$Source,[string]$Destination) {
     $temporary=Join-Path $parent ('.si1-'+[guid]::NewGuid().ToString('N')+'.tmp')
     try {
         [IO.File]::Copy($Source,$temporary,$false)
-        if ([IO.File]::Exists($Destination)) { [IO.File]::Replace($temporary,$Destination,$null) }
+        if ([IO.File]::Exists($Destination)) { [IO.File]::Replace($temporary,$Destination,[NullString]::Value) }
         else { [IO.File]::Move($temporary,$Destination) }
     } finally { if ([IO.File]::Exists($temporary)) { [IO.File]::Delete($temporary) } }
 }
@@ -38,7 +38,7 @@ function Write-State($Value,[string]$Destination) {
     try {
         $json=ConvertTo-Json -InputObject $Value -Depth 12
         [IO.File]::WriteAllText($temporary,$json,(New-Object Text.UTF8Encoding($false)))
-        if ([IO.File]::Exists($Destination)) { [IO.File]::Replace($temporary,$Destination,$null) }
+        if ([IO.File]::Exists($Destination)) { [IO.File]::Replace($temporary,$Destination,[NullString]::Value) }
         else { [IO.File]::Move($temporary,$Destination) }
     } finally { if ([IO.File]::Exists($temporary)) { [IO.File]::Delete($temporary) } }
 }
