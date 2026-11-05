@@ -17,7 +17,7 @@ NUMERIC_COLUMNS = {
 
 
 def read_results(path):
-    data = pd.read_csv(path, dtype={'Cell_ID': str, 'Well_ID': str, 'FOV_ID': str, 'Recording_ID': str})
+    data = pd.read_csv(path, dtype={'Cell_ID': str, 'Well_ID': str, 'FOV_ID': str, 'Recording_ID': str, 'Quality_Flags': str}, low_memory=False)
     missing = {'Well_ID', 'Cell_ID'} - set(data.columns)
     if missing:
         raise ValueError('Missing columns: ' + ', '.join(sorted(missing)))
