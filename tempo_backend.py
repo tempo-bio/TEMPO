@@ -109,7 +109,7 @@ def undo_queue_location(old, new):
         return edit_queue(QUEUE_FILE, restore)
 
 
-def run_yolo_inference(video_path):
+def run_yolo_inference(video_path, cell_offset=0):
     """Unattended detection: an empty result is distinct from an inference error."""
     from yolo_inference_helper import detect_cells_via_bridge
     from tempo_regions import object_type
@@ -130,7 +130,8 @@ def run_yolo_inference(video_path):
         if not moments['m00']:
             raise ValueError('Detection returned a zero-area cell polygon.')
         kind = object_type(box)
-        cells.append({'id': f'{kind}_{index + 1:03d}' if kind == 'group' else f'cell_{index + 1}', 'polygon': polygon,
+        cell_num = int(cell_offset) + index + 1
+        cells.append({'id': f'{kind}_{cell_num:03d}' if kind == 'group' else f'cell_{cell_num}', 'polygon': polygon,
                       'object_type': kind,
                       'class_id': box.get('class_id', 0),
                       'centroid_x': moments['m10'] / moments['m00'],
@@ -305,11 +306,12 @@ def process_assay_result(video_path, cells_data=None, export_debug_avis=False, c
             if not cv2.imwrite(str(reference_path),reference_frame):
                 raise OSError('Could not preserve the processing reference image.')
             artifacts['reference.tif'] = _file_digest(reference_path,cancel)
+            capture_metadata = provenance.get('capture_metadata')
             if cells_data is None:
-                cells_data = run_yolo_inference(video_path)
+                cell_offset = int(capture_metadata.get('cell_index_offset', 0)) if capture_metadata else 0
+                cells_data = run_yolo_inference(video_path, cell_offset=cell_offset)
             cells_data=[dict(cell,source_format=source_format) for cell in cells_data]
             registration = provenance.get('spatial_registration')
-            capture_metadata = provenance.get('capture_metadata')
             if capture_metadata:
                 atomic_write(Path(result.output_dir, 'capture.json'), capture_metadata)
                 enriched = []

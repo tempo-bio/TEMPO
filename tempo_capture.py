@@ -211,6 +211,7 @@ class CaptureSession:
                 footprint = tuple(map(float,footprint))
                 if len(footprint)!=2 or not all(math.isfinite(n) and n>0 for n in footprint):
                     raise ValueError('Invalid calibrated field footprint.')
+            cell_index_offset = sum(previous.get('credited_cells', 0) for previous in self.document['fields'] if previous.get('status') == 'completed')
             field = dict(field_id=str(field_id), recording_id=Path(output_path).stem,
                 path=str(Path(output_path).absolute()), counts=counts,
                 position_um=list(position) if position is not None else None,
@@ -218,6 +219,7 @@ class CaptureSession:
                 prepacing_elapsed_s=max(0.,self.clock()-self.pacing_epoch_at) if self.document['stimulated'] else None,
                 pacing_epoch=self.document.get('pacing_epoch'),
                 configured_prepacing_completed_s=self.document.get('current_prepacing_s'),
+                cell_index_offset=cell_index_offset,
                 status='recording', started_at=utc_now(), credited_cells=0, duplicate=False)
             for previous in self.document['fields']:
                 if previous['status'] != 'completed':

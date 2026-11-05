@@ -24,7 +24,7 @@ Processing stores the supplied registration in provenance, copies it as `spatial
 
 Master CSVs use processing/schema version 4, identify cells and groups with `Object_Type`, and store an optional `Spatial_Metadata_File` relative path. Loading validates that the document identifies the row's recording, well and field and that its path remains inside the results directory. Aggregation preserves an unambiguous association.
 
-Full Well uses one spatial map, one pair of X/Y axes in micrometres, and one measurement color scale. Every represented recording/field must have valid, compatible registration. Click a field boundary on that map or choose a field in View; View → Full Well returns to the combined map. Boundaries come from the saved affine transform. The metadata-defined origin and coordinates are retained.
+Full Well uses one spatial map, one pair of X/Y axes in micrometres, and one measurement color scale. Every represented recording/field must have valid, compatible registration. Field boundaries appear on the map with visible Field labels (`Field 1`, `Field 2`, etc.). Click a field boundary or its label on that map, or choose a field in View; View → Full Well returns to the combined map. Boundaries come from the saved affine transform. The metadata-defined origin and coordinates are retained.
 
 Missing, partial, malformed or incompatible registration makes the full-well map unavailable, with an explanation and affected fields. The all-cell table, individual field maps and well statistics remain available. Even with complete registration, cells without valid centroids remain selectable and contribute to well statistics; their unavailable placement is reported.
 

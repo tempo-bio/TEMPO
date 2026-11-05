@@ -94,7 +94,11 @@ Unstimulated collection requires focus review without a pacing timeout.
 ## Review quality and include or exclude data
 
 In **Physiological Analysis**, load the results CSV and choose **Recording
-Quality…**. Each recording has its own **Include** checkbox and **Reason** field.
+Quality…**. The review table organizes recordings by **Well** and **Field**,
+identifies specific flagged cells alongside field-level quality flags, and
+provides an **Include** checkbox and **Reason** field for each recording.
+Double-click any row or click its **Inspect** button to immediately close the dialog
+and center the Physiological Analysis map and statistics on that specific field.
 Flagged recordings are included by default. Uncheck Include to exclude that
 recording from summaries and plots, optionally enter a reason in the same row,
 and choose **Apply**. Recheck it to include it again.

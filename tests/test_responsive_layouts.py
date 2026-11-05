@@ -120,7 +120,7 @@ class ResponsiveLayoutTests(unittest.TestCase):
         self.assertEqual(len(view.current_x_vals), 6)
         self.assertEqual(view.lbl_amp.text(), '43.50')
         view.cell_selector.setCurrentIndex(1)
-        self.assertIn('recording-2', view.cell_context.text())
+        self.assertIn('recording-2', view.cell_context.toolTip())
         view.return_to_well()
         self.assertIsNone(view.field_selector.currentData())
         self.assertEqual(view.cell_selector.currentIndex(), 0)
@@ -783,7 +783,7 @@ class ResponsiveLayoutTests(unittest.TestCase):
         self.assertEqual(view.width(),960)
         self.assertIn('x'*100,view.field_selector.itemData(2,Qt.ItemDataRole.ToolTipRole))
         view.cell_selector.setCurrentIndex(1)
-        self.assertIn('x'*100,view.cell_context.text())
+        self.assertIn('x'*100,view.cell_context.toolTip())
 
     def test_expanded_processing_and_undo_remain_accessible_in_a_small_window(self):
         old_font=APP.font()

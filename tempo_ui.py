@@ -145,9 +145,7 @@ class ContextHelpPanel(QGroupBox):
             label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
             layout.addWidget(label)
         self.topic.hide()
-        layout.addStretch(1)
-        self.setMinimumHeight(self.fontMetrics().lineSpacing() * 6)
-        self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.MinimumExpanding)
+        self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
 
     def bind(self, widget, title, details):
         widget.setProperty('tempoHelpText', None)
@@ -168,7 +166,7 @@ class ContextHelpPanel(QGroupBox):
         height = max(0, self.details.heightForWidth(width))
         if not self.topic.isHidden():
             height += max(0, self.topic.heightForWidth(width)) + self.layout().spacing()
-        self.setMinimumHeight(max(self.fontMetrics().lineSpacing() * 6, height + 52))
+        self.setMinimumHeight(height + 26)
 
     def eventFilter(self, widget, event):
         if event.type() in (QEvent.Type.Enter, QEvent.Type.FocusIn):

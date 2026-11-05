@@ -5347,6 +5347,39 @@ def display_cell_name(identifier, kind="cell"):
     return f'Cell {text}' if text.isdigit() else text
 
 
+class ClickableFieldLabel(pg.TextItem):
+    """Clickable pyqtgraph text item that navigates to a field when clicked."""
+    def __init__(self, text, identity, callback, color='#abb2bf', anchor=(0.5, 1.2)):
+        super().__init__(text=text, color=color, anchor=anchor)
+        self.identity = identity
+        self.callback = callback
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setAcceptHoverEvents(True)
+        self.textItem.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
+
+    def hoverEnterEvent(self, ev):
+        self.setColor('#ffffff')
+        super().hoverEnterEvent(ev)
+
+    def hoverLeaveEvent(self, ev):
+        self.setColor('#abb2bf')
+        super().hoverLeaveEvent(ev)
+
+    def mousePressEvent(self, ev):
+        if ev.button() == Qt.MouseButton.LeftButton:
+            ev.accept()
+        else:
+            super().mousePressEvent(ev)
+
+    def mouseReleaseEvent(self, ev):
+        if ev.button() == Qt.MouseButton.LeftButton:
+            ev.accept()
+            if self.callback and self.identity:
+                self.callback(self.identity)
+        else:
+            super().mouseReleaseEvent(ev)
+
+
 class AnalyzerTab(QWidget):
     def __init__(self):
         super().__init__()
@@ -5688,7 +5721,8 @@ class AnalyzerTab(QWidget):
         self.stats_tabs.set_forms(((self.form_core, self.form_kinetics, self.form_vel, self.form_anisotropy),
                                    (self.form_core_std, self.form_kinetics_std, self.form_vel_std, self.form_anisotropy_std)))
         self.inspector_layout.addWidget(self.stats_tabs)
-        self.inspector_layout.addWidget(self.statistics_help, 1)
+        self.inspector_layout.addWidget(self.statistics_help, 0)
+        self.inspector_layout.addStretch(1)
 
         self.grp_wave = QGroupBox('Waveforms')
         wave_layout = QVBoxLayout(self.grp_wave)
@@ -5932,11 +5966,12 @@ class AnalyzerTab(QWidget):
         self.spatial_registrations = {}
         self.spatial_warnings = []
         for recording, field in self.current_well_data[['Recording_ID', 'FOV_ID']].drop_duplicates().itertuples(index=False, name=None):
-            label = f'Field {field}' if field != 'Unknown' else 'Field unknown'
+            field_display = str(field).removeprefix('FOV').lstrip('0') or str(field)
+            label = f'Field {field_display}' if field != 'Unknown' else 'Field unknown'
             if self.current_well_data[self.current_well_data.FOV_ID == field].Recording_ID.nunique() > 1:
                 label += f' · {recording}'
             self.field_selector.addItem(label, (recording, field))
-            self.field_selector.setItemData(self.field_selector.count()-1, f'Recording: {recording}', Qt.ItemDataRole.ToolTipRole)
+            self.field_selector.setItemData(self.field_selector.count()-1, f'Field: {field} · Recording: {recording}', Qt.ItemDataRole.ToolTipRole)
             rows = self.current_well_data[(self.current_well_data.Recording_ID == recording) & (self.current_well_data.FOV_ID == field)]
             try:
                 associations = rows.get('Spatial_Metadata_File', pd.Series(dtype=str))
@@ -6003,10 +6038,16 @@ class AnalyzerTab(QWidget):
         self.cell_selector.addItem('Full Well', None)
         noun = 'groups' if self.measurement_selector.currentData() == 'group' else 'cells'
         self.cell_selector.setItemData(0, f'Show statistics across all {noun} in this well. The selected map view is retained.', Qt.ItemDataRole.ToolTipRole)
+        has_duplicate_cells = self.current_field_data['Cell_ID'].duplicated().any()
         for index, row in self.current_field_data.iterrows():
             name = display_cell_name(row['Cell_ID'], row.get('Object_Type', 'cell'))
-            self.cell_selector.addItem(name if identity is not None else f"{name} · Field {row['FOV_ID']} · {row['Recording_ID']}", int(index))
-            self.cell_selector.setItemData(self.cell_selector.count()-1, f"{name} · Field {row['FOV_ID']} · Recording {row['Recording_ID']}", Qt.ItemDataRole.ToolTipRole)
+            if identity is None and has_duplicate_cells:
+                field_label = str(row['FOV_ID']).removeprefix('FOV').lstrip('0') or str(row['FOV_ID'])
+                label = f"{name} (Field {field_label})"
+            else:
+                label = name
+            self.cell_selector.addItem(label, int(index))
+            self.cell_selector.setItemData(self.cell_selector.count()-1, f"{name} · Field {row['FOV_ID']}", Qt.ItemDataRole.ToolTipRole)
         self.cell_selector.setCurrentIndex(0)
         self.cell_selector.blockSignals(False)
         self.plot_item.setTitle('Full Well' if identity is None else f'Field {field}')
@@ -6022,69 +6063,83 @@ class AnalyzerTab(QWidget):
                 self.metric_combo.setCurrentIndex(available)
                 self.metric_combo.blockSignals(False)
         self.update_map()
-        self.show_well_averages(self.well_selector.currentText())
+        self.show_summary_averages()
 
     def select_analysis_cell(self, *_):
         index = self.cell_selector.currentData()
         if index is not None:
             self.show_cell(int(index))
         elif self.cell_selector.currentIndex() >= 0:
-            self.show_well_averages(self.well_selector.currentText())
+            self.show_summary_averages()
 
-    def show_well_averages(self, well_id):
+    def show_well_averages(self, well_id=None):
+        self.show_summary_averages()
+
+    def show_summary_averages(self):
         if self.current_well_data is None or self.current_well_data.empty: return
         self.well_cells.clearSelection()
         self.stats_tabs.show()
         
-        # Calculate the mean across all cells in this well
-        well_avg = self.current_well_data.mean(numeric_only=True)
-        well_std = self.current_well_data.std(numeric_only=True)
-        if 'Contraction_Angle_deg' in self.current_well_data:
-            well_avg['Contraction_Angle_deg'], well_std['Contraction_Angle_deg'] = axial_statistics(self.current_well_data['Contraction_Angle_deg'])
-        num_cells = len(self.current_well_data)
+        is_full_well = (self.field_selector.currentData() is None)
+        data = self.current_well_data if is_full_well else self.current_field_data
+        if data is None or data.empty:
+            data = self.current_well_data
+            is_full_well = True
+
+        avg = data.mean(numeric_only=True)
+        std = data.std(numeric_only=True)
+        if 'Contraction_Angle_deg' in data:
+            avg['Contraction_Angle_deg'], std['Contraction_Angle_deg'] = axial_statistics(data['Contraction_Angle_deg'])
+        num_cells = len(data)
         
-        # Update Header to indicate it's a Well Average
         noun = "group" if self.measurement_selector.currentData() == "group" else "cell"
         count_label = noun if num_cells == 1 else noun + "s"
-        self.lbl_target.setText(f"Well Averages: {well_id} ({num_cells} {count_label})")
-        self.cell_context.setText('Select a group on the map or from the group list.' if noun == 'group' else 'Select a cell on the map or from the cell list.')
+        if is_full_well:
+            well_id = self.well_selector.currentText()
+            self.lbl_target.setText(f"Well Averages: {well_id} ({num_cells} {count_label})")
+        else:
+            _, field_id = self.field_selector.currentData()
+            field_display = str(field_id).removeprefix('FOV').lstrip('0') or str(field_id)
+            self.lbl_target.setText(f"Field {field_display} Averages ({num_cells} {count_label})")
+
+        self.cell_context.setText('Select a group on the map or from the list.' if noun == 'group' else 'Select a cell on the map or from the list.')
         
         def fmt(val, decimals=2):
             return f"{val:.{decimals}f}" if pd.notnull(val) else "N/A"
 
-        self.lbl_amp.setText(fmt(well_avg.get('Peak_Amplitude_au'), 2))
-        self.lbl_ttp.setText(fmt(well_avg.get('Time_to_Peak_ms'), 1))
-        self.lbl_rt.setText(fmt(well_avg.get('Relaxation_Time_ms'), 1))
-        self.lbl_p2p.setText(fmt(well_avg.get('Peak_to_Peak_Time_ms'), 1))
+        self.lbl_amp.setText(fmt(avg.get('Peak_Amplitude_au'), 2))
+        self.lbl_ttp.setText(fmt(avg.get('Time_to_Peak_ms'), 1))
+        self.lbl_rt.setText(fmt(avg.get('Relaxation_Time_ms'), 1))
+        self.lbl_p2p.setText(fmt(avg.get('Peak_to_Peak_Time_ms'), 1))
         
-        self.lbl_ct50.setText(fmt(well_avg.get('CT50_ms'), 1))
-        self.lbl_ct90.setText(fmt(well_avg.get('CT90_ms'), 1))
-        self.lbl_rt50.setText(fmt(well_avg.get('RT50_ms'), 1))
-        self.lbl_rt90.setText(fmt(well_avg.get('RT90_ms'), 1))
-        self.lbl_cvel.setText(fmt(well_avg.get('Max_Contraction_Velocity'), 4))
-        self.lbl_rvel.setText(fmt(well_avg.get('Max_Relaxation_Velocity'), 4))
+        self.lbl_ct50.setText(fmt(avg.get('CT50_ms'), 1))
+        self.lbl_ct90.setText(fmt(avg.get('CT90_ms'), 1))
+        self.lbl_rt50.setText(fmt(avg.get('RT50_ms'), 1))
+        self.lbl_rt90.setText(fmt(avg.get('RT90_ms'), 1))
+        self.lbl_cvel.setText(fmt(avg.get('Max_Contraction_Velocity'), 4))
+        self.lbl_rvel.setText(fmt(avg.get('Max_Relaxation_Velocity'), 4))
         
-        self.lbl_fa.setText(fmt(well_avg.get('Fractional_Anisotropy'), 3))
-        self.lbl_angle.setText(f"{fmt(well_avg.get('Contraction_Angle_deg'), 1)}°" if pd.notnull(well_avg.get('Contraction_Angle_deg')) else "N/A")
-        self.lbl_coherence.setText(fmt(well_avg.get('Vector_Coherence'), 3))
+        self.lbl_fa.setText(fmt(avg.get('Fractional_Anisotropy'), 3))
+        self.lbl_angle.setText(f"{fmt(avg.get('Contraction_Angle_deg'), 1)}°" if pd.notnull(avg.get('Contraction_Angle_deg')) else "N/A")
+        self.lbl_coherence.setText(fmt(avg.get('Vector_Coherence'), 3))
         
-        self.lbl_amp_std.setText(fmt(well_std.get('Peak_Amplitude_au'), 2))
-        self.lbl_ttp_std.setText(fmt(well_std.get('Time_to_Peak_ms'), 1))
-        self.lbl_rt_std.setText(fmt(well_std.get('Relaxation_Time_ms'), 1))
-        self.lbl_p2p_std.setText(fmt(well_std.get('Peak_to_Peak_Time_ms'), 1))
+        self.lbl_amp_std.setText(fmt(std.get('Peak_Amplitude_au'), 2))
+        self.lbl_ttp_std.setText(fmt(std.get('Time_to_Peak_ms'), 1))
+        self.lbl_rt_std.setText(fmt(std.get('Relaxation_Time_ms'), 1))
+        self.lbl_p2p_std.setText(fmt(std.get('Peak_to_Peak_Time_ms'), 1))
         
-        self.lbl_ct50_std.setText(fmt(well_std.get('CT50_ms'), 1))
-        self.lbl_ct90_std.setText(fmt(well_std.get('CT90_ms'), 1))
-        self.lbl_rt50_std.setText(fmt(well_std.get('RT50_ms'), 1))
-        self.lbl_rt90_std.setText(fmt(well_std.get('RT90_ms'), 1))
-        self.lbl_cvel_std.setText(fmt(well_std.get('Max_Contraction_Velocity'), 4))
-        self.lbl_rvel_std.setText(fmt(well_std.get('Max_Relaxation_Velocity'), 4))
+        self.lbl_ct50_std.setText(fmt(std.get('CT50_ms'), 1))
+        self.lbl_ct90_std.setText(fmt(std.get('CT90_ms'), 1))
+        self.lbl_rt50_std.setText(fmt(std.get('RT50_ms'), 1))
+        self.lbl_rt90_std.setText(fmt(std.get('RT90_ms'), 1))
+        self.lbl_cvel_std.setText(fmt(std.get('Max_Contraction_Velocity'), 4))
+        self.lbl_rvel_std.setText(fmt(std.get('Max_Relaxation_Velocity'), 4))
         
-        self.lbl_fa_std.setText(fmt(well_std.get('Fractional_Anisotropy'), 3))
-        self.lbl_angle_std.setText(f"{fmt(well_std.get('Contraction_Angle_deg'), 1)}°" if pd.notnull(well_std.get('Contraction_Angle_deg')) else "N/A")
-        self.lbl_coherence_std.setText(fmt(well_std.get('Vector_Coherence'), 3))
+        self.lbl_fa_std.setText(fmt(std.get('Fractional_Anisotropy'), 3))
+        self.lbl_angle_std.setText(f"{fmt(std.get('Contraction_Angle_deg'), 1)}°" if pd.notnull(std.get('Contraction_Angle_deg')) else "N/A")
+        self.lbl_coherence_std.setText(fmt(std.get('Vector_Coherence'), 3))
         
-        self.draw_summary_wave(well_avg)
+        self.draw_summary_wave(avg)
         self.draw_recorded_wave(None)
 
     def update_map(self):
@@ -6154,6 +6209,19 @@ class AnalyzerTab(QWidget):
                 overlay.sigClicked.connect(lambda _, event, key=identity: self.select_field_identity(key))
                 self.plot_item.addItem(overlay); self.map_overlays.append(overlay)
                 self.field_curves[identity] = overlay
+                field_num = str(field).removeprefix('FOV').lstrip('0') or str(field)
+                label_text = f"Field {field_num}"
+                text_item = ClickableFieldLabel(
+                    text=label_text,
+                    identity=identity,
+                    callback=self.select_field_identity,
+                    color='#abb2bf',
+                    anchor=(0.5, 1.2)
+                )
+                center_x = float((outline[:, 0].min() + outline[:, 0].max()) / 2.0)
+                top_y = float(outline[:, 1].max())
+                text_item.setPos(center_x, top_y)
+                self.plot_item.addItem(text_item); self.map_overlays.append(text_item)
             data = pd.concat(placed) if placed else data.iloc[:0]
             unplaced = len(self.current_well_data) - len(data)
             if self.spatial_registrations and unplaced:
@@ -6234,7 +6302,9 @@ class AnalyzerTab(QWidget):
         cell_id = cell_data['Cell_ID']
         # Update Header
         self.lbl_target.setText(display_cell_name(cell_id, cell_data.get('Object_Type', 'cell')))
-        self.cell_context.setText(f"Field {cell_data['FOV_ID']} · Recording {cell_data['Recording_ID']}")
+        field_name = str(cell_data['FOV_ID']).removeprefix('FOV').lstrip('0') or str(cell_data['FOV_ID'])
+        self.cell_context.setText(f"Field {field_name}")
+        self.cell_context.setToolTip(f"Field: {cell_data['FOV_ID']} · Recording: {cell_data['Recording_ID']}")
         self.cell_selector.blockSignals(True)
         self.cell_selector.setCurrentIndex(self.cell_selector.findData(index))
         self.cell_selector.blockSignals(False)
