@@ -1400,10 +1400,9 @@ class CaptureTab(QWidget):
         left_panel = self.camera_panel = QWidget()
         left_layout = QVBoxLayout(left_panel)
 
-        # Hardware Controls (Micro-Manager)
+        # Hardware Controls (Micro-Manager & DirectShow)
         hw_group = QGroupBox("Camera")
-        hw_layout = QFormLayout(hw_group)
-        hw_layout.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
+        hw_layout = QVBoxLayout(hw_group)
 
         self.cfg_path = QLineEdit()
         self.cfg_path.setPlaceholderText("Select .cfg file...")
@@ -1432,27 +1431,22 @@ class CaptureTab(QWidget):
         self.btn_cam.setEnabled(False)
         self.btn_cam.clicked.connect(self.toggle_camera)
 
-        hw_layout.addRow(QLabel('Configuration file'))
-        hw_layout.addRow(self.cfg_row)
-        camera_setup_actions = FlowRow()
-        camera_setup_actions.flow.addWidget(self.btn_wizard)
-        camera_setup_actions.flow.addWidget(self.btn_cv_fallback)
-        hw_layout.addRow(camera_setup_actions)
-        hw_layout.addRow("Exposure:", self.spin_exposure)
-        hw_layout.addRow(self.btn_cam)
         self.camera_settings_dialog = QDialog(self)
         self.camera_settings_dialog.setWindowTitle('TEMPO · Camera Connection and Properties')
-        self.camera_settings_dialog.resize(520,400)
+        self.camera_settings_dialog.setWindowFlags(self.camera_settings_dialog.windowFlags() | Qt.WindowType.WindowStaysOnTopHint)
+        self.camera_settings_dialog.resize(440, 200)
         settings_layout = QVBoxLayout(self.camera_settings_dialog)
-        settings_layout.addWidget(hw_layout.itemAt(0).widget())
+        settings_layout.addWidget(QLabel('Configuration file'))
         settings_layout.addWidget(self.cfg_row)
-        settings_layout.addWidget(camera_setup_actions)
-        while hw_layout.count(): hw_layout.takeAt(0)
+        settings_layout.addWidget(self.btn_wizard)
+
         self.btn_connection_settings = QPushButton('Camera Settings…')
-        self.btn_connection_settings.clicked.connect(self.camera_settings_dialog.show)
-        hw_layout.addRow(self.btn_connection_settings)
-        hw_layout.addRow('Exposure:', self.spin_exposure)
-        hw_layout.addRow(self.btn_cam)
+        self.btn_connection_settings.clicked.connect(self.show_camera_settings)
+        camera_actions = FlowRow()
+        camera_actions.flow.addWidget(self.btn_connection_settings)
+        camera_actions.flow.addWidget(self.btn_cv_fallback)
+        hw_layout.addWidget(camera_actions)
+        hw_layout.addWidget(self.btn_cam)
         left_layout.addWidget(hw_group)        
         # Advanced Hardware Properties Form
         self.prop_group = QGroupBox("Advanced Camera Properties")
@@ -1517,6 +1511,7 @@ class CaptureTab(QWidget):
         cap_layout.addWidget(self.btn_snap)
         
         fps_layout = QFormLayout()
+        fps_layout.addRow('Exposure:', self.spin_exposure)
         self.spin_rec_fps = QSpinBox()
         self.spin_rec_fps.setRange(10, 226)
         init_fps = int(tempo_preferences.get("capture", "target_fps", 100))
@@ -1544,8 +1539,6 @@ class CaptureTab(QWidget):
             check.toggled.connect(lambda _: self.retained_format.setEnabled(
                 self.save_original.isChecked() or self.save_cell_videos.isChecked()))
         retention_layout.addWidget(self.retained_format)
-        retention_note = QLabel('Results are kept. Unsaved footage is removed after successful processing.')
-        retention_note.setWordWrap(True); retention_layout.addWidget(retention_note)
         left_layout.addWidget(self.retention_group)
         
         self.lbl_acq_status = QLabel("Acquisition Idle")
@@ -1560,7 +1553,7 @@ class CaptureTab(QWidget):
         self.scout_progress_bar = QProgressBar()
         self.scout_progress_bar.hide()
 
-        forms = (hw_layout, self.prop_layout, meta_layout, fps_layout)
+        forms = (meta_layout, fps_layout)
         self._capture_forms = forms
         form_labels = [form.itemAt(row, QFormLayout.ItemRole.LabelRole).widget()
                        for form in forms for row in range(form.rowCount())
@@ -1569,11 +1562,11 @@ class CaptureTab(QWidget):
             form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
             form.setHorizontalSpacing(8)
             form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
-        aligned_width = max(label.fontMetrics().horizontalAdvance(label.text()) for form in (hw_layout,meta_layout)
+        aligned_width = max(label.fontMetrics().horizontalAdvance(label.text()) for form in forms
                             for row in range(form.rowCount())
                             if (item := form.itemAt(row,QFormLayout.ItemRole.LabelRole)) is not None
                             for label in (item.widget(),)) + 4
-        for form in (hw_layout,meta_layout):
+        for form in forms:
             for row in range(form.rowCount()):
                 item = form.itemAt(row,QFormLayout.ItemRole.LabelRole)
                 if item is not None: item.widget().setMinimumWidth(aligned_width)
@@ -1666,7 +1659,7 @@ class CaptureTab(QWidget):
             self.acquisition_scroll.setMinimumWidth(min(self._camera_preferred_minimum,max(300,available)))
         for form in self._capture_forms:
             form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
-        forms = (self._capture_forms[0],self._capture_forms[2])
+        forms = self._capture_forms
         required = max(item.widget().minimumWidth() for form in forms for row in range(form.rowCount())
                        if (item := form.itemAt(row,QFormLayout.ItemRole.LabelRole)) is not None)
         required += max(control.minimumSizeHint().width() for control in (self.spin_exposure,self.exp_id,self.well_id,self.fov_id)) + 8
@@ -1677,6 +1670,12 @@ class CaptureTab(QWidget):
             desired = controls.minimum_stimulation_width()
             available = self.width() - self.acquisition_scroll.minimumWidth() - 232
             self.capture_inspector.setMinimumWidth(min(max(270, desired), max(270, available)))
+
+    def show_camera_settings(self):
+        self.camera_settings_dialog.adjustSize()
+        self.camera_settings_dialog.show()
+        self.camera_settings_dialog.raise_()
+        self.camera_settings_dialog.activateWindow()
 
     def resizeEvent(self, event):
         super().resizeEvent(event)

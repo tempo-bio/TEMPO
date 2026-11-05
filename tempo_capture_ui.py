@@ -548,7 +548,7 @@ class FieldCollectionWorker(QThread):
 
 class CaptureSetupDialog(QDialog):
     """Infrequent setup is kept off the routine acquisition panels."""
-    def __init__(self, tools):
+    def __init__(self, tools, section='outputs'):
         super().__init__(tools)
         self.tools = tools
         self.setWindowTitle('TEMPO · ' + ('Output Assignments' if section == 'outputs' else 'Field Calibration'))
@@ -716,15 +716,17 @@ class CaptureTools(QWidget):
         for control in (self.amplitude,self.frequency,self.width):
             control.valueChanged.connect(self.update_scope)
             control.valueChanged.connect(self.arrange_parameters)
-        self.setup_button = QPushButton('Setup…')
+        self.setup_button = QPushButton('Setup')
         menu = QMenu(self.setup_button)
         self.output_setup_action = menu.addAction('Output assignments…', lambda: self.open_setup('outputs'))
         self.firmware_action = menu.addAction('Install / update firmware…', self.open_firmware)
         self.diagnostics_action = menu.addAction('Advanced diagnostics…', self.diagnostics)
-        menu.addAction('Stimulation guide…', self.stimulation_help)
+        menu.addAction('Stimulation Guide', self.stimulation_help)
         self.setup_button.setMenu(menu)
-        # One setup menu replaces unrelated standalone buttons in the camera panel.
+        self.guide_button = QPushButton('Stimulation Guide')
+        self.guide_button.clicked.connect(self.stimulation_help)
         connection_actions.flow.addWidget(self.setup_button)
+        connection_actions.flow.addWidget(self.guide_button)
         layout.addWidget(self.connection_group)
         self.status = QLabel('Output off.'); self.status.setWordWrap(True)
         box.insertWidget(1, self.status)
@@ -748,8 +750,9 @@ class CaptureTools(QWidget):
         count_row = FlowRow()
         self.count_button = QPushButton('Count Field'); self.count_button.clicked.connect(self.count_current)
         count_row.flow.addWidget(self.count_button)
-        self.count_info = InformationButton('Field counts', 'Only individually detected healthy cells count toward the target. Groups and dead cells are reported separately. Counts are model estimates. Repeated field identifiers and calibrated overlapping fields are not credited again; without stage coordinates, assign a new field identifier only after moving to a different field.')
-        count_row.flow.addWidget(self.count_info); fields.addWidget(count_row)
+        self.history_button = QPushButton('History…'); self.history_button.clicked.connect(self.show_history)
+        count_row.flow.addWidget(self.history_button); self.history_button.setEnabled(False)
+        fields.addWidget(count_row)
         self.collection_results_button = QPushButton('Collection Results…')
         self.collection_results_button.clicked.connect(self.show_collection_results)
         self.collection_results_button.hide(); fields.addWidget(self.collection_results_button)
@@ -757,8 +760,6 @@ class CaptureTools(QWidget):
         self.history.setSizePolicy(QSizePolicy.Policy.Expanding,QSizePolicy.Policy.Fixed)
         fields.addWidget(self.history)
         self.history_summary = QLabel('No fields recorded.'); fields.addWidget(self.history_summary)
-        self.history_button = QPushButton('History…'); self.history_button.clicked.connect(self.show_history)
-        count_row.flow.addWidget(self.history_button); self.history_button.setEnabled(False)
         self.automatic_group = QGroupBox('Automatic Collection'); compact_auto = QVBoxLayout(self.automatic_group)
         self.automatic_dialog = QDialog(self)
         self.automatic_dialog.setWindowTitle('TEMPO · Automatic Collection')

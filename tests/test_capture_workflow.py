@@ -383,11 +383,27 @@ class ManualCaptureTests(unittest.TestCase):
             self.assertTrue(self.view.camera_panel.isAncestorOf(control),control.objectName() or type(control).__name__)
         for control in (self.tools.connection_group,self.tools.amplitude,self.tools.enabled,self.tools.scope_preview):
             self.assertTrue(self.view.stimulation_panel.isAncestorOf(control))
+        self.assertTrue(self.view.camera_panel.isAncestorOf(self.view.btn_cv_fallback))
         self.assertTrue(self.view.camera_settings_dialog.isAncestorOf(self.view.btn_load_cfg))
         self.assertTrue(self.view.camera_settings_dialog.isAncestorOf(self.view.prop_combo))
+        self.assertTrue(bool(self.view.camera_settings_dialog.windowFlags() & Qt.WindowType.WindowStaysOnTopHint))
+        self.assertEqual(self.tools.setup_button.text(), 'Setup')
+        self.assertEqual(self.tools.guide_button.text(), 'Stimulation Guide')
+        self.assertTrue(self.tools.connection_group.isAncestorOf(self.tools.guide_button))
+        self.assertFalse(hasattr(self.tools, 'count_info'))
         self.assertTrue(self.view.z_index.isEnabled())
         self.assertIn('Single output',self.tools.channel_label.text())
         self.assertNotIn('Channel 0',self.tools.channel_label.text())
+
+    def test_output_assignments_and_calibration_dialogs(self):
+        from tempo_capture_ui import CaptureSetupDialog
+        dialog_outputs = CaptureSetupDialog(self.tools, section='outputs')
+        self.assertEqual(dialog_outputs.windowTitle(), 'TEMPO · Output Assignments')
+        self.assertFalse(dialog_outputs.multiplexer.isHidden())
+        self.assertEqual(len(dialog_outputs.channels), 8)
+        dialog_calib = CaptureSetupDialog(self.tools, section='calibration')
+        self.assertEqual(dialog_calib.windowTitle(), 'TEMPO · Field Calibration')
+        self.assertTrue(dialog_calib.multiplexer.isHidden())
 
     def test_chosen_compact_values_are_editable_with_native_arrow_controls(self):
         from PyQt6.QtWidgets import QStyle,QStyleOptionSpinBox,QPushButton

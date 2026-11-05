@@ -105,7 +105,7 @@ def render(output):
             assert view.stimulation_panel.isAncestorOf(tools.connection_group)
             assert view.size().width()==size[0],f'{name}: window forced wider'
             # Every information icon fits its actual parent layout.
-            for icon in (tools.information,tools.count_info,tools.scope_preview.information):
+            for icon in (tools.information,tools.scope_preview.information):
                 assert icon.parentWidget().rect().contains(icon.geometry()),f'{name}: clipped information icon'
             for button in (view.btn_connection_settings,view.btn_flir_preset,view.btn_record,tools.setup_button,stop):
                 assert button.width()>=button.fontMetrics().horizontalAdvance(button.text())+10,f'{name}: clipped button text'

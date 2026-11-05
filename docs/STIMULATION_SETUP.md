@@ -6,7 +6,7 @@ CD74HC4053 output switch, and optional CD74HC4051 eight-channel multiplexer.
 ## Install or update the Arduino
 
 1. Connect the Uno R4 Minima by USB. Finish any active capture or stimulation.
-2. In Acquisition's Stimulation panel, choose **Setup… → Install / update firmware…**.
+2. In Acquisition's Stimulation panel, choose **Setup → Install / update firmware…**.
 3. Select its port and choose **Install / Update Firmware**. This replaces the
    Arduino's current sketch. Keep the board connected through verification.
 4. Close setup and choose **Connect**. Connecting leaves the output
@@ -74,7 +74,7 @@ successful recording. Repeated identifiers and calibrated overlaps do not add
 credit. Without stage coordinates, assign a new FOV identifier only after moving
 to a new field. **History…** opens the full recording history.
 
-**Setup → Stimulation guide…** provides workflow, counting, output-state, and
+**Stimulation Guide** provides workflow, counting, output-state, and
 metadata guidance. **Adjust View → Real Scope Setup…** explains physical scope
 settings, scale examples, trigger choices, and troubleshooting.
 
