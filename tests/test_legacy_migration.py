@@ -207,13 +207,14 @@ class LegacyMigrationTests(unittest.TestCase):
         raw = metadata.read_bytes()
         compiled = source / 'compiled/cells'
         yaml = self.put(compiled, 'data.yaml', ('path: ' + json.dumps(str(compiled)) + '\ntrain: images/train\n').encode())
+        raw_yaml = yaml.read_bytes()
         self.prepare(); self.retire(); self.finish()
         published = json.loads((self.profile / 'collaboration/manifest.json').read_bytes())
         self.assertEqual(published['image_path'], str(self.profile / 'collaboration/workspaces/two/image.png'))
         self.assertEqual(published['external_path'], external)
         self.assertTrue(str(published['score']) == 'nan')
         self.assertEqual(metadata.read_bytes(), raw)
-        self.assertIn(str(compiled), yaml.read_text())
+        self.assertEqual(yaml.read_bytes(), raw_yaml)
         relocated_yaml = (self.profile / 'collaboration/compiled/cells/data.yaml').read_text()
         self.assertEqual(json.loads(relocated_yaml.splitlines()[0][5:].strip()),
                          str(self.profile / 'collaboration/compiled/cells'))

@@ -2,6 +2,7 @@
 import copy
 from concurrent.futures import Future
 from dataclasses import asdict
+from itertools import count
 import os
 os.environ.setdefault('QT_QPA_PLATFORM','offscreen')
 from pathlib import Path
@@ -54,14 +55,21 @@ class NativeAcquisitionTimingTests(unittest.TestCase):
             core=Mock();core.getImageWidth.return_value=32;core.getImageHeight.return_value=32
             core.getImageBitDepth.return_value=12;core.isSequenceRunning.return_value=True
             core.isBufferOverflowed.return_value=False;core.getRemainingImageCount.return_value=1
+            core.getBufferFreeCapacity.return_value=80;core.getBufferTotalCapacity.return_value=100
             images=[SimpleNamespace(pix=np.full((32,32),index,np.uint16),tags={'ElapsedTime-ms':index*5,'FrameIndex':index}) for index in range(8)]
             core.popNextTaggedImage.side_effect=images
             path=Path(directory)/'field.tif'
             worker=gui.CameraAcquisitionWorker(core=core,output_path=str(path),target_fps=100,
                 native=True,duration_s=.03,recording_options={'retention':{'owned':True}})
-            errors=[];finished=[];worker.error_signal.connect(errors.append);worker.finished_signal.connect(lambda *args:finished.append(args))
-            with patch.object(gui,'HAS_MMCORE',True):worker.run()
+            errors=[];finished=[];progress=[]
+            worker.error_signal.connect(errors.append);worker.finished_signal.connect(lambda *args:finished.append(args))
+            worker.progress_signal.connect(lambda *args:progress.append(args))
+            # Exercise progress reporting even on a fast host; duration must still use camera time.
+            clock=Mock(wraps=time);clock.monotonic.side_effect=count(0.,.2).__next__
+            with patch.object(gui,'HAS_MMCORE',True),patch.object(gui,'time',clock):worker.run()
             self.assertFalse(errors,errors);self.assertEqual(finished[0][1],7)
+            self.assertTrue(progress)
+            self.assertTrue(all(sample[2]==80. for sample in progress),progress)
             self.assertEqual(read_metadata(path)['frames'],7)
             values,basis=timeline(path,7,100)
             self.assertEqual(basis,'camera');self.assertEqual(values[-1],30.)
