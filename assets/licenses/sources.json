@@ -60,5 +60,13 @@
     "source": "https://files.pythonhosted.org/packages/1e/7d/ae3f0a63f41e4d2f6cb66a5b57197850f919f59e558159a4dd3a818f5082/pyserial-3.5.tar.gz",
     "sha256": "f91cb9813de6a5b142b8f7f2dede630b5134160aedaeaf55f4d6a7e2593ca3f3",
     "note": "pyserial-3.5/LICENSE.txt, reproduced verbatim. Source archive SHA-256: 3c77e014170dfffbd816e6ffc205e9842efb10be9f58ec16d3e8675b4925cddb"
+  },
+  {
+    "package": "velopack",
+    "version": "1.2.161",
+    "path": "assets/licenses/velopack/LICENSE",
+    "source": "https://raw.githubusercontent.com/velopack/velopack/92d6a1c91716729d449034df5c50307dcce39493/LICENSE",
+    "sha256": "91845db83551c877ebbb1118e0fb92e4e527290d23b995c55dcd438b3293943f",
+    "note": "Verbatim pinned upstream MIT notice; the matching Python wheel omits a standalone notice."
   }
 ]

@@ -9,6 +9,7 @@ installer/velopack/*.patch text eol=lf whitespace=-blank-at-eol,-blank-at-eof
 
 # Upstream notices are checksum-verified as original bytes.
 assets/licenses/** -text
+installer/velopack/LICENSE -text
 /LICENSE -text
 
 # Archived repair fixtures must retain their registered source hashes.

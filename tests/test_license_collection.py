@@ -91,6 +91,19 @@ class LicenseCollectionTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError,'checksum mismatch'):
                 collect(Path(temporary),[distribution])
 
+    def test_velopack_wheel_uses_only_its_reviewed_upstream_notice(self):
+        distribution = SimpleNamespace(metadata={'Name': 'velopack', 'License': 'MIT'},
+                                       version='1.2.161', files=[])
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary)
+            report = collect(output, [distribution])
+            self.assertEqual(report['packages_without_license_files'], [])
+            package = report['packages'][0]
+            self.assertEqual((output / package['files'][0]).read_bytes(),
+                             (Path(__file__).resolve().parents[1] / 'installer/velopack/LICENSE').read_bytes())
+            distribution.version = '1.2.162'
+            self.assertEqual(collect(output, [distribution])['packages_without_license_files'], ['velopack'])
+
 
 if __name__ == '__main__':
     unittest.main()
