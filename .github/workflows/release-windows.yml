@@ -475,6 +475,7 @@ jobs:
             payload/candidate-contract.json
             evidence/*-result.json
             evidence/*-verification.json
+            evidence/*-verification-probes/**/*.json
             evidence/*-shell-folders.json
             evidence/preserved-state.json
             evidence/**/*.log

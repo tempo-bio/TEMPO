@@ -17,6 +17,7 @@ class WindowsInstallerCleanupTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             environment = dict(os.environ,
                 TEMPO_CLEANUP_TEST_ROOT=str(Path(directory) / 'installation é with spaces'),
+                TEMPO_INSTALL_FIXTURE=str(Path(__file__).resolve().parents[1] / 'scripts/verify_velopack_install.ps1'),
                 TEMPO_CLEANUP_HELPERS=str(Path(__file__).resolve().parents[1] / 'scripts/windows_installer_helpers.ps1'))
             command = "$ErrorActionPreference='Stop'\n. $env:TEMPO_CLEANUP_HELPERS\n" + script
             encoded = base64.b64encode(command.encode('utf-16le')).decode('ascii')
@@ -57,6 +58,42 @@ catch {
     $refused=$true
 }
 if (-not $refused -or (Get-Content $file -Raw).Trim() -ne 'must remain') { throw 'Incomplete uninstall was accepted or changed' }
+''')
+
+    def test_fixture_initialization_failure_retains_a_structured_report(self):
+        self.run_shell(r'''
+$payload=Join-Path $env:TEMPO_CLEANUP_TEST_ROOT 'payload'
+$evidence=Join-Path $env:TEMPO_CLEANUP_TEST_ROOT 'evidence'
+New-Item -ItemType Directory -Force $payload,$evidence | Out-Null
+$failed=$false
+try { & $env:TEMPO_INSTALL_FIXTURE -Mode gate -Payload $payload -Evidence $evidence -SourceCommit ('a'*40) }
+catch { $failed=$true }
+$report=Get-Content (Join-Path $evidence 'gate-result.json') -Raw | ConvertFrom-Json
+if (-not $failed -or $report.success -ne $false -or $report.source_commit -ne ('a'*40) -or
+    $report.error -notlike '*candidate-contract.json*') { throw 'Initialization failure evidence was lost' }
+''')
+
+    def test_gate_reports_the_failed_stage_before_a_missing_later_stage(self):
+        self.run_shell(r'''
+$payload=Join-Path $env:TEMPO_CLEANUP_TEST_ROOT 'payload'
+$evidence=Join-Path $env:TEMPO_CLEANUP_TEST_ROOT 'evidence'
+New-Item -ItemType Directory -Force $payload,$evidence | Out-Null
+$repair=Join-Path $payload 'repair.exe'
+[IO.File]::WriteAllText($repair,'fixture')
+@{schema_version=1;source_commit=('a'*40);release_certified=$false;purpose='isolated-full-app-acceptance';
+  package_id='TEMPO.CandidateFixture';title='TEMPO Candidate Fixture';revisions=@(@{},@{},@{});
+  repair=@{path='repair.exe';size=(Get-Item $repair).Length;sha256=(Get-FileHash $repair -Algorithm SHA256).Hash.ToLowerInvariant()}} |
+  ConvertTo-Json -Depth 8 | Set-Content (Join-Path $payload 'candidate-contract.json') -Encoding utf8NoBOM
+@{commit=('a'*40)} | ConvertTo-Json | Set-Content (Join-Path $payload 'verification-contract.json') -Encoding utf8NoBOM
+@{success=$false;error='original matrix failure'} | ConvertTo-Json |
+  Set-Content (Join-Path $evidence 'matrix-result.json') -Encoding utf8NoBOM
+$failed=$false
+try { & $env:TEMPO_INSTALL_FIXTURE -Mode gate -Payload $payload -Evidence $evidence -SourceCommit ('a'*40) }
+catch { $failed=$true }
+$report=Get-Content (Join-Path $evidence 'gate-result.json') -Raw | ConvertFrom-Json
+if (-not $failed -or $report.error -notlike '*original matrix failure*' -or $report.error -like '*migration-result*') {
+    throw 'Later missing evidence obscured the first failing stage'
+}
 ''')
 
 

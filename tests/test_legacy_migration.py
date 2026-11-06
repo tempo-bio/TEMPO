@@ -298,7 +298,13 @@ class LegacyMigrationTests(unittest.TestCase):
         addon = self.put(self.legacy, '_internal/.tempo-packages/test/receipt.json', b'{}')
         with self.assertRaisesRegex(ValueError, 'optional package'):
             self.prepare()
-        addon.unlink(); addon.parent.rmdir(); addon.parent.parent.rmdir()
+        addon.unlink()
+        with self.assertRaisesRegex(ValueError, 'optional package'):
+            self.prepare()  # Missing receipts do not clear an unknown partial package.
+        addon.parent.rmdir()
+        with self.assertRaisesRegex(ValueError, 'optional package'):
+            self.prepare()  # An unreviewed empty package parent remains a blocker.
+        addon.parent.parent.rmdir()
         marker = self.put(self.profile, 'nvidia-runtime/active.json', b'unchanged selection')
         with self.assertRaisesRegex(ValueError, 'NVIDIA'):
             self.prepare()

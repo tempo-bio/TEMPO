@@ -9,7 +9,10 @@ New-Item -ItemType Directory -Force $Evidence | Out-Null
 $Payload = (Resolve-Path $Payload).Path
 $Evidence = (Resolve-Path $Evidence).Path
 . (Join-Path $PSScriptRoot 'windows_installer_helpers.ps1')
+$result = @{schema_version=1;source_commit=$SourceCommit;fixture_commit=$env:GITHUB_SHA;fixture_sha256=(Get-FileHash $PSCommandPath -Algorithm SHA256).Hash.ToLowerInvariant();helper_sha256=(Get-FileHash (Join-Path $PSScriptRoot 'windows_installer_helpers.ps1') -Algorithm SHA256).Hash.ToLowerInvariant();release_certified=$false;mode=$Mode;success=$false;scenarios=@{};measurements=@()}
+try {
 $contract = Get-Content (Join-Path $Payload 'candidate-contract.json') -Raw | ConvertFrom-Json
+$result.contract_sha256=(Get-FileHash (Join-Path $Payload 'candidate-contract.json') -Algorithm SHA256).Hash.ToLowerInvariant()
 $verification = Get-Content (Join-Path $Payload 'verification-contract.json') -Raw | ConvertFrom-Json
 if ($contract.schema_version -ne 1 -or $contract.source_commit -ne $SourceCommit -or
     $verification.commit -ne $SourceCommit -or $contract.release_certified -ne $false -or
@@ -87,8 +90,10 @@ function Assert-Installed($Revision) {
     foreach ($link in $links) {
         if (-not (Test-Path -LiteralPath $link)) { throw "Missing installed shortcut: $link" }
         $shortcut = $shell.CreateShortcut($link)
-        if (-not $shortcut.TargetPath.StartsWith($root + '\', [StringComparison]::OrdinalIgnoreCase)) {
-            throw "Shortcut points outside the installed application: $link"
+        if (-not $shortcut.TargetPath.Equals((Join-Path $current 'TEMPO.exe'), [StringComparison]::OrdinalIgnoreCase) -or
+            -not $shortcut.WorkingDirectory.TrimEnd('\').Equals($current.TrimEnd('\'), [StringComparison]::OrdinalIgnoreCase) -or
+            $shortcut.Arguments) {
+            throw "Shortcut does not launch the current application: $link"
         }
     }
 }
@@ -112,15 +117,24 @@ function Assert-VelopackUninstalled {
     Assert-State
 }
 
-function Assert-MigrationRefused([string]$Reason, [string[]]$Arguments) {
+function Assert-MigrationRefused([string]$Reason, [string[]]$Arguments, [bool]$Prepared = $false) {
+    $preparedPath=Join-Path $state 'updates\legacy-migration\prepared.json'
+    if ((Test-Path -LiteralPath $preparedPath) -ne $Prepared) { throw 'Unexpected migration state before refusal check' }
+    $before=if ($Prepared) { (Get-FileHash -LiteralPath $preparedPath -Algorithm SHA256).Hash } else { $null }
     $stdout=Join-Path $Evidence "refused-$Reason.log"
     $stderr=Join-Path $Evidence "refused-$Reason-error.log"
     $process=Start-Process -FilePath $repair -ArgumentList $Arguments -WorkingDirectory $Evidence -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr
     $null=$process.Handle
-    if (-not $process.WaitForExit(300000)) { throw 'Migration refusal did not settle before its deadline' }
-    $process.Refresh()
-    if ($process.ExitCode -eq 0 -or (Get-Content $stderr -Raw) -notmatch $Reason) { throw "Migration did not reject $Reason" }
-    if (Test-Path (Join-Path $state 'updates\legacy-migration\prepared.json')) { throw 'Unsupported selection was prepared for removal' }
+    try {
+        if (-not $process.WaitForExit(300000)) {
+            & "$env:SystemRoot\System32\taskkill.exe" /PID $process.Id /T /F | Out-Null
+            throw 'Migration refusal did not settle before its deadline'
+        }
+        $process.Refresh()
+        if ($process.ExitCode -eq 0 -or (Get-Content $stderr -Raw) -notmatch $Reason) { throw "Migration did not reject $Reason" }
+    } finally { $process.Dispose() }
+    if ((Test-Path -LiteralPath $preparedPath) -ne $Prepared -or
+        ($Prepared -and (Get-FileHash -LiteralPath $preparedPath -Algorithm SHA256).Hash -ne $before)) { throw 'Refused migration changed preparation state' }
     Assert-State
 }
 
@@ -157,24 +171,26 @@ function Apply-Revision($Base, $Target, [string]$Label) {
     return @{label=$Label;seconds=$seconds;full_bytes=$Target.full.size;expanded_bytes=$Target.expanded_bytes}
 }
 
-$result = @{schema_version=1;source_commit=$contract.source_commit;fixture_commit=$env:GITHUB_SHA;fixture_sha256=(Get-FileHash $PSCommandPath -Algorithm SHA256).Hash.ToLowerInvariant();helper_sha256=(Get-FileHash (Join-Path $PSScriptRoot 'windows_installer_helpers.ps1') -Algorithm SHA256).Hash.ToLowerInvariant();release_certified=$false;mode=$Mode;success=$false;scenarios=@{};measurements=@()}
-try {
     Assert-File $repair $contract.repair
     if ($Mode -eq 'gate') {
-        $matrix = Get-Content (Join-Path $Evidence 'matrix-result.json') -Raw | ConvertFrom-Json
-        $migration = Get-Content (Join-Path $Evidence 'migration-result.json') -Raw | ConvertFrom-Json
-        $uninstall = Get-Content (Join-Path $Evidence 'uninstall-result.json') -Raw | ConvertFrom-Json
-        foreach ($report in @($matrix,$migration,$uninstall)) {
+        $reports=@{}
+        foreach ($stage in @('matrix','migration','uninstall')) {
+            $path=Join-Path $Evidence "$stage-result.json"
+            if (-not (Test-Path -LiteralPath $path)) { throw "Candidate $stage evidence is missing" }
+            $report=Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
             if ($report.success -ne $true -or $report.source_commit -ne $contract.source_commit -or
+                $report.contract_sha256 -ne $result.contract_sha256 -or
                 $report.fixture_commit -ne $result.fixture_commit -or $report.fixture_sha256 -ne $result.fixture_sha256 -or
                 $report.helper_sha256 -ne $result.helper_sha256 -or
-                $report.release_certified -ne $false) { throw 'Candidate acceptance failed or has a different identity' }
+                $report.release_certified -ne $false) { throw "Candidate $stage acceptance failed or has a different identity: $($report.error)" }
+            $reports[$stage]=$report
         }
+        $matrix=$reports.matrix; $migration=$reports.migration; $uninstall=$reports.uninstall
         foreach ($name in @('full_app_fresh_install','same_source_two_replacements','same_source_skipped_replacement','simulated_missing_current_independent_repair','external_state_bytes_preserved','shortcuts_and_registration')) {
             if ($matrix.scenarios.$name -ne $true) { throw "Candidate scenario is missing: $name" }
         }
         if ($uninstall.scenarios.uninstall_preserves_external_state -ne $true) { throw 'Uninstall preservation evidence is missing' }
-        foreach ($name in @('published_legacy_cpu_installer','legacy_data_and_models_preserved','legacy_shortcuts_and_registration_retired','unsupported_components_refused')) {
+        foreach ($name in @('published_legacy_cpu_installer','legacy_data_and_models_preserved','legacy_shortcuts_and_registration_retired','unsupported_components_refused','finish_before_legacy_retirement_refused')) {
             if ($migration.scenarios.$name -ne $true) { throw "Legacy migration scenario is missing: $name" }
         }
         if ($migration.legacy_installer_sha256 -ne $contract.legacy_source.installer_sha256) { throw 'Legacy acceptance used a different old installer' }
@@ -219,11 +235,17 @@ try {
         [IO.File]::WriteAllText($model,'synthetic legacy model',[Text.UTF8Encoding]::new($false))
         $modelHash=(Get-FileHash $model -Algorithm SHA256).Hash.ToLowerInvariant()
         $arguments=@('--mode','prepare-migration','--legacy-root',"`"$legacy`"",'--legacy-installer',"`"$oldInstaller`"",'--target-manifest',"`"$(Join-Path $Payload $third.manifest.path)`"",'--target-package',"`"$(Join-Path $Payload $third.full.path)`"")
-        $receipt=Join-Path $legacy '_internal\.tempo-packages\fixture\receipt.json'
+        $packageRoot=Join-Path $legacy '_internal\.tempo-packages'
+        if (Test-Path -LiteralPath $packageRoot) { throw 'Synthetic package fixture would overlap existing package recovery material' }
+        $receipt=Join-Path $packageRoot 'fixture\receipt.json'
         New-Item -ItemType Directory -Force (Split-Path $receipt) | Out-Null
         [IO.File]::WriteAllText($receipt,'{}')
         Assert-MigrationRefused 'optional package' $arguments
         Remove-Item -LiteralPath $receipt
+        # Remove only the empty directories this fixture created. An empty
+        # historical package tree is itself a migration blocker.
+        Remove-Item -LiteralPath (Split-Path $receipt)
+        Remove-Item -LiteralPath $packageRoot
         $marker=Join-Path $state 'nvidia-runtime\active.json'
         New-Item -ItemType Directory -Force (Split-Path $marker) | Out-Null
         [IO.File]::WriteAllText($marker,'{"fixture":"unreviewed selection"}')
@@ -234,6 +256,7 @@ try {
         $migrationRoot=Join-Path $state 'updates\legacy-migration'
         if (-not (Test-Path (Join-Path $migrationRoot 'prepared.json'))) { throw 'Legacy migration was not prepared' }
         if (Test-Path (Join-Path $state 'config\collaboration-location.json')) { throw 'Preparation prematurely published collaboration storage' }
+        Assert-MigrationRefused 'still registered' @('--mode','finish-migration') $true
         Invoke-Bounded (Join-Path $legacy 'unins000.exe') @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',"/LOG=`"$(Join-Path $Evidence 'legacy-uninstallation.log')`"") 600
         if (Test-Path (Join-Path $legacy 'TEMPO.exe')) { throw 'Old uninstall left its executable behind' }
         foreach ($link in $oldLinks) { if (Test-Path -LiteralPath $link) { throw "Old uninstall left its shortcut: $link" } }
@@ -251,7 +274,7 @@ try {
         Invoke-Diagnostics 'migrated'
         Assert-State
         $result.legacy_installer_sha256=$contract.legacy_source.installer_sha256
-        $result.scenarios=@{published_legacy_cpu_installer=$true;legacy_data_and_models_preserved=$true;legacy_shortcuts_and_registration_retired=$true;unsupported_components_refused=$true}
+        $result.scenarios=@{published_legacy_cpu_installer=$true;legacy_data_and_models_preserved=$true;legacy_shortcuts_and_registration_retired=$true;unsupported_components_refused=$true;finish_before_legacy_retirement_refused=$true}
     } elseif ($Mode -eq 'uninstall') {
         if (Test-Path (Join-Path $root 'Update.exe')) {
             if ((Get-FileHash (Join-Path $root 'Update.exe') -Algorithm SHA256).Hash.ToLowerInvariant() -ne $contract.updater_sha256) { throw 'Uninstall owner checksum mismatch' }
@@ -316,7 +339,7 @@ try {
         $result.scenarios.external_state_bytes_preserved=$true
         $result.scenarios.shortcuts_and_registration=$true
         $result.artifacts=@($contract.revisions | ForEach-Object { @{version=$_.version;installer_sha256=$_.installer.sha256;full_package_sha256=$_.full.sha256} })
-        $result.limits=@('same source in all packaging revisions','diagnostic entrypoints; interactive desktop not accepted','no physical camera, stimulation, or GPU acceptance','no HTTP update selection/download transaction','no power-loss injection','legacy migration limited to reviewed v1.0.1 CPU; NVIDIA and add-ons refused','fixture bytes preserved; saved state not loaded by desktop')
+        $result.limits=@('same source in all packaging revisions','diagnostic entrypoints; interactive desktop not accepted','no physical camera, stimulation, or GPU acceptance','no HTTP update selection/download transaction','no power-loss injection','repair restores current only; native updater is manually restored by the fixture','legacy migration limited to reviewed v1.0.1 CPU; NVIDIA and add-ons refused','fixture bytes preserved; saved state not loaded by desktop')
     }
     $result.success=$true
 } catch {

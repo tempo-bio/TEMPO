@@ -83,6 +83,7 @@ jobs:
             fixture/scripts/*.ps1
             evidence/*-result.json
             evidence/*-verification.json
+            evidence/*-verification-probes/**/*.json
             evidence/*-shell-folders.json
             evidence/replay-origin.json
             evidence/preserved-state.json
