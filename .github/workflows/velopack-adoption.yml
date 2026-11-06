@@ -1,6 +1,9 @@
 name: Experimental Velopack recovery gate
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - codex/velopack-adoption-review
 permissions:
   contents: read
 jobs:
