@@ -32,7 +32,7 @@ jobs:
 
   validate-source:
     name: Validate Windows source before packaging
-    needs: preflight
+    needs: [preflight, velopack-native]
     runs-on: windows-2025
     timeout-minutes: 40
     steps:

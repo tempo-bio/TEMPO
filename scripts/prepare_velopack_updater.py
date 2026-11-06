@@ -8,7 +8,7 @@ from pathlib import Path
 import subprocess
 
 COMMIT = '92d6a1c91716729d449034df5c50307dcce39493'
-PATCH_SHA256 = '88a3124f069c0f5db1be6ed67fa8d281df9e4d6575de6103a064e6e533894c47'
+PATCH_SHA256 = '2b9573444a3ab81f0dd2cc02b64c3898305f83d558c187879f965c61c9a53bac'
 SOURCE_SHA256 = {
     'src/bins/src/commands/uninstall.rs': '9d26594bfd9320798f59d3c43544e4d0bef6f4e6da5b9830bf1b1c167fd865e8',
     'src/bins/src/windows/self_delete.rs': '21641cc6dfd87328685b3667da4f613a53ce31f438a72a5c01c9050ca7217d56',

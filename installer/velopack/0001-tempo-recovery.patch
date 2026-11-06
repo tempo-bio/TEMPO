@@ -180,22 +180,35 @@ index 645936f4..277ca453 100644
      #[cfg(target_os = "windows")]
      super::start_windows_impl::start_impl(context, exe_name, exe_args, legacy_args)?;
 diff --git a/src/bins/src/commands/uninstall.rs b/src/bins/src/commands/uninstall.rs
-index 8689daf5..54fba6d6 100644
+index 8689daf5..34432573 100644
 --- a/src/bins/src/commands/uninstall.rs
 +++ b/src/bins/src/commands/uninstall.rs
-@@ -2,6 +2,7 @@ use crate::{dialogs, shared, windows};
+@@ -1,7 +1,10 @@
+ use crate::{dialogs, shared, windows};
  use velopack::{constants, locator::VelopackLocator};
  
++use ::windows::Win32::Storage::FileSystem::FILE_SHARE_DELETE;
  use anyhow::{bail, Result};
++use std::os::windows::fs::OpenOptionsExt;
 +use std::{env, fs};
  
  pub fn uninstall(locator: &VelopackLocator, delete_self: bool) -> Result<()> {
      info!("Command: Uninstall");
-@@ -12,22 +13,54 @@ pub fn uninstall(locator: &VelopackLocator, delete_self: bool) -> Result<()> {
+@@ -12,22 +15,64 @@ pub fn uninstall(locator: &VelopackLocator, delete_self: bool) -> Result<()> {
  
      let root_path = locator.get_root_dir();
      let app_title = locator.get_manifest_title();
-+    let _mutex = locator.try_get_exclusive_lock()?;
++    // Keep read/write access exclusive, while allowing the containing directory
++    // to be renamed. The normal zero-sharing package lock prevents retirement.
++    let packages = locator.get_packages_dir();
++    fs::create_dir_all(&packages)?;
++    let _mutex = fs::OpenOptions::new()
++        .read(true)
++        .write(true)
++        .create(true)
++        .truncate(false)
++        .share_mode(FILE_SHARE_DELETE.0)
++        .open(packages.join(".velopack_lock"))?;
 +
 +    // Refuse active work before any hook, shortcut or registration changes.
 +    shared::ensure_package_stopped(&root_path)?;
@@ -253,7 +266,7 @@ index 8689daf5..54fba6d6 100644
  
      let temp_dir = std::env::temp_dir();
      let temp_dir = temp_dir.join(format!("velopack_{}", locator.get_manifest_id()));
-@@ -35,18 +68,12 @@ pub fn uninstall(locator: &VelopackLocator, delete_self: bool) -> Result<()> {
+@@ -35,18 +80,12 @@ pub fn uninstall(locator: &VelopackLocator, delete_self: bool) -> Result<()> {
      info!("Removing directory '{:?}'", temp_dir);
      let _ = remove_dir_all::remove_dir_all(&temp_dir);
  
