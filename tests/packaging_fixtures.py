@@ -47,7 +47,7 @@ def stage_spec_inputs(source, target):
         'tempo.spec', 'tempo_release.py', 'tempo_gui.py', 'tempo_nvidia_manifest.py', 'LICENSE', 'README.md',
         'requirements-windows.lock', 'requirements-windows-nvidia.lock',
         'installer/dependency-sources.json', 'installer/dependency-sources-nvidia.json',
-        'installer/windows-native-runtime.json',
+        'installer/windows-native-runtime.json', 'installer/tempo-updates.json',
         'firmware/tempo_pacer/tempo_pacer.ino',
         'scripts/windows_build_profile.py', 'scripts/prepare_dependency_sources.py',
     }

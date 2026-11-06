@@ -678,6 +678,11 @@ class CaptureTools(QWidget):
         self.connect_button = QPushButton('Connect'); self.connect_button.clicked.connect(self.connect_device)
         connection_actions = FlowRow(); connection_actions.flow.addWidget(self.connect_button)
         connection_box.addWidget(connection_actions)
+        self.firmware_notice = QLabel()
+        self.firmware_notice.setWordWrap(True)
+        self.firmware_notice.setStyleSheet('color: #f09663; font-size: 11px; margin-top: 4px;')
+        self.firmware_notice.setVisible(False)
+        connection_box.addWidget(self.firmware_notice)
         self.amplitude = QDoubleSpinBox(); self.amplitude.setRange(0,1); self.amplitude.setDecimals(2); self.amplitude.setSingleStep(.05); self.amplitude.setSuffix(' V')
         self.frequency = QDoubleSpinBox(); self.frequency.setRange(.1,100); self.frequency.setDecimals(1); self.frequency.setSingleStep(.1); self.frequency.setSuffix(' Hz')
         self.width = QDoubleSpinBox(); self.width.setRange(.1,9999); self.width.setDecimals(1); self.width.setSingleStep(.1); self.width.setSuffix(' ms')
@@ -1161,6 +1166,7 @@ class CaptureTools(QWidget):
         session = self.session
         context = self._record_context
         if session is None or context is None: return None
+        session.pacer_service = self.service
         field_id = f'FOV{self.capture.fov_id.value():03d}'
         def started(path):
             session.calibration = context['calibration']
@@ -1168,7 +1174,15 @@ class CaptureTools(QWidget):
                 context['calibration'].footprint if context['calibration'] is not None else None)
         def completed(frames,error):
             session.complete_field(frames,error,cancelled=self._finish_reason[1] or self._shutdown_requested)
-        return started,completed
+        def pulse_provider():
+            return session.route_pulse_events()
+        def alignment_provider():
+            if session.document.get('stimulated'):
+                if self.service and hasattr(self.service, 'get_timing_alignment'):
+                    return self.service.get_timing_alignment()
+                return 'unsupported_firmware'
+            return None
+        return started, completed, pulse_provider, alignment_provider
 
     def recording_finished(self, error=''):
         self._record_context = None
@@ -1741,6 +1755,13 @@ class CaptureTools(QWidget):
         else:
             self.status.clear()
         self.status.setVisible(bool(self.status.text()))
+        legacy_v1 = bool(connected and status and (getattr(status, 'protocol', None) == 1 or not getattr(status, 'supports_timing', True)))
+        if legacy_v1:
+            self.firmware_notice.setText("Firmware v1 detected. Update firmware via Setup to enable video synchronization.")
+            self.firmware_notice.setVisible(True)
+        else:
+            self.firmware_notice.clear()
+            self.firmware_notice.setVisible(False)
 
     def shutdown(self):
         """Requested before dashboard thread guards; never wait on the GUI thread."""

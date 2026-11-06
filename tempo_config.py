@@ -33,10 +33,18 @@ def get_data_dir(value=None):
 def get_collaboration_dir(repo=None):
     """Keep each dataset's images, reservations and unsynced drafts together."""
     repo = repo or tempo_preferences.get('collaboration', 'hf_dataset_repo', 'tempo-bio/cardiomyocyte-data')
-    base = os.path.join(get_base_dir(), 'datasets')
+    base = get_collaboration_base()
     if repo == 'tempo-bio/cardiomyocyte-data':
         return os.path.join(base, 'universal_images')
     return os.path.join(base, 'workspaces', hashlib.sha256(repo.encode()).hexdigest()[:20], 'universal_images')
+
+
+def get_collaboration_base():
+    """Use verified migrated storage for packaged Windows; retain source roots."""
+    if sys.platform == 'win32' and getattr(sys, 'frozen', False):
+        from tempo_update_storage import collaboration_base
+        return str(collaboration_base(get_base_dir(), os.path.dirname(get_config_dir())))
+    return os.path.join(get_base_dir(), 'datasets')
 
 
 def get_legacy_config_path():

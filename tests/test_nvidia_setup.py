@@ -215,8 +215,10 @@ class NvidiaSetupTests(unittest.TestCase):
             library = self.root/state['bundle']/'TEMPO/_internal/support.dll'
             library.write_bytes(b'corrupted-library')
             install()
-        self.assertEqual(library.read_bytes(), b'valid-library')
-        self.assertEqual(json.loads((self.root/'active.json').read_text()), state)
+        repaired = json.loads((self.root/'active.json').read_text())
+        self.assertEqual((self.root/repaired['bundle']/'TEMPO/_internal/support.dll').read_bytes(), b'valid-library')
+        self.assertEqual(library.read_bytes(), b'corrupted-library')
+        self.assertNotEqual(repaired['bundle'], state['bundle'])
         self.assertFalse(list(self.root.glob('*.repair-backup-*')))
 
     def test_failed_repair_restores_previous_bundle_and_activation(self):
@@ -233,11 +235,56 @@ class NvidiaSetupTests(unittest.TestCase):
         with patch.object(setup, 'runtime_root', return_value=self.root), \
              patch.object(setup, '_probe', return_value={'success': True}), \
              patch.object(setup.os, 'replace', side_effect=replace):
-            with self.assertRaisesRegex(RuntimeError, 'Close other TEMPO'):
+            with self.assertRaises(PermissionError):
                 setup.install_nvidia_runtime(descriptor=descriptor,
                     open_url=lambda *a, **k: _Response(data, self.url))
         self.assertEqual(installed.read_bytes(), b'old-damaged-executable')
         self.assertEqual(json.loads((self.root/'active.json').read_text()), {'previous':True})
+
+    def test_target_stage_preserves_selection_and_activation_checks_target_and_inventory(self):
+        data = _archive()
+        descriptor = self.descriptor(data)
+        descriptor.update(app_version='2.0.0', archive_url=self.url.replace('1.0.1', '2.0.0'))
+        old = {'schema_version': 1, 'version': 'old'}
+        (self.root/'active.json').write_text(json.dumps(old))
+        with patch.object(setup, 'runtime_root', return_value=self.root), \
+             patch.object(setup, '_probe', return_value={'success': True}) as probe:
+            receipt = setup.stage_nvidia_runtime(descriptor, target_version='2.0.0', target_commit='a'*40,
+                open_url=lambda request, timeout: _Response(data, request.full_url))
+            self.assertEqual(json.loads((self.root/'active.json').read_text()), old)
+            self.assertEqual(receipt['previous_marker'], old)
+            self.assertEqual(probe.call_args.args[1], descriptor)
+            with self.assertRaises(ValueError):
+                setup.activate_nvidia_runtime(receipt, descriptor, target_version='2.0.1', target_commit='a'*40)
+            executable = self.root/receipt['bundle']/descriptor['executable']
+            executable.write_bytes(b'tampered')
+            with self.assertRaisesRegex(ValueError, 'inventory'):
+                setup.activate_nvidia_runtime(receipt, descriptor, target_version='2.0.0', target_commit='a'*40)
+            executable.write_bytes(b'fixed-worker')
+            self.assertTrue(setup.activate_nvidia_runtime(receipt, descriptor,
+                target_version='2.0.0', target_commit='a'*40))
+            self.assertEqual(json.loads((self.root/'active.json').read_text())['version'], '2.0.0')
+
+    def test_stage_cancellation_and_stale_activation_preserve_marker(self):
+        data = _archive(); descriptor = self.descriptor(data)
+        old = {'version': 'old'}
+        (self.root/'active.json').write_text(json.dumps(old))
+        def cancel(*args):
+            raise RuntimeError('cancelled')
+        with patch.object(setup, 'runtime_root', return_value=self.root), \
+             patch.object(setup, '_probe', return_value={'success': True}):
+            with self.assertRaisesRegex(RuntimeError, 'cancelled'):
+                setup.stage_nvidia_runtime(descriptor, target_version=VERSION, target_commit='a'*40,
+                    report=cancel, open_url=lambda request, timeout: _Response(data, request.full_url))
+            self.assertEqual(json.loads((self.root/'active.json').read_text()), old)
+            self.assertFalse(list(self.root.glob('nvidia-download-*')))
+            receipt = setup.stage_nvidia_runtime(descriptor, target_version=VERSION, target_commit='a'*40,
+                open_url=lambda request, timeout: _Response(data, request.full_url))
+            changed = {'version': 'other'}
+            (self.root/'active.json').write_text(json.dumps(changed))
+            with self.assertRaisesRegex(ValueError, 'selection changed'):
+                setup.activate_nvidia_runtime(receipt, descriptor, target_version=VERSION, target_commit='a'*40)
+            self.assertEqual(json.loads((self.root/'active.json').read_text()), changed)
 
     def test_archive_rejects_traversal_links_and_duplicate_casefolded_members(self):
         with tempfile.TemporaryDirectory() as folder:

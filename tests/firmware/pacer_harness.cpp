@@ -19,13 +19,37 @@ std::string send(const std::string &command) {
 int main() {
   setup();
   assert(mode==REST && fixturePins[SELECT_PIN]==LOW && fixturePins[DISABLE_PIN]==LOW);
-  assert(send("1 hello").find("TEMPO_AU26_V2")!=std::string::npos);
+  std::string helloReply = send("1 hello");
+  assert(helloReply.find("TEMPO_AU26_V2")!=std::string::npos);
+  assert(helloReply.find("\"protocol\":2")!=std::string::npos);
+  assert(helloReply.find("\"firmware\":\"1.0.2\"")!=std::string::npos);
+
+  // Sync command without ID
+  std::string syncReply = send("sync 987654321");
+  assert(syncReply.find("\"evt\":\"sync_ack\"")!=std::string::npos);
+  assert(syncReply.find("\"nonce\":987654321")!=std::string::npos);
+  assert(syncReply.find("\"t_us\":")!=std::string::npos);
+
+  // Sync command with ID
+  std::string syncIdReply = send("100 sync 554433");
+  assert(syncIdReply.find("\"evt\":\"sync_ack\"")!=std::string::npos);
+  assert(syncIdReply.find("\"nonce\":554433")!=std::string::npos);
+
   assert(send("2 set 0.9 2 5 3 0").find("confirmation_required")!=std::string::npos);
   assert(voltage==.6f && channel==0); // No partially applied tuple.
   assert(send("3 set 0.9 2 5 3 1").find("\"result\":\"ok\"")!=std::string::npos);
   assert(voltage==.9f && channel==3);
-  send("4 pace"); assert(mode==PACING && highPhase);
+
+  std::string paceOutput = send("4 pace");
+  assert(mode==PACING && highPhase);
+  assert(paceOutput.find("\"evt\":\"edge\"")!=std::string::npos);
+  assert(paceOutput.find("\"seq\":1")!=std::string::npos);
+  assert(paceOutput.find("\"edge\":1")!=std::string::npos);
+
   advance(5000); assert(!highPhase);
+  for(int i=0;i<2000;++i) loop();
+  assert(Serial.output.find("\"edge\":0")!=std::string::npos);
+
   advance(495000); assert(highPhase);
   send("5 stop"); assert(mode==REST && !highPhase);
   send("6 set 0.6 0.5 1500 0 1"); send("7 pace");

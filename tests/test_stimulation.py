@@ -9,9 +9,9 @@ from tempo_stimulation import (PacerService, StimulusParameters, PacerStatus,
     ConfirmationRequired, DeviceRejected)
 
 
-def reply(request_id=1, mode='REST_DISCHARGE', parameters=None, **extra):
+def reply(request_id=1, mode='REST_DISCHARGE', parameters=None, protocol=1, **extra):
     parameters = parameters or StimulusParameters()
-    return dict(id=request_id, device='TEMPO_AU26_V2', protocol=1, result='ok', mode=mode,
+    return dict(id=request_id, device='TEMPO_AU26_V2', protocol=protocol, result='ok', mode=mode,
                 cycling=False, uptime_ms=100, watchdog_ms=2000,dac_reference_v=4.77,
                 **asdict(parameters),**extra)
 
@@ -57,9 +57,49 @@ class StimulationTests(unittest.TestCase):
         self.assertEqual(StimulusParameters().command(),'set 0.600000 1.000000 2.000 0 0')
 
     def test_wrong_firmware_or_missing_watchdog_rejected(self):
-        for changes in (dict(protocol=2),dict(device='different'),dict(watchdog_ms=0),dict(mode='UNKNOWN')):
+        for changes in (dict(protocol=3),dict(device='different'),dict(watchdog_ms=0),dict(mode='UNKNOWN')):
             value=reply(); value.update(changes)
             with self.subTest(changes=changes),self.assertRaises(ConnectionError): PacerStatus.parse(value)
+
+    def test_protocol_backward_compatibility(self):
+        v1 = reply(protocol=1)
+        status1 = PacerStatus.parse(v1)
+        self.assertEqual(status1.protocol, 1)
+        self.assertFalse(status1.supports_timing)
+
+        v2 = reply(protocol=2)
+        status2 = PacerStatus.parse(v2)
+        self.assertEqual(status2.protocol, 2)
+        self.assertTrue(status2.supports_timing)
+
+    def test_clock_sync_model_regression(self):
+        from tempo_stimulation import ClockSyncModel
+        model = ClockSyncModel()
+        # Add 3 samples: slope ~ 1000.0 ns/us, offset = 1_000_000_000 ns, RTT = 1_000_000 ns (1ms)
+        for i, dev_us in enumerate([0, 100_000, 200_000]):
+            t_mid = 1_000_000_000 + 1000 * dev_us
+            t_send = t_mid - 500_000
+            t_recv = t_mid + 500_000
+            model.record_sample(t_send, dev_us, t_recv)
+        self.assertAlmostEqual(model.alpha, 1000.0, places=1)
+        self.assertAlmostEqual(model.beta, 1_000_000_000, places=-3)
+        self.assertLess(model.uncertainty_ms, 2.0)
+        mapped, uncert = model.map_device_time(50_000)
+        self.assertEqual(mapped, 1_050_000_000)
+
+    def test_edge_event_stream_demuxing_during_exchange(self):
+        port = TranscriptPort()
+        # Prepend async events before command response
+        port.rx.extend(b'{"evt":"edge","seq":1,"edge":1,"t_us":1000}\n')
+        port.rx.extend(b'{"evt":"edge","seq":1,"edge":0,"t_us":3000}\n')
+        service = self.exchange_service(port)
+        status = service._exchange('ping')
+        self.assertIsNotNone(status)
+        pulses = service.pop_recent_pulses()
+        self.assertEqual(len(pulses), 2)
+        self.assertEqual(pulses[0]['seq'], 1)
+        self.assertEqual(pulses[0]['edge'], 1)
+        self.assertEqual(pulses[1]['edge'], 0)
 
     def exchange_service(self,port):
         service=PacerService(); service._board=port

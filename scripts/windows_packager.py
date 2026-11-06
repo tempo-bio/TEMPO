@@ -17,7 +17,10 @@ def loaded_native_extensions():
     for name, module in list(sys.modules.items()):
         if not isinstance(module, types.ModuleType):
             continue
-        path = types.ModuleType.__getattribute__(module, '__dict__').get('__file__')
+        try:
+            path = types.ModuleType.__getattribute__(module, '__dict__').get('__file__')
+        except TypeError:
+            path = getattr(module, '__file__', None)
         if isinstance(path, str) and path.lower().endswith(('.pyd', '.dll', '.so', '.dylib')):
             extensions.append({'module': name, 'path': path})
     return extensions

@@ -3,7 +3,13 @@ import argparse
 import base64
 import hashlib
 import json
+import sys
 from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
 from tempo_cloud import BUNDLE_FILES, archive_sources
 from tempo_config import DEFAULT_PREFERENCES
 

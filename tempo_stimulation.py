@@ -1,4 +1,5 @@
 """AU26 V2 protocol and serial ownership. No Qt or camera operations live here."""
+from collections import deque
 from concurrent.futures import Future
 from dataclasses import asdict, dataclass
 import itertools
@@ -8,7 +9,8 @@ import queue
 import threading
 import time
 
-PROTOCOL_VERSION = 1
+PROTOCOL_VERSION = 2
+SUPPORTED_PROTOCOLS = (1, 2)
 HEARTBEAT_SECONDS = .25
 WATCHDOG_MS = 2000
 
@@ -58,10 +60,13 @@ class PacerStatus:
     uptime_ms: int
     watchdog_ms: int
     dac_reference_v: float
+    protocol: int = 2
+    supports_timing: bool = True
 
     @classmethod
     def parse(cls, reply):
-        if reply.get('device') != 'TEMPO_AU26_V2' or reply.get('protocol') != PROTOCOL_VERSION:
+        protocol = reply.get('protocol')
+        if reply.get('device') != 'TEMPO_AU26_V2' or protocol not in SUPPORTED_PROTOCOLS:
             raise ConnectionError('Install TEMPO’s V2 firmware on the Uno R4 Minima, then reconnect.')
         mode = reply.get('mode')
         if mode not in ('REST_DISCHARGE', 'PACING', 'CONSTANT_STIM', 'SQUARE_10HZ', 'DISCONNECTED_HIZ'):
@@ -75,12 +80,93 @@ class PacerStatus:
         reference = reply.get('dac_reference_v')
         if not isinstance(reference, (float, int)) or not math.isfinite(reference) or reference <= 0:
             raise ConnectionError('Invalid DAC reference in stimulator status.')
-        return cls(mode, params, reply['cycling'], reply['uptime_ms'], WATCHDOG_MS, float(reference))
+        protocol_int = int(protocol)
+        supports_timing = (protocol_int == 2)
+        return cls(mode, params, reply['cycling'], reply['uptime_ms'], WATCHDOG_MS, float(reference),
+                   protocol=protocol_int, supports_timing=supports_timing)
 
     def to_dict(self):
         return dict(mode=self.mode, parameters=asdict(self.parameters), cycling=self.cycling,
                     uptime_ms=self.uptime_ms, watchdog_ms=self.watchdog_ms,
-                    dac_reference_v=self.dac_reference_v)
+                    dac_reference_v=self.dac_reference_v, protocol=self.protocol,
+                    supports_timing=self.supports_timing)
+
+
+class ClockSyncModel:
+    """Estimates the linear mapping from device us to host monotonic ns with uncertainty."""
+
+    def __init__(self):
+        self.samples = deque(maxlen=64)  # tuples: (t_send_ns, t_device_us, t_recv_ns, rtt_ns, t_mid_ns)
+        self.alpha = 1000.0  # nominal 1000 ns / 1 us
+        self.beta = 0.0
+        self.uncertainty_ms = 10.0
+        self.total_pulses = 0
+        self._last_device_us = None
+        self._rollover_offset = 0
+
+    def unwrap_device_us(self, t_us: int) -> int:
+        t_us = int(t_us)
+        if self._last_device_us is not None and t_us < (self._last_device_us - 0x7FFFFFFF):
+            self._rollover_offset += 0x100000000
+        self._last_device_us = t_us
+        return t_us + self._rollover_offset
+
+    def record_sample(self, t_send_ns, t_device_us, t_recv_ns):
+        dev_unwrapped = self.unwrap_device_us(t_device_us)
+        rtt_ns = max(0, int(t_recv_ns - t_send_ns))
+        t_mid_ns = (int(t_send_ns) + int(t_recv_ns)) / 2.0
+        self.samples.append((int(t_send_ns), dev_unwrapped, int(t_recv_ns), rtt_ns, t_mid_ns))
+        self._refit()
+
+    def _refit(self):
+        if not self.samples:
+            return
+        min_rtt = min(s[3] for s in self.samples)
+        # Filter samples whose RTT is within max(1.5 * min_rtt, min_rtt + 2ms)
+        threshold = max(1.5 * min_rtt, min_rtt + 2_000_000)
+        filtered = [s for s in self.samples if s[3] <= threshold]
+        if not filtered:
+            filtered = list(self.samples)
+
+        if len(filtered) == 1:
+            _, dev_us, _, rtt, mid_ns = filtered[0]
+            self.alpha = 1000.0
+            self.beta = mid_ns - 1000.0 * dev_us
+            self.uncertainty_ms = max(0.01, min_rtt / 2_000_000.0)
+            return
+
+        x = [float(s[1]) for s in filtered]
+        y = [float(s[4]) for s in filtered]
+        n = len(x)
+        mean_x = sum(x) / n
+        mean_y = sum(y) / n
+        s_xx = sum((xi - mean_x) ** 2 for xi in x)
+        s_xy = sum((xi - mean_x) * (yi - mean_y) for xi, yi in zip(x, y))
+
+        if s_xx > 1e-9:
+            slope = s_xy / s_xx
+            # Hardware crystal tolerance bound [990.0, 1010.0]
+            self.alpha = max(990.0, min(1010.0, slope))
+        else:
+            self.alpha = 1000.0
+        self.beta = mean_y - self.alpha * mean_x
+
+        residuals = [abs(yi - (self.alpha * xi + self.beta)) for xi, yi in zip(x, y)]
+        jitter_ms = (max(residuals) if residuals else 0.0) / 1_000_000.0
+        self.uncertainty_ms = max(0.01, (min_rtt / 2_000_000.0) + jitter_ms)
+
+    def map_device_time(self, t_device_us):
+        dev_unwrapped = self.unwrap_device_us(t_device_us)
+        mapped_host_ns = int(round(self.alpha * float(dev_unwrapped) + self.beta))
+        return mapped_host_ns, float(self.uncertainty_ms)
+
+    def get_alignment_summary(self):
+        return {
+            'alpha': float(self.alpha),
+            'beta': float(self.beta),
+            'uncertainty_ms': float(self.uncertainty_ms),
+            'total_pulses': int(self.total_pulses),
+        }
 
 
 class PacerService:
@@ -108,6 +194,11 @@ class PacerService:
         self._thread = None
         self._board = None
         self._rx = bytearray()
+        self.clock_model = ClockSyncModel()
+        self._pulse_events = deque(maxlen=10000)
+        self._pulse_lock = threading.Lock()
+        self._pending_syncs = {}
+        self._sync_nonce_seq = itertools.count(1)
 
     @property
     def running(self):
@@ -173,7 +264,12 @@ class PacerService:
                     reply = json.loads(raw)
                 except (ValueError, UnicodeError):
                     continue  # Legacy firmware text cannot acknowledge a command.
-                if not isinstance(reply, dict) or reply.get('id') != request_id:
+                if not isinstance(reply, dict):
+                    continue
+                if reply.get('evt'):
+                    self._handle_event(reply)
+                    continue
+                if reply.get('id') != request_id:
                     continue
                 status = PacerStatus.parse(reply)
                 self.status = status
@@ -197,6 +293,96 @@ class PacerService:
                 return status
         raise TimeoutError('No matching stimulator acknowledgment. Output is unconfirmed; install TEMPO’s V2 firmware if needed.')
 
+    def _send_sync(self):
+        if self._board is None:
+            return
+        nonce = next(self._sync_nonce_seq)
+        t_send = int(round(self.clock() * 1e9))
+        self._pending_syncs[nonce] = t_send
+        payload = f'sync {nonce}\n'.encode('ascii')
+        try:
+            self._board.write(payload)
+        except Exception:
+            pass
+
+    def _handle_event(self, reply):
+        try:
+            evt = reply.get('evt')
+            if evt == 'sync_ack':
+                nonce = reply.get('nonce')
+                t_device_us = reply.get('t_us')
+                t_recv = int(round(self.clock() * 1e9))
+                if nonce in self._pending_syncs and t_device_us is not None:
+                    device_t_us_int = int(t_device_us)
+                    t_send = self._pending_syncs.pop(nonce)
+                    self.clock_model.record_sample(t_send, device_t_us_int, t_recv)
+            elif evt == 'edge':
+                seq = reply.get('seq')
+                edge = reply.get('edge')
+                t_device_us = reply.get('t_us')
+                if seq is not None and edge is not None and t_device_us is not None:
+                    seq_int = int(seq)
+                    edge_int = int(edge)
+                    device_t_us_int = int(t_device_us)
+                    mapped_ns, uncert = self.clock_model.map_device_time(device_t_us_int)
+                    self.clock_model.total_pulses += 1
+                    event = {
+                        'seq': seq_int,
+                        'edge': edge_int,
+                        'device_t_us': device_t_us_int,
+                        'mapped_host_ns': mapped_ns,
+                        'uncertainty_ms': uncert,
+                    }
+                    with self._pulse_lock:
+                        self._pulse_events.append(event)
+        except (ValueError, TypeError, OverflowError):
+            return
+
+    def _drain_rx(self):
+        if self._board is None:
+            return
+        try:
+            chunk = self._board.read(512)
+            if chunk:
+                self._rx.extend(chunk)
+        except Exception:
+            return
+        if len(self._rx) > 8192:
+            del self._rx[:-4096]
+        while b'\n' in self._rx:
+            raw, _, remainder = self._rx.partition(b'\n')
+            self._rx[:] = remainder
+            try:
+                reply = json.loads(raw)
+            except (ValueError, UnicodeError):
+                continue
+            if isinstance(reply, dict) and reply.get('evt'):
+                self._handle_event(reply)
+
+    def pop_recent_pulses(self):
+        with self._pulse_lock:
+            pulses = list(self._pulse_events)
+            self._pulse_events.clear()
+            return pulses
+
+    def get_pulses_in_window(self, start_host_ns, end_host_ns):
+        with self._pulse_lock:
+            return [p for p in self._pulse_events if start_host_ns <= p['mapped_host_ns'] <= end_host_ns]
+
+    def get_timing_alignment(self):
+        if not getattr(self.status, 'supports_timing', False):
+            return 'unsupported_firmware'
+        summary = self.clock_model.get_alignment_summary()
+        return summary
+
+    @property
+    def timing_alignment(self):
+        return self.get_timing_alignment()
+
+    @property
+    def supports_timing(self):
+        return getattr(self.status, 'supports_timing', False)
+
     def _run(self):
         failure = None
         try:
@@ -213,14 +399,20 @@ class PacerService:
             self.connected = True
             self.ready.set_result(self.status)
             next_heartbeat = self.clock()
+            next_sync = self.clock()
             while not self._closing.is_set():
+                now = self.clock()
                 # Heartbeats outrank ordinary queued work, preventing starvation.
-                if self.clock() >= next_heartbeat:
-                    next_heartbeat = self.clock() + HEARTBEAT_SECONDS
+                if now >= next_heartbeat:
+                    next_heartbeat = now + HEARTBEAT_SECONDS
                     self._exchange('ping')
+                if getattr(self.status, 'supports_timing', False) and now >= next_sync:
+                    next_sync = now + 1.0
+                    self._send_sync()
                 try:
                     _, _, generation, command, future = self._queue.get(timeout=.02)
                 except queue.Empty:
+                    self._drain_rx()
                     continue
                 if generation != self._generation and command not in ('stop', 'isolate'):
                     future.set_exception(DeviceRejected('Command cancelled by Stop Stimulation.'))

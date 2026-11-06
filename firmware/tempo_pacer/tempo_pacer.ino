@@ -23,6 +23,19 @@ volatile bool hostSeen = false;
 FspTimer edgeTimer;
 bool timerReady = false;
 
+struct PulseEdgeEvent {
+  uint32_t seq;
+  uint8_t edge;
+  uint32_t t_us;
+};
+constexpr size_t EVENT_QUEUE_CAPACITY = 64;
+volatile PulseEdgeEvent eventQueue[EVENT_QUEUE_CAPACITY];
+volatile size_t eventHead = 0, eventTail = 0;
+volatile uint32_t pulseSequence = 0;
+volatile bool pendingSyncAck = false;
+volatile unsigned long long syncNonce = 0;
+volatile uint32_t syncUs = 0;
+
 // Restore the previous interrupt mask, including when called from the timer ISR.
 struct InterruptGuard {
   uint32_t previous;
@@ -35,7 +48,20 @@ bool inputOverflow = false;
 char outgoing[640];
 size_t outgoingLength = 0, outgoingOffset = 0;
 
+void recordEdge(uint32_t seq, uint8_t edge, uint32_t tUs) {
+  size_t nextHead = (eventHead + 1) % EVENT_QUEUE_CAPACITY;
+  if (nextHead != eventTail) {
+    eventQueue[eventHead].seq = seq;
+    eventQueue[eventHead].edge = edge;
+    eventQueue[eventHead].t_us = tUs;
+    eventHead = nextHead;
+  }
+}
+
 void stimulus(bool high) {
+  if (highPhase && !high && pulseSequence > 0) {
+    recordEdge(pulseSequence, 0, micros());
+  }
   digitalWrite(SELECT_PIN, high ? HIGH : LOW);
   highPhase = high;
 }
@@ -63,8 +89,10 @@ void writeVoltage() {
 }
 
 void beginHigh() {
+  pulseSequence++;
   stimulus(true);
   cycleStart = phaseStart = micros();
+  recordEdge(pulseSequence, 1, phaseStart);
 }
 
 void startTrain(Mode nextMode, bool allChannels = false) {
@@ -111,8 +139,8 @@ void reply(uint32_t id, const char *result = "ok", const char *error = "") {
   // its partial JSON line before the new response. Commands never wait on TX.
   bool partial = outgoingOffset > 0 && outgoingOffset < outgoingLength;
   int n = snprintf(outgoing, sizeof(outgoing),
-    "%s{\"id\":%lu,\"device\":\"TEMPO_AU26_V2\",\"protocol\":1,"
-    "\"firmware\":\"1.0.0\",\"result\":\"%s\",\"error\":\"%s\","
+    "%s{\"id\":%lu,\"device\":\"TEMPO_AU26_V2\",\"protocol\":2,"
+    "\"firmware\":\"1.0.2\",\"result\":\"%s\",\"error\":\"%s\","
     "\"mode\":\"%s\",\"amplitude_v\":%.6f,\"frequency_hz\":%.6f,"
     "\"pulse_width_ms\":%.3f,\"channel\":%u,\"cycling\":%s,"
     "\"uptime_ms\":%lu,\"watchdog_ms\":2000,\"dac_reference_v\":%.4f}\n",
@@ -124,11 +152,28 @@ void reply(uint32_t id, const char *result = "ok", const char *error = "") {
 }
 
 void handle(char *line) {
+  while (*line == ' ') ++line;
+  if (!strncmp(line, "sync ", 5)) {
+    syncNonce = strtoull(line + 5, nullptr, 10);
+    syncUs = micros();
+    pendingSyncAck = true;
+    lastContact = millis();
+    hostSeen = true;
+    return;
+  }
   char *end = nullptr;
   unsigned long id = strtoul(line, &end, 10);
   if (end == line || *end != ' ') return;
   const char *command = end + 1;
   while (*command == ' ') ++command;
+  if (!strncmp(command, "sync ", 5)) {
+    syncNonce = strtoull(command + 5, nullptr, 10);
+    syncUs = micros();
+    pendingSyncAck = true;
+    lastContact = millis();
+    hostSeen = true;
+    return;
+  }
   bool known = true;
   if (!strcmp(command, "hello")) {
     stopOutput(); // Connecting/reconnecting can never energize an output.
@@ -222,6 +267,36 @@ void loop() {
     }
     if (inputLength < sizeof(input) - 1) input[inputLength++] = ch;
     else inputOverflow = true;
+  }
+  if (outgoingOffset >= outgoingLength) {
+    if (pendingSyncAck) {
+      pendingSyncAck = false;
+      int n = snprintf(outgoing, sizeof(outgoing),
+        "{\"evt\":\"sync_ack\",\"nonce\":%llu,\"t_us\":%lu}\n",
+        syncNonce, (unsigned long)syncUs);
+      outgoingOffset = 0;
+      outgoingLength = n > 0 && (size_t)n < sizeof(outgoing) ? (size_t)n : 0;
+    } else {
+      PulseEdgeEvent evt;
+      bool hasEvent = false;
+      {
+        InterruptGuard guard;
+        if (eventHead != eventTail) {
+          evt.seq = eventQueue[eventTail].seq;
+          evt.edge = eventQueue[eventTail].edge;
+          evt.t_us = eventQueue[eventTail].t_us;
+          eventTail = (eventTail + 1) % EVENT_QUEUE_CAPACITY;
+          hasEvent = true;
+        }
+      }
+      if (hasEvent) {
+        int n = snprintf(outgoing, sizeof(outgoing),
+          "{\"evt\":\"edge\",\"seq\":%lu,\"edge\":%u,\"t_us\":%lu}\n",
+          (unsigned long)evt.seq, (unsigned int)evt.edge, (unsigned long)evt.t_us);
+        outgoingOffset = 0;
+        outgoingLength = n > 0 && (size_t)n < sizeof(outgoing) ? (size_t)n : 0;
+      }
+    }
   }
   // Only write the bytes the USB implementation says it can accept now.
   if (outgoingOffset < outgoingLength) {

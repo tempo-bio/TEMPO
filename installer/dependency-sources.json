@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "windows_lock_sha256": "a62b7bdb577200e3142855c41702e015fdfc112151a223382999fa784169de49",
+  "windows_lock_sha256": "fa0471151d7357abc4f0c5388789b01d96af52f1d6dfd3cb22062ca90b8fe999",
   "scope": "Version-matched sources for copyleft dependencies and selected interpreter, build and native-library components. Other permissive dependency notices are retained in the build license inventory.",
   "sources": [
     {

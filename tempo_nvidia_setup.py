@@ -3,6 +3,7 @@
 import hashlib
 import json
 import os
+import re
 from pathlib import Path, PurePosixPath
 import shutil
 import stat
@@ -123,20 +124,49 @@ def _atomic_json(path, value):
             os.unlink(temporary)
 
 
+def _locked(root, action):
+    from tempo_annotation_store import session_lock
+    root.mkdir(parents=True, exist_ok=True)
+    try:
+        with session_lock(root/'install'):
+            return action()
+    except BlockingIOError:
+        raise RuntimeError('Another TEMPO instance is installing NVIDIA support. Wait for it to finish, then retry.') from None
+
+
+def stage_nvidia_runtime(descriptor, *, target_version, target_commit,
+                         report=lambda received, total: None, open_url=None):
+    """Stage and probe a release-pinned worker without changing the active marker.
+
+    The caller supplies the descriptor authenticated for the target application.
+    The returned receipt is JSON serializable and can be persisted for activation.
+    """
+    validate_descriptor(descriptor, version=target_version, commit=target_commit)
+    root = runtime_root()
+    return _locked(root, lambda: _stage_runtime(root, descriptor, report, open_url))
+
+
+def activate_nvidia_runtime(receipt, descriptor, *, target_version, target_commit):
+    """Select a staged worker after checking its target and complete inventory."""
+    validate_descriptor(descriptor, version=target_version, commit=target_commit)
+    root = runtime_root()
+    return _locked(root, lambda: _activate_runtime(root, receipt, descriptor))
+
+
 def install_nvidia_runtime(report=lambda received, total: None, *, descriptor=None, open_url=None):
-    """Download, check, probe and then atomically select the optional worker."""
+    """Download, check, probe and atomically select the current release worker."""
     descriptor = descriptor or release_descriptor()
     if descriptor is None:
         raise RuntimeError('This build does not include an NVIDIA runtime download.')
+    # The embedded descriptor normally supplies the commit. Explicit descriptors
+    # are also used by the package installer and are validated for this version.
     validate_descriptor(descriptor, version=VERSION, commit=descriptor.get('commit'))
     root = runtime_root()
-    root.mkdir(parents=True, exist_ok=True)
-    from tempo_annotation_store import session_lock
-    try:
-        with session_lock(root/'install'):
-            return _install_runtime(root, descriptor, report, open_url)
-    except BlockingIOError:
-        raise RuntimeError('Another TEMPO instance is installing NVIDIA support. Wait for it to finish, then retry.') from None
+    def install():
+        receipt = _stage_runtime(root, descriptor, report, open_url)
+        _activate_runtime(root, receipt, descriptor)
+        return True
+    return _locked(root, install)
 
 
 def _bundle_matches(expected, installed):
@@ -149,7 +179,7 @@ def _bundle_matches(expected, installed):
         and _digest(expected/name) == _digest(installed/name) for name in expected_files)
 
 
-def _install_runtime(root, descriptor, report, open_url):
+def _stage_runtime(root, descriptor, report, open_url):
     opener = open_url or urllib.request.urlopen
     with tempfile.TemporaryDirectory(prefix='nvidia-download-', dir=root) as folder:
         staging = Path(folder)
@@ -189,28 +219,56 @@ def _install_runtime(root, descriptor, report, open_url):
         _probe(executable, descriptor)
         bundle = f"{descriptor['commit']}-{descriptor['archive_sha256'][:12]}"
         destination = root / bundle
-        backup = None
-        if destination.exists():
-            if not _bundle_matches(unpacked, destination):
-                backup = root/(bundle+'.repair-backup-'+uuid.uuid4().hex)
-                os.replace(destination, backup)
-                try:
-                    os.replace(unpacked, destination)
-                except OSError as error:
-                    try:
-                        os.replace(backup, destination)
-                    except OSError:
-                        raise RuntimeError(f'NVIDIA repair could not restore the previous folder. Recovery copy: {backup}') from error
-                    raise RuntimeError('NVIDIA repair could not replace files. Close other TEMPO instances and retry.') from error
-        else:
+        if destination.exists() and not _bundle_matches(unpacked, destination):
+            # Never replace a bundle which may still be in use by the old app.
+            bundle += '-' + uuid.uuid4().hex
+            destination = root / bundle
+        if not destination.exists():
             os.replace(unpacked, destination)
-        _atomic_json(root / 'active.json', {
-            'schema_version': 1, 'version': descriptor['app_version'],
-            'commit': descriptor['commit'], 'bundle': bundle,
-            'executable': descriptor['executable'],
-            'executable_sha256': descriptor['executable_sha256'],
-            'archive_sha256': descriptor['archive_sha256'],
-        })
-        if backup is not None:
-            shutil.rmtree(backup, ignore_errors=True)
+        archive_path = root / (bundle + '.zip')
+        os.replace(archive, archive_path)
+        marker_path = root / 'active.json'
+        previous = None
+        if marker_path.exists():
+            if marker_path.stat().st_size > 4096:
+                raise ValueError('Existing NVIDIA runtime marker is invalid.')
+            previous = json.loads(marker_path.read_text(encoding='utf-8'))
+        return {'schema_version': 1, 'descriptor': descriptor, 'bundle': bundle,
+                'previous_marker': previous}
+
+
+def _activate_runtime(root, receipt, descriptor):
+    if not isinstance(receipt, dict) or receipt.get('schema_version') != 1 or receipt.get('descriptor') != descriptor:
+        raise ValueError('Staged NVIDIA runtime does not match the target release.')
+    bundle = receipt.get('bundle')
+    prefix = f"{descriptor['commit']}-{descriptor['archive_sha256'][:12]}"
+    if not isinstance(bundle, str) or not re.fullmatch(re.escape(prefix) + r'(?:-[0-9a-f]{32})?', bundle):
+        raise ValueError('Staged NVIDIA runtime has an invalid path.')
+    marker_path = root / 'active.json'
+    current = None
+    if marker_path.exists():
+        if marker_path.stat().st_size > 4096:
+            raise ValueError('Existing NVIDIA runtime marker is invalid.')
+        current = json.loads(marker_path.read_text(encoding='utf-8'))
+    if current != receipt.get('previous_marker'):
+        raise ValueError('NVIDIA runtime selection changed after staging.')
+    destination = root / bundle
+    archive = root / (bundle + '.zip')
+    if (archive.is_symlink() or not archive.is_file()
+            or archive.stat().st_size != descriptor['archive_size']
+            or _digest(archive) != descriptor['archive_sha256']):
+        raise ValueError('Staged NVIDIA runtime archive failed its release checksum.')
+    with tempfile.TemporaryDirectory(prefix='nvidia-verify-', dir=root) as folder:
+        expected = Path(folder) / 'unpacked'
+        _extract_checked(archive, expected)
+        if (destination.is_symlink() or not _bundle_matches(expected, destination)
+                or _digest(expected / descriptor['executable']) != descriptor['executable_sha256']):
+            raise ValueError('Staged NVIDIA runtime inventory failed verification.')
+    _atomic_json(root / 'active.json', {
+        'schema_version': 1, 'version': descriptor['app_version'],
+        'commit': descriptor['commit'], 'bundle': bundle,
+        'executable': descriptor['executable'],
+        'executable_sha256': descriptor['executable_sha256'],
+        'archive_sha256': descriptor['archive_sha256'],
+    })
     return True

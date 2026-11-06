@@ -26,6 +26,7 @@ ultralytics_hidden = collect_submodules('ultralytics')
 
 # Pre-bundled models and assets
 datas = [
+    (str(root / 'installer/tempo-updates.json'), 'assets'),
     (str(root / 'assets'), 'assets'),
     (str(root / 'README.md'), '.'),
     (str(root / 'docs/GETTING_STARTED.md'), 'docs'),
@@ -97,6 +98,14 @@ for weight_file in MODEL_FILES.values():
         datas.append((str(root / weight_file), '.'))
 
 hidden_imports = [
+    'tempo_update_installation',
+    'tempo_update_storage',
+    'tempo_update_migration',
+    'tempo_update_manifest',
+    'tempo_update_service',
+    'tempo_update_lock',
+    'tempo_update_coordinator',
+    'tempo_update_ui',
     'tempo_onboarding',
     'tempo_first_run',
     'tempo_assistance_runtime',
@@ -130,6 +139,7 @@ hidden_imports = [
 # The script in a.scripts is not an importable module in the PYZ archive.
 hidden_imports = sorted(set(hidden_imports))
 if sys.platform == 'win32':
+    hidden_imports += ['velopack', 'cryptography.hazmat.primitives.asymmetric.ed25519']
     # Torchvision loads these stable-ABI libraries by filename. Its upstream
     # PyInstaller hook still names the older _C and image extensions.
     hidden_imports += ['torchvision._C_stable', 'torchvision.image_stable']

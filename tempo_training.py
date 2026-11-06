@@ -135,9 +135,10 @@ def _install_dataset(staging, output, assignments, split_file, policy_file, grou
             shutil.rmtree(folder)
 
 
-def build_dataset(base_dir, origin="approved-master", *, source_groups=None, split_assignments=None, training_check=False, profile=None, box_width=None, assisted=None):
+def build_dataset(base_dir, origin="approved-master", *, source_groups=None, split_assignments=None, training_check=False, profile=None, box_width=None, assisted=None, dataset_root=None):
     root = Path(base_dir)
-    candidates = [root/'datasets/universal_annotations.json', root/'datasets/universal_images/universal_annotations.json', root/'universal_annotations.json']
+    data_root = Path(dataset_root) if dataset_root is not None else root/'datasets'
+    candidates = [data_root/'universal_annotations.json', data_root/'universal_images/universal_annotations.json', root/'universal_annotations.json']
     source = next((p for p in candidates if p.exists()), None)
     if source is None:
         raise ValueError('Approved universal_annotations.json is required.')
@@ -158,11 +159,11 @@ def build_dataset(base_dir, origin="approved-master", *, source_groups=None, spl
     preprocessing_metadata(scout_profile)
     if box_width not in (8,16,24):
         raise ValueError('Scout box width must be 8, 16 or 24 reference pixels.')
-    output = root/'datasets'/('compiled-check' if training_check else 'compiled')
-    split_file = root/'datasets'/('check_splits.json' if training_check else 'training_splits.json')
+    output = data_root/('compiled-check' if training_check else 'compiled')
+    split_file = data_root/('check_splits.json' if training_check else 'training_splits.json')
     assignments = json.loads(split_file.read_text()) if split_file.exists() else {}
     previous_policy = None
-    split_policy_file = root/'datasets'/('check_split_policy.json' if training_check else 'training_split_policy.json')
+    split_policy_file = data_root/('check_split_policy.json' if training_check else 'training_split_policy.json')
     previous_groups = {}
     if split_policy_file.exists():
         saved_policy = json.loads(split_policy_file.read_text())
@@ -184,13 +185,13 @@ def build_dataset(base_dir, origin="approved-master", *, source_groups=None, spl
         if not ordered:
             raise ValueError('No training images are available for Check Training. Approve images from a training well.')
     # Rebuild every run so new approvals and corrected annotations cannot leave stale labels.
-    staging = Path(tempfile.mkdtemp(prefix='compiled-', dir=root/'datasets'))
+    staging = Path(tempfile.mkdtemp(prefix='compiled-', dir=data_root))
     records = []
     try:
         for name in ordered:
             record = approved[name]
             clean_name = re.sub(r'^\d{8}_\d{6}_', '', name)
-            image = next((p for d in (root/'datasets/images', root/'datasets/universal_images', root/'datasets', root/'images')
+            image = next((p for d in (data_root/'images', data_root/'universal_images', data_root, root/'images')
                           for p in (d/name, d/clean_name) if p.is_file()), None)
             if image is None:
                 raise ValueError(f'Missing approved image: {name}')

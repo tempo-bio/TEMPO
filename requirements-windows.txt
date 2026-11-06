@@ -34,3 +34,7 @@ msvc-runtime==14.44.35112
 lap==0.5.13
 pyinstaller==6.22.3
 pyinstaller-hooks-contrib==2026.9
+cryptography==50.0.2
+cffi==2.1.1
+pycparser==3.12
+velopack==1.2.161

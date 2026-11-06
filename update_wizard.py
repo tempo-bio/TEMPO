@@ -71,6 +71,11 @@ def perform_software_update():
 
 def software_release(timeout=1.2):
     if getattr(sys, 'frozen', False):
+        from tempo_update_coordinator import configured_coordinator
+        coordinator = configured_coordinator()
+        if coordinator is not None:
+            plan = coordinator.check()
+            return (True, f'TEMPO {plan.target.version} is available.') if plan else (False, 'TEMPO is up to date.')
         raise RuntimeError('Check GitHub Releases for a TEMPO installer update.')
     # Use the same authenticated remote as the update itself, including SSH remotes.
     env = dict(os.environ, GIT_TERMINAL_PROMPT='0', GCM_INTERACTIVE='Never')
@@ -259,7 +264,18 @@ class SplashScreen(QDialog):
         self.accept()
 
 
-class SoftwareUpdateWizard(QDialog):
+def SoftwareUpdateWizard(parent=None, commit_details=''):
+    """Keep legacy/source behavior until the installed updater is certified."""
+    if getattr(sys, 'frozen', False):
+        from tempo_update_coordinator import configured_coordinator
+        coordinator = configured_coordinator()
+        if coordinator is not None:
+            from tempo_update_ui import PackagedSoftwareUpdateDialog
+            return PackagedSoftwareUpdateDialog(parent, coordinator=coordinator)
+    return LegacySoftwareUpdateWizard(parent, commit_details=commit_details)
+
+
+class LegacySoftwareUpdateWizard(QDialog):
     def __init__(self, parent=None, commit_details=''):
         super().__init__(parent)
         self.setWindowTitle('Software Update'); self.resize(620,420)

@@ -130,6 +130,25 @@ class UninstallDialogTests(unittest.TestCase):
             parent.close.assert_called_once()
             mock_quit.assert_not_called()
 
+    def test_velopack_uninstall_uses_explicit_command_after_shutdown(self):
+        from tempo_update_installation import Installation
+        parent = QMainWindow()
+        parent.close = Mock(return_value=True)
+        updater = Path('/fixture/custom location/Update.exe')
+        detected = Installation('velopack', updater.parent, updater)
+        with patch('tempo_uninstall.detect_installation', return_value=detected), \
+             patch('tempo_uninstall.find_windows_uninstaller', return_value=None), \
+             patch.object(Path, 'is_file', return_value=True), \
+             patch('tempo_uninstall.run_task', side_effect=lambda owner, title, work: work()), \
+             patch('subprocess.Popen') as launch:
+            dialog = UninstallTempoDialog(parent)
+            self.assertEqual(dialog.btn_uninstall.text(), 'Uninstall and Exit')
+            dialog.execute_uninstall()
+            self.assertEqual(launch.call_args.args[0], [str(updater), 'uninstall'])
+            parent.close.assert_called_once()
+        del parent.close
+        close_fixture(dialog); close_fixture(parent)
+
     def test_rejected_close_preserves_data_and_does_not_launch_uninstaller(self):
         parent = QMainWindow()
         parent.close = Mock(return_value=False)

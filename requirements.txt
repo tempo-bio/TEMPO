@@ -11,3 +11,5 @@ huggingface_hub>=1.8.0
 certifi
 keyring==25.7.0
 pyserial==3.5
+cryptography==50.0.2
+velopack==1.2.161; sys_platform == "win32"

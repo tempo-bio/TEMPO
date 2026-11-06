@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "enabled": false,
+  "package_id": "TEMPO.Bio.Desktop",
+  "channel": "stable",
+  "trusted_keys": {},
+  "native_recovery_certified": false
+}

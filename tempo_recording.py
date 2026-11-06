@@ -100,7 +100,8 @@ def set_declared_rate(path,fps,actor):
 class NativeWriter:
     """Incremental BigTIFF pages; unfinished recordings retain readable pages."""
     def __init__(self, path, fps, *, sensor_bits=None, retain_original=False,
-                 retain_cells=False, export_format='native', owned=False, z_index=None):
+                 retain_cells=False, export_format='native', owned=False, z_index=None,
+                 timing_alignment=None):
         import tifffile
         self.path = Path(path)
         if self.path.exists() or metadata_path(path).exists() or Path(str(path)+'.frames.jsonl').exists():
@@ -125,6 +126,8 @@ class NativeWriter:
                     except Exception:pass
             self._owner.__exit__(None,None,None)
             raise
+        self.timing_alignment = timing_alignment
+        self._pulse_count = 0
         self.metadata = dict(version=1, recording_id=self.path.stem, status='recording',
             requested_fps=float(fps), sensor_bits=sensor_bits, frames=0, shape=None,
             dtype=None, retain_original=bool(retain_original), retain_cells=bool(retain_cells),
@@ -140,7 +143,7 @@ class NativeWriter:
             self.close('Recording metadata could not be initialized.')
             raise
 
-    def write(self, frame, *, camera_time_ms=None, camera_frame_id=None):
+    def write(self, frame, *, camera_time_ms=None, camera_frame_id=None, pulse_events=None):
         received=time.monotonic_ns()
         frame = np.asarray(frame)
         if frame.dtype not in (np.uint8, np.uint16) or frame.ndim not in (2, 3):
@@ -161,6 +164,27 @@ class NativeWriter:
         entry = dict(index=self.metadata['frames'], camera_time_ms=timestamp,
                      camera_frame_id=None if camera_frame_id is None else str(camera_frame_id),
                      host_receipt_ns=received)
+        if pulse_events is not None:
+            serialized_events = []
+            for evt in pulse_events:
+                if isinstance(evt, dict):
+                    serialized_events.append(dict(
+                        seq=int(evt['seq']),
+                        edge=int(evt['edge']),
+                        device_t_us=int(evt['device_t_us']),
+                        mapped_host_ns=int(evt['mapped_host_ns']),
+                        uncertainty_ms=float(evt['uncertainty_ms']),
+                    ))
+                else:
+                    serialized_events.append(dict(
+                        seq=int(evt.seq),
+                        edge=int(evt.edge),
+                        device_t_us=int(evt.device_t_us),
+                        mapped_host_ns=int(evt.mapped_host_ns),
+                        uncertainty_ms=float(evt.uncertainty_ms),
+                    ))
+            entry['pulse_events'] = serialized_events
+            self._pulse_count += len(serialized_events)
         if timestamp is None:self.metadata['camera_timing_complete']=False
         self._journal.write(json.dumps(entry, allow_nan=False)+'\n')
         self._journal.flush()
@@ -168,7 +192,7 @@ class NativeWriter:
         if self.metadata['frames'] % max(1,int(self.metadata['requested_fps']))==0:
             atomic_write(metadata_path(self.path),self.metadata)
 
-    def close(self, error=''):
+    def close(self, error='', *, timing_alignment=None):
         if self._closed:
             return
         self._closed = True
@@ -184,10 +208,39 @@ class NativeWriter:
         error=error or (str(failure) if failure else '')
         self.metadata.update(status='failed' if error else 'completed', error=str(error), finished_at=time.time())
         try:
+            if timing_alignment is not None:
+                self.timing_alignment = timing_alignment
+            if self.timing_alignment is not None:
+                if self.timing_alignment == 'unsupported_firmware':
+                    self.metadata['timing_alignment'] = 'unsupported_firmware'
+                elif isinstance(self.timing_alignment, dict):
+                    try:
+                        align = dict(self.timing_alignment)
+                        total = align.get('total_pulses', self._pulse_count)
+                        alignment_dict = dict(
+                            alpha=float(align['alpha']),
+                            beta=float(align['beta']),
+                            uncertainty_ms=float(align['uncertainty_ms']),
+                            total_pulses=int(total),
+                        )
+                        if 'pulse_seq_start' in align:
+                            alignment_dict['pulse_seq_start'] = int(align['pulse_seq_start'])
+                        if 'pulse_seq_end' in align:
+                            alignment_dict['pulse_seq_end'] = int(align['pulse_seq_end'])
+                        self.metadata['timing_alignment'] = alignment_dict
+                    except (KeyError, ValueError, TypeError) as align_err:
+                        error = error or f"Invalid timing alignment: {align_err}"
+                        self.metadata['status'] = 'failed'
+                        self.metadata['error'] = str(error)
+                else:
+                    error = error or f"Invalid timing alignment: expected dict or 'unsupported_firmware', got {type(self.timing_alignment).__name__}"
+                    self.metadata['status'] = 'failed'
+                    self.metadata['error'] = str(error)
             atomic_write(metadata_path(self.path), self.metadata)
         finally:
-            self._owner.__exit__(None,None,None)
-        if failure is not None:raise failure
+            self._owner.__exit__(None, None, None)
+        if failure is not None:
+            raise failure
 
 
 class NativeCapture:
@@ -286,6 +339,27 @@ def timeline(path, count, nominal_fps):
     if not math.isfinite(nominal_fps) or nominal_fps <= 0:
         raise ValueError('Recording timing is missing. Supply its frame rate before time-dependent analysis.')
     return np.arange(count, dtype=float)*1000/nominal_fps, 'nominal'
+
+
+def read_pulse_events(path):
+    """Read all pulse events logged across frames in a recording's journal."""
+    journal = Path(str(path) + '.frames.jsonl')
+    if not journal.exists():
+        return []
+    events = []
+    for line in journal.read_text(encoding='utf-8').splitlines():
+        if not line.strip():
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            break
+        for evt in row.get('pulse_events') or []:
+            event_record = dict(evt)
+            event_record.setdefault('frame_index', row.get('index'))
+            event_record.setdefault('camera_time_ms', row.get('camera_time_ms'))
+            events.append(event_record)
+    return events
 
 
 class MaskedFrames:

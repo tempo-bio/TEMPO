@@ -125,14 +125,18 @@ def validate_capture_profile(value):
 
 class CaptureSession:
     def __init__(self, directory, experiment, well, parameters=None, clock=time.monotonic,
-                 calibration=None, channel=None):
+                 calibration=None, channel=None, pacer_service=None):
         self.clock = clock
         self.lock = threading.RLock()
         self.started_at = None
         self.pacing_epoch_at = None
         self.calibration = calibration
+        self.pacer_service = pacer_service
+        self._field_pulses = []
+        self._writer = None
+        assigned_channel = channel if channel is not None else (getattr(parameters, 'channel', None) if parameters else None)
         self.document = dict(version=CAPTURE_VERSION, session_id=uuid.uuid4().hex,
-            experiment_id=experiment, well_id=well, channel=channel,
+            experiment_id=experiment, well_id=well, channel=assigned_channel,
             phase='new', created_at=utc_now(), stimulated=parameters is not None,
             requested_parameters=asdict(parameters) if parameters else None,
             acknowledged_status=None, fields=[], events=[], healthy_cell_estimate=0,
@@ -199,7 +203,7 @@ class CaptureSession:
             self.document['current_prepacing_s'] = elapsed
             self._transition('ready')
 
-    def begin_field(self, output_path, field_id, counts=None, position=None, footprint=None):
+    def begin_field(self, output_path, field_id, counts=None, position=None, footprint=None, writer=None):
         with self.lock:
             if self.phase not in ('ready', 'between_fields'):
                 raise ValueError('Complete pre-pacing before recording a field.')
@@ -234,6 +238,8 @@ class CaptureSession:
                     break
             self.document['fields'].append(field)
             self._field = field
+            self._writer = writer
+            self._field_pulses = []
             self._transition('recording')
             self._save_field(field)
             if self.calibration and position is not None:
@@ -241,6 +247,32 @@ class CaptureSession:
                     field['field_id'], position, self.document['session_id'] + '-stage')
                 atomic_write(str(output_path) + '.spatial.json', registration)
             return field
+
+    def route_pulse_events(self, writer=None, start_host_ns=None, end_host_ns=None):
+        """Route buffered pulse events from PacerService to NativeWriter (or return them)."""
+        target = writer or self._writer
+        if not self.document.get('stimulated') or not self.pacer_service:
+            return []
+        events = []
+        if start_host_ns is not None and end_host_ns is not None and hasattr(self.pacer_service, 'get_pulses_in_window'):
+            events = self.pacer_service.get_pulses_in_window(start_host_ns, end_host_ns)
+        elif hasattr(self.pacer_service, 'pop_recent_pulses'):
+            events = self.pacer_service.pop_recent_pulses()
+        if events:
+            self._field_pulses.extend(events)
+            if target is not None and hasattr(target, 'record_pulse_events'):
+                target.record_pulse_events(events)
+        return events
+
+    def write_field_frame(self, frame, *, writer=None, camera_time_ms=None, camera_frame_id=None,
+                          start_host_ns=None, end_host_ns=None):
+        """Helper to route pulses and write a single frame to the target writer."""
+        target = writer or self._writer
+        if target is None:
+            raise ValueError('A writer is required to write field frames.')
+        pulses = self.route_pulse_events(target, start_host_ns=start_host_ns, end_host_ns=end_host_ns)
+        target.write(frame, camera_time_ms=camera_time_ms, camera_frame_id=camera_frame_id, pulse_events=pulses)
+        return pulses
 
     def _save_field(self, field):
         if not field.get('path'):
@@ -252,17 +284,52 @@ class CaptureSession:
             acknowledged_status=self.document['acknowledged_status'], session_phase=self.phase,
             output_confirmed=self.document['output_confirmed'], **field))
 
-    def complete_field(self, frames, error='', cancelled=False):
+    def complete_field(self, frames, error='', cancelled=False, timing_alignment=None):
         with self.lock:
             field = self._field
             if field is None:
                 return
+            if timing_alignment is None:
+                if self.document.get('stimulated'):
+                    service = self.pacer_service
+                    if service is not None:
+                        supports = getattr(service, 'supports_timing', None)
+                        if supports is False:
+                            timing_alignment = 'unsupported_firmware'
+                        elif hasattr(service, 'get_timing_alignment'):
+                            timing_alignment = service.get_timing_alignment()
+                        elif hasattr(service, 'timing_alignment'):
+                            timing_alignment = service.timing_alignment
+                    elif self.document.get('acknowledged_status'):
+                        ack = self.document['acknowledged_status']
+                        if ack.get('supports_timing') is False or ack.get('protocol', 1) < 2:
+                            timing_alignment = 'unsupported_firmware'
+            if timing_alignment is not None:
+                if isinstance(timing_alignment, dict):
+                    align_data = dict(timing_alignment)
+                    if hasattr(self, '_field_pulses') and self._field_pulses:
+                        align_data['total_pulses'] = len(self._field_pulses)
+                        seqs = []
+                        for p in self._field_pulses:
+                            s = p.get('seq') if isinstance(p, dict) else getattr(p, 'seq', None)
+                            if s is not None:
+                                seqs.append(int(s))
+                        if seqs:
+                            align_data.setdefault('pulse_seq_start', min(seqs))
+                            align_data.setdefault('pulse_seq_end', max(seqs))
+                    elif 'total_pulses' not in align_data:
+                        align_data['total_pulses'] = 0
+                    field['timing_alignment'] = align_data
+                else:
+                    field['timing_alignment'] = timing_alignment
             field.update(status='failed' if error else ('cancelled' if cancelled else 'completed'),
                          frames=int(frames), error=str(error), finished_at=utc_now())
             if not error and not cancelled and frames > 0 and not field['duplicate'] and field['counts'] is not None:
                 field['credited_cells'] = int(field['counts'].get('live_count', 0))
                 self.document['healthy_cell_estimate'] += field['credited_cells']
             self._field = None
+            self._writer = None
+            self._field_pulses = []
             self._transition('between_fields')
             self._save_field(field)
 
@@ -309,6 +376,10 @@ def read_capture_metadata(video_path):
             raise ValueError('Capture metadata has an invalid pre-pacing duration.')
         if document.get('channel') != parameters['channel']:
             raise ValueError('Capture metadata has inconsistent channel assignments.')
+        timing = document.get('timing_alignment')
+        if timing is not None:
+            if timing != 'unsupported_firmware' and not isinstance(timing, dict):
+                raise ValueError('Capture metadata has an invalid timing alignment model.')
     json.dumps(document, allow_nan=False)
     return document
 

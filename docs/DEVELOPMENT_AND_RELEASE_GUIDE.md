@@ -101,17 +101,17 @@ Add a shared elapsed-time reference for stimulation events and recorded camera f
 - Map the stimulator, camera and host clocks into one session timeline while retaining their original timestamps, units and timing-source semantics. Use exposure-related camera timing where available; explicitly identify host receipt timing and unsupported or uncertain mappings. Account for clock drift, device resets, timestamp rollover and missing events without silently inventing pulse/frame associations.
 - Save the alignment information and measured timing uncertainty with recording metadata and preserve them through retention, processing, reopening and export. A shared display clock or software timestamp precision alone must not be presented as verified physical synchronization. Validate pulse-to-exposure alignment on the target hardware before making accuracy claims; keep timing collection bounded in background workers and preserve reachable stopping actions.
 
-## v1.0.2 configurable outlier-beat inclusion
+## v1.1 feature buildlist
+
+This is an open working list, alongside the focus, hardware, collaborator-validation and controller-modularization work above. Windows automatic updates are planned separately for v1.0.2 below. Feature scope will continue to evolve through the v1.0.x releases.
+
+### Configurable outlier-beat inclusion
 
 Give users an analysis option to include or exclude beats identified as outliers, with configurable definitions of an outlier. Apply the rules to detected beat measurements rather than treating the peak-detection threshold as an outlier policy.
 
 - Let users choose the measured properties and criteria, such as amplitude, beat interval or contraction/relaxation duration, with explicit units, thresholds, rule combinations and reference population. Support absolute bounds and configurable deviation rules where the data supports them. Distinguish missing measurements or insufficient reference data from confirmed outliers.
 - Preserve every detected beat's identity, original measurements and trace, the criteria that flagged it, and the chosen inclusion policy. Including flagged beats keeps their outlier status visible; excluding them changes the applicable summaries without deleting source data or inventing new beat intervals.
 - Recalculate affected analysis summaries and show included, excluded and total beat counts. If no eligible measurements remain, report that state explicitly. Save the rules and policy with the analysis and carry flags, inclusion decisions and counts through reopening, reanalysis and export so results can be reproduced.
-
-## v1.1 feature buildlist
-
-This is an open working list, alongside the focus, hardware, collaborator-validation and controller-modularization work above and Windows automatic updates below. Feature scope will continue to evolve through the v1.0.x releases.
 
 ### Expanded theme colors and customizable fonts
 
@@ -175,11 +175,11 @@ Where striations are sufficiently resolved, measure resting sarcomere length, sh
 
 Estimate the spatial spacing of repeated sarcomeric bands in each assessed frame and convert pixel spacing using a measured calibration matched to the optical configuration. This provides image-plane sarcomere spacing rather than a conversion of MUSCLEMOTION intensity amplitude into length. Account for orientation and unresolved/out-of-plane structure; do not infer whole-cell length or force from band spacing alone.
 
-## v1.1 Windows automatic updates
+## v1.0.2 Windows automatic updates
 
-Add an updater for packaged Windows installations so users can receive application updates inside TEMPO instead of manually downloading each installer from GitHub Releases.
+Add an updater for packaged Windows installations so users can receive application updates inside TEMPO instead of manually downloading each installer from GitHub Releases. Follow the [Windows update adoption plan](WINDOWS_UPDATE_ADOPTION_PLAN.md) for Velopack integration, incremental-download selection, legacy storage migration, component compatibility, recovery, and release acceptance. This is planned work; the current packaged updater still opens GitHub Releases.
 
-- Detect compatible releases from the selected stable or prerelease channel, download the installer, and verify its trusted source, version, and checksum before installation. Let users defer installation and confirm the required restart.
+- Detect compatible releases from the selected stable or prerelease channel, select an incremental or full update package, and verify its trusted metadata, version, and contents before installation. Let users defer installation and confirm the required restart.
 - Wait for acquisition, analysis, model assistance, and pending saves to finish before closing TEMPO for an update. Preserve accounts, preferences, annotation drafts, models, recordings, and analysis outputs; coordinate application updates with the matching optional NVIDIA runtime.
 - Handle interrupted downloads and failed installation with a usable recovery path, clear errors, and a manual installer fallback. Verify upgrades from v1.0.x and prerelease installations, subsequent automatic upgrades, preserved user data, and failure/cancellation cases.
 

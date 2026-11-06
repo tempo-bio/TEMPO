@@ -1,0 +1,250 @@
+--- a/src/bins/Cargo.toml
++++ b/src/bins/Cargo.toml
+@@ -14,6 +14,8 @@
+ 
+ [features]
+ windows = []
++# Test builds only. Never enable for a distributable updater.
++tempo-fixture-faults = []
+ 
+ [lib]
+ name = "velopack_bins"
+--- a/src/bins/src/commands/apply.rs
++++ b/src/bins/src/commands/apply.rs
+@@ -29,7 +29,7 @@
+     exe_args: Option<Vec<OsString>>,
+     hook_mode: HookRunMode,
+ ) -> Result<VelopackLocator> {
+-    shared::operation_wait(wait);
++    shared::operation_wait(wait)?;
+ 
+     let packages_dir = locator.get_packages_dir();
+     let package = package.cloned().or_else(|| locator::find_latest_full_package(&packages_dir).map(|x| x.0));
+@@ -55,9 +55,8 @@
+                     Ok(applied_locator)
+                 }
+                 Err(e) => {
+-                    if restart {
+-                        shared::start_package(locator, exe_args, Some(constants::HOOK_ENV_RESTART))?;
+-                    }
++                    // Recovery may be pending, or another instance may still be active.
++                    // Never launch an old binary without an explicit repair decision.
+                     bail!("Error applying package: {}", e);
+                 }
+             }
+--- a/src/bins/src/commands/start.rs
++++ b/src/bins/src/commands/start.rs
+@@ -11,7 +11,7 @@
+     exe_args: Option<Vec<OsString>>,
+     legacy_args: Option<&OsString>,
+ ) -> Result<()> {
+-    shared::operation_wait(wait);
++    shared::operation_wait(wait)?;
+ 
+     #[cfg(target_os = "windows")]
+     super::start_windows_impl::start_impl(context, exe_name, exe_args, legacy_args)?;
+--- a/src/bins/src/commands/apply_windows_impl.rs
++++ b/src/bins/src/commands/apply_windows_impl.rs
+@@ -1,6 +1,6 @@
+ use crate::{dialogs, shared, windows};
+ use anyhow::{bail, Context, Result};
+-use std::{ffi::OsString, fs, path::PathBuf, time::Duration};
++use std::{ffi::OsString, fs, io::Write, path::PathBuf, time::Duration};
+ use velopack::{bundle::load_bundle_from_file, constants, locator::VelopackLocator, process};
+ 
+ // fn ropycopy<P1: AsRef<Path>, P2: AsRef<Path>>(source: &P1, dest: &P2) -> Result<()> {
+@@ -32,6 +32,20 @@
+ //     }
+ //     Ok(())
+ // }
++
++// The environment is read only by an explicitly feature-gated fixture build.
++#[cfg(feature = "tempo-fixture-faults")]
++fn fixture_fault(point: &str) -> Result<()> {
++    if std::env::var("TEMPO_FIXTURE_FAULT").map(|v| v.split(',').any(|p| p == point)).unwrap_or(false) {
++        bail!("Injected fixture fault at {}", point);
++    }
++    if std::env::var("TEMPO_FIXTURE_ABORT").ok().as_deref() == Some(point) {
++        std::process::abort();
++    }
++    Ok(())
++}
++#[cfg(not(feature = "tempo-fixture-faults"))]
++fn fixture_fault(_point: &str) -> Result<()> { Ok(()) }
+ 
+ fn remove_temp_dir_timed(path: &PathBuf) {
+     if !path.exists() {
+@@ -128,7 +142,12 @@
+ 
+     let current_dir = old_locator.get_current_bin_dir();
+     let temp_path_new = old_locator.get_temp_dir_rand16();
+-    let temp_path_old = old_locator.get_temp_dir_rand16();
++    // Fixed root-level names make interrupted operations visible to independent repair.
++    let temp_path_old = root_path.join("tempo-previous");
++    let marker_path = root_path.join("tempo-update-pending.txt");
++    if temp_path_old.exists() || marker_path.exists() {
++        bail!("A prior update requires confirmation or repair before another update.");
++    }
+ 
+     // open a dialog showing progress...
+     let reporter = dialogs::progress::show_apply_progress(&new_locator.get_manifest_title(), &new_locator.get_manifest_version_full_string());
+@@ -155,12 +174,18 @@
+             info!("Skipping --veloapp-obsolete hook.");
+         }
+ 
+-        // third, we try _REALLY HARD_ to stop the package
+-        let _ = shared::force_stop_package(&root_path);
++        // Running work must settle on its own; never terminate the application.
++        shared::ensure_package_stopped(&root_path)?;
++        let mut marker = fs::OpenOptions::new().write(true).create_new(true).open(&marker_path)?;
++        writeln!(marker, "TEMPO update pending\nprevious={}\ntarget={}", old_version, new_version)?;
++        marker.sync_all()?;
+         // fourth, we make as backup of the current dir to temp_path_old
+         info!("Backing up current dir to {:?}", temp_path_old);
+-        shared::retry_io_ex(|| fs::rename(&current_dir, &temp_path_old), 1000, 10)
+-            .context("Unable to start the update, because one or more running processes prevented it. Try again later, or if the issue persists, restart your computer.")?;
++        fixture_fault("before_old_rename")?;
++        if let Err(error) = shared::retry_io_ex(|| fs::rename(&current_dir, &temp_path_old), 1000, 10) {
++            // The original remains in current; leave the marker for inspection.
++            return Err(error).context("Unable to move current application; repair is required.");
++        }
+ 
+         // let mut requires_robocopy = false;
+         // if let Err(e) = fs::rename(&current_dir, &temp_path_old) {
+@@ -172,9 +197,22 @@
+         // fifth, we try to replace the current dir with temp_path_new
+         // if this fails we will yolo a rollback...
+         info!("Replacing current dir with {:?}", temp_path_new);
+-        shared::retry_io_ex(|| fs::rename(&temp_path_new, &current_dir), 1000, 30).context(
+-            "Unable to complete the update, and the app was left in a broken state. You may need to re-install or repair this application manually.",
+-        )?;
++        let replacement: Result<()> = (|| {
++            fixture_fault("after_old_rename")?;
++            shared::retry_io_ex(|| fs::rename(&temp_path_new, &current_dir), 1000, 30)?;
++            Ok(())
++        })();
++        if let Err(error) = replacement {
++            let restore = (|| -> Result<()> {
++                fixture_fault("before_restore")?;
++                shared::retry_io_ex(|| fs::rename(&temp_path_old, &current_dir), 1000, 10)?;
++                Ok(())
++            })();
++            match restore {
++                Ok(()) => return Err(error).context("Replacement failed; previous application restored. Confirmation or repair is required."),
++                Err(restore_error) => bail!("Replacement failed: {}. Restore failed: {}. Previous application remains at {:?}; repair is required.", error, restore_error, temp_path_old),
++            }
++        }
+ 
+         // if !requires_robocopy {
+         //     // if we didn't need robocopy for the backup, we don't need it for the deploy hopefully
+@@ -204,6 +242,7 @@
+         //     }
+         // }
+ 
++        fixture_fault("after_new_rename")?;
+         // from this point on, we're past the point of no return and should not bail
+         // sixth, we write the uninstall entry
+         if !old_locator.get_is_portable() {
+@@ -226,7 +265,6 @@
+         // because windows may try to use the "Distributed Link Tracking and Object Identifiers (DLT) service"
+         // to update the shortcut to point at the temp/renamed location
+         remove_temp_dir_timed(&temp_path_new);
+-        remove_temp_dir_timed(&temp_path_old);
+ 
+         if !old_locator.get_is_portable() {
+             crate::windows::create_or_update_manifest_lnks(&new_locator, Some(old_locator));
+@@ -274,7 +312,6 @@
+ 
+     reporter.close();
+     remove_temp_dir_timed(&temp_path_new);
+-    remove_temp_dir_timed(&temp_path_old);
+     action?;
+     Ok(new_locator)
+ }
+--- a/src/bins/src/shared/util_common.rs
++++ b/src/bins/src/shared/util_common.rs
+@@ -11,17 +11,16 @@
+     WaitPid(u32),
+ }
+ 
+-pub fn operation_wait(wait: OperationWait) {
+-    if let OperationWait::WaitPid(pid) = wait {
+-        if let Err(e) = process::wait_for_pid_to_exit(pid, Some(Duration::from_secs(60))) {
+-            warn!("Failed to wait for process ({}) to exit ({}). Continuing...", pid, e);
+-        }
+-    } else if let OperationWait::WaitParent = wait {
+-        if let Err(e) = process::wait_for_parent_to_exit(Some(Duration::from_secs(60))) {
+-            warn!("Failed to wait for parent process to exit ({}). Continuing...", e);
+-        }
+-    } else {
+-        debug!("NoWait was specified, will not wait for any process before continuing.");
++pub fn operation_wait(wait: OperationWait) -> Result<()> {
++    let result = match wait {
++        OperationWait::WaitPid(pid) => process::wait_for_pid_to_exit(pid, Some(Duration::from_secs(60)))?,
++        OperationWait::WaitParent => process::wait_for_parent_to_exit(Some(Duration::from_secs(60)))?,
++        OperationWait::NoWait => return Ok(()),
++    };
++    match result {
++        process::WaitResult::ExitCode(_) => Ok(()),
++        process::WaitResult::WaitTimeout => anyhow::bail!("Process did not exit; update cancelled."),
++        process::WaitResult::NoWaitRequired => anyhow::bail!("Could not confirm process exit; update cancelled."),
+     }
+ }
+ 
+--- a/src/bins/src/shared/util_windows.rs
++++ b/src/bins/src/shared/util_windows.rs
+@@ -32,7 +32,7 @@
+     Ok(pids.to_vec())
+ }
+ 
+-unsafe fn get_processes_running_in_directory<P: AsRef<Path>>(dir: P) -> Result<Vec<(u32, PathBuf, process::SafeProcessHandle)>> {
++unsafe fn get_processes_running_in_directory<P: AsRef<Path>>(dir: P, terminate_access: bool) -> Result<Vec<(u32, PathBuf, process::SafeProcessHandle)>> {
+     let dir = dir.as_ref();
+     let mut oup = Vec::new();
+ 
+@@ -44,7 +44,8 @@
+     let total_pids = pids.len();
+ 
+     for pid in pids {
+-        let process = process::open_process(PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_TERMINATE, false, pid);
++        let access = if terminate_access { PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_TERMINATE } else { PROCESS_QUERY_LIMITED_INFORMATION };
++        let process = process::open_process(access, false, pid);
+         if process.is_err() {
+             continue;
+         }
+@@ -78,6 +79,17 @@
+     Ok(oup)
+ }
+ 
++/// Refuse replacement while another identifiable package process exists.
++pub fn ensure_package_stopped<P: AsRef<Path>>(root_dir: P) -> Result<()> {
++    let processes = unsafe { get_processes_running_in_directory(root_dir, false)? };
++    for (pid, path, _) in processes {
++        if pid != std::process::id() {
++            bail!("Package process is still running: {} ({})", path.display(), pid);
++        }
++    }
++    Ok(())
++}
++
+ pub fn force_stop_package<P: AsRef<Path>>(root_dir: P) -> Result<()> {
+     let root_dir = root_dir.as_ref();
+     super::retry_io(|| _force_stop_package(root_dir))?;
+@@ -87,7 +99,7 @@
+ fn _force_stop_package<P: AsRef<Path>>(root_dir: P) -> Result<()> {
+     let dir = root_dir.as_ref();
+     info!("Checking for running processes in: {}", dir.display());
+-    let processes = unsafe { get_processes_running_in_directory(dir)? };
++    let processes = unsafe { get_processes_running_in_directory(dir, true)? };
+     let my_pid = std::process::id();
+     for (pid, path, handle) in processes.iter() {
+         if *pid == my_pid {
+@@ -205,7 +217,7 @@
+     let path = Path::new(&profile);
+     let rustup = path.join(".rustup");
+ 
+-    let processes = unsafe { get_processes_running_in_directory(&rustup).unwrap() };
++    let processes = unsafe { get_processes_running_in_directory(&rustup, false).unwrap() };
+     assert!(processes.len() > 0);
+ 
+     let mut found = false;

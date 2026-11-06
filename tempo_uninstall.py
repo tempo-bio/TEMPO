@@ -14,6 +14,7 @@ from PyQt6.QtWidgets import (
 from tempo_config import CONFIG_PATH, get_base_dir
 from tempo_ui import InlineNotice, set_button_color
 from tempo_tasks import run_task
+from tempo_update_installation import detect_installation
 
 
 def find_windows_uninstaller():
@@ -35,7 +36,10 @@ class UninstallTempoDialog(QDialog):
         self.resize(520, 310)
         self.setMinimumSize(480, 280)
 
+        self.installation = detect_installation()
         self.uninstaller = find_windows_uninstaller()
+        if self.installation.kind == 'velopack':
+            self.uninstaller = self.installation.uninstaller
         is_frozen = getattr(sys, 'frozen', False)
 
         layout = QVBoxLayout(self)
@@ -43,13 +47,21 @@ class UninstallTempoDialog(QDialog):
         layout.setSpacing(12)
 
         if self.uninstaller:
-            install_dir = self.uninstaller.parent
+            install_dir = self.installation.root if self.installation.kind == 'velopack' else self.uninstaller.parent
             intro_text = (
                 'Uninstalling TEMPO will launch the Windows uninstaller to remove '
                 'application files and shortcuts from this computer. TEMPO will close automatically.'
             )
             location_label = f'<b>Installed location:</b> {install_dir}'
             action_label = 'Uninstall and Exit'
+        elif is_frozen:
+            base_dir = Path(get_base_dir()).resolve()
+            intro_text = (
+                'No supported Windows uninstaller was detected for this installation. '
+                'Use the original installer or Windows settings to remove the application.'
+            )
+            location_label = f'<b>Application location:</b> {base_dir}'
+            action_label = 'Clean Data and Exit'
         else:
             base_dir = Path(get_base_dir()).resolve()
             intro_text = (
@@ -216,7 +228,13 @@ class UninstallTempoDialog(QDialog):
                 creationflags = 0
                 if sys.platform == 'win32':
                     creationflags = getattr(subprocess, 'DETACHED_PROCESS', 8) | getattr(subprocess, 'CREATE_NEW_PROCESS_GROUP', 512)
-                subprocess.Popen([str(self.uninstaller)], creationflags=creationflags, close_fds=True)
+                command = [str(self.uninstaller)]
+                if self.installation.kind == 'velopack':
+                    # Refuse to launch if the installed layout changed during shutdown.
+                    if detect_installation() != self.installation:
+                        raise RuntimeError('The installation changed. Reopen TEMPO and retry.')
+                    command.append('uninstall')
+                subprocess.Popen(command, creationflags=creationflags, close_fds=True)
             return credentials
         try:
             if run_task(self, 'Preparing uninstall…', prepare):

@@ -2,6 +2,11 @@ import sys
 import os
 import platform
 
+if __name__ == '__main__':
+    from tempo_update_installation import initialize_velopack
+    if initialize_velopack():
+        sys.exit(0)
+
 if __name__ == '__main__' and len(sys.argv) > 1 and sys.argv[1] in ('--assist-model', '--assist-model-cuda'):
     if len(sys.argv) != 8:
         sys.exit(2)
@@ -58,6 +63,7 @@ import cv2
 import contextlib
 import copy
 import importlib
+import math
 import shutil
 import random
 import json
@@ -1309,7 +1315,8 @@ class CameraAcquisitionWorker(QThread):
                 if self.native:
                     if first_receipt is None:first_receipt=time.monotonic()
                     if camera_time is not None and first_camera_time is None:first_camera_time=float(camera_time)
-                    writer.write(frame,camera_time_ms=camera_time,camera_frame_id=camera_id)
+                    pulses = self.capture_hooks[2]() if (self.capture_hooks and len(self.capture_hooks) > 2 and self.capture_hooks[2]) else None
+                    writer.write(frame, camera_time_ms=camera_time, camera_frame_id=camera_id, pulse_events=pulses)
                     if quality_pending is not None and quality_pending.done():
                         try: writer.metadata.setdefault('quality_assessments',[]).append(quality_pending.result())
                         except Exception as exc: writer.metadata['quality_error']=str(exc)
@@ -1351,7 +1358,8 @@ class CameraAcquisitionWorker(QThread):
                         if quality_pending is not None:
                             try: writer.metadata.setdefault('quality_assessments',[]).append(quality_pending.result(timeout=2))
                             except Exception as exc: writer.metadata['quality_error']=str(exc)
-                        writer.close(error or '')
+                        alignment = self.capture_hooks[3]() if (self.capture_hooks and len(self.capture_hooks) > 3 and self.capture_hooks[3]) else None
+                        writer.close(error or '', timing_alignment=alignment)
                     else:
                         writer.release()
             except Exception as exc:
@@ -1641,6 +1649,10 @@ class CaptureTab(QWidget):
         self.capture_splitter.setSizes(saved_sizes)
         self.capture_splitter.splitterMoved.connect(self.capture_panels_resized)
         QTimer.singleShot(0, self.align_capture_forms)
+
+    @property
+    def firmware_notice(self):
+        return getattr(self.capture_controls, 'firmware_notice', None)
 
     def capture_panels_resized(self, *args):
         self.align_capture_forms()
@@ -2823,6 +2835,8 @@ class ExportAndTrainWorker(QThread):
         try:
             from tempo_training import build_dataset, select_approved_annotations
             self.progress_signal.emit(5, 'Preparing isolated training, validation and holdout splits…')
+            from tempo_config import get_collaboration_dir
+            dataset_root = Path(get_collaboration_dir()).parent
             if self.is_universal_mode:
                 if not tempo_hub.is_maintainer():
                     raise PermissionError('Only a maintainer can train the approved master dataset.')
@@ -2831,11 +2845,12 @@ class ExportAndTrainWorker(QThread):
                 records = select_approved_annotations(records)
                 for name in records:
                     tempo_hub.download_image(name, revision=revision)
-                atomic_json(os.path.join(self.base_dir, 'datasets', 'universal_annotations.json'), records)
-                dataset = build_dataset(self.base_dir)
+                dataset_root.mkdir(parents=True, exist_ok=True)
+                atomic_json(str(dataset_root / 'universal_annotations.json'), records)
+                dataset = build_dataset(self.base_dir, dataset_root=dataset_root)
             else:
                 # Keep local experiments separate from the approved cloud master.
-                root = Path(self.base_dir) / 'datasets' / 'local_training'
+                root = dataset_root / 'local_training'
                 image_dir = root / 'datasets' / 'images'
                 image_dir.mkdir(parents=True, exist_ok=True)
                 records = {}
@@ -5387,6 +5402,7 @@ class AnalyzerTab(QWidget):
         self.current_well_data = None
         self.current_well_std = None
         self.scatter_points = [] # Keep track of point data for clicking
+        self._pulse_markers = []
 
         # Main Layout using a Splitter for adjustable panels
         layout = QVBoxLayout(self)
@@ -6368,6 +6384,12 @@ class AnalyzerTab(QWidget):
         self._trace_row = cell_data
         self.wave_note.clear(); self.wave_note.show()
         self.wave_curve.clear(); self.mini_plot.hide()
+        for marker in getattr(self, '_pulse_markers', []):
+            try:
+                self.mini_plot.removeItem(marker)
+            except Exception:
+                pass
+        self._pulse_markers = []
         self.mini_plot.getPlotItem().setRange(xRange=(0, 1), yRange=(0, 1), padding=0)
         self.trace_signal.setEnabled(cell_data is not None)
         self.trace_signal.setVisible(bool(cell_data is not None and isinstance(cell_data.get('Trace_File'), str) and cell_data.get('Trace_File')))
@@ -6391,11 +6413,89 @@ class AnalyzerTab(QWidget):
             self.mini_plot.fit_label_height(self.signal_plot_height)
             self.wave_note.hide()
             self.mini_plot.show(); self.mini_plot.autoRange()
-        except (OSError, ValueError, KeyError) as exc:
+
+            for ev in self._load_pulse_events(cell_data):
+                t_ms = ev.get('time_ms')
+                if t_ms is None or isinstance(t_ms, bool) or not isinstance(t_ms, (int, float)) or not math.isfinite(t_ms):
+                    continue
+                seq = ev.get('seq', 0)
+                edge_val = ev.get('edge', 1)
+                edge_str = 'Rising' if edge_val in (1, '1', 'rising', 'Rising') else ('Falling' if edge_val in (0, '0', 'falling', 'Falling') else str(edge_val))
+                voltage = ev.get('voltage', 0.6)
+                width = ev.get('width', 2.0)
+                v_str = f"{voltage:g}" if isinstance(voltage, (int, float)) else str(voltage)
+                w_str = f"{width:g}" if isinstance(width, (int, float)) else str(width)
+                tooltip = f"Pulse #{seq}: {edge_str} ({v_str} V, {w_str} ms)"
+
+                pen = pg.mkPen(color='#f09663', width=1.5, style=Qt.PenStyle.DashLine)
+                line = pg.InfiniteLine(pos=t_ms, angle=90, movable=False, pen=pen)
+                line.setToolTip(tooltip)
+                self.mini_plot.addItem(line)
+                self._pulse_markers.append(line)
+        except (OSError, ValueError, KeyError, TypeError) as exc:
             if not isinstance(cell_data.get('Trace_File'), str) or not cell_data.get('Trace_File'):
                 self.wave_note.setText('Recorded signal unavailable: no trace was saved with these results.')
             else:
                 self.wave_note.setText(f'Recorded signal unavailable. {exc}')
+
+    def _load_pulse_events(self, cell_data):
+        if not cell_data or not isinstance(cell_data, dict):
+            return []
+        if 'pulse_events' in cell_data and isinstance(cell_data['pulse_events'], list):
+            return cell_data['pulse_events']
+        dataset_path = getattr(self, 'dataset_path', '')
+        base_dir = Path(dataset_path).parent if dataset_path else Path('.')
+        voltage = cell_data.get('Requested_Stimulation_Amplitude_V')
+        width = cell_data.get('Stimulation_Pulse_Width_ms')
+        recording_id = cell_data.get('Recording_ID', '')
+        candidates = []
+        if recording_id and recording_id != 'Unknown':
+            candidates.append(base_dir / f"{recording_id}.frames.jsonl")
+        candidates.append(base_dir / 'frames.jsonl')
+        if voltage is None or width is None:
+            for cap_name in ([f"{recording_id}.capture.json"] if recording_id and recording_id != 'Unknown' else []) + ['capture.json']:
+                cap_file = base_dir / cap_name
+                if cap_file.is_file():
+                    try:
+                        cap_doc = json.loads(cap_file.read_text(encoding='utf-8'))
+                        p = cap_doc.get('requested_parameters') or cap_doc.get('acknowledged_status', {}).get('parameters') or {}
+                        if voltage is None and 'amplitude_v' in p: voltage = p['amplitude_v']
+                        if width is None and 'pulse_width_ms' in p: width = p['pulse_width_ms']
+                    except Exception: pass
+                    break
+        voltage = voltage if voltage is not None else 0.6
+        width = width if width is not None else 2.0
+        for cand in candidates:
+            if cand.is_file():
+                events = []
+                try:
+                    with open(cand, 'r', encoding='utf-8') as f:
+                        for line in f:
+                            if not line.strip():
+                                continue
+                            try:
+                                entry = json.loads(line)
+                            except json.JSONDecodeError:
+                                break
+                            if not isinstance(entry, dict):
+                                continue
+                            f_time = entry.get('camera_time_ms')
+                            for p in entry.get('pulse_events') or []:
+                                if not isinstance(p, dict):
+                                    continue
+                                events.append({
+                                    'seq': p.get('seq', 0),
+                                    'edge': p.get('edge', 1),
+                                    'time_ms': p.get('time_ms', f_time),
+                                    'voltage': p.get('voltage', voltage),
+                                    'width': p.get('width', width)
+                                })
+                    if events:
+                        return events
+                except Exception:
+                    if events:
+                        return events
+        return []
 
 
 
@@ -7739,6 +7839,9 @@ class TempoDashboard(QMainWindow):
 
     def request_close_action(self, action):
         """Run an exit action only after the normal shutdown guards settle."""
+        pending = getattr(self, '_close_action', None)
+        if pending is not None and pending is not action:
+            raise RuntimeError('Another operation is already waiting for TEMPO to close.')
         self._close_action = action
         self._cancel_close_retry = False
         return self.close()

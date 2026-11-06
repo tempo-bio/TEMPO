@@ -345,7 +345,7 @@ class WorkspaceInteractionTests(unittest.TestCase):
             self.assertNotIn('Well Averages', view.lbl_target.text())
             view.cell_selector.setCurrentIndex(0)
             self.assertEqual(view.cell_selector.currentText(), 'Full Well')
-            self.assertIn('Well Averages', view.lbl_target.text())
+            self.assertIn('Well Averages' if field == 0 else f'Field {selection[1]} Averages', view.lbl_target.text())
             self.assertEqual(view.lbl_amp.text(), expected)
             self.assertEqual(view.field_selector.currentData(), selection)
             self.assertTrue(view.mini_plot.isHidden())
