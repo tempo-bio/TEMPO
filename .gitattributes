@@ -4,7 +4,8 @@
 requirements*.txt text eol=lf
 requirements-windows*.lock text eol=lf
 installer/dependency-sources*.json text eol=lf
-installer/velopack/*.patch text eol=lf
+# Unified diffs need blank context prefixes; git apply checks source whitespace.
+installer/velopack/*.patch text eol=lf whitespace=-blank-at-eol,-blank-at-eof
 
 # Upstream notices are checksum-verified as original bytes.
 assets/licenses/** -text

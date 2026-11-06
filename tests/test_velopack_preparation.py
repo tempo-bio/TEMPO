@@ -1,4 +1,5 @@
 import hashlib
+import json
 from pathlib import Path
 import tempfile
 import unittest
@@ -8,6 +9,15 @@ from scripts import prepare_velopack_updater as preparation
 
 
 class PrepareUpdaterTests(unittest.TestCase):
+    def test_repository_patch_and_source_list_match_pinned_contract(self):
+        pin = json.loads((preparation.PATCH.parent / 'pin.json').read_text())
+        digest = hashlib.sha256(preparation.PATCH.read_bytes()).hexdigest()
+        self.assertEqual(digest, preparation.PATCH_SHA256)
+        self.assertEqual(digest, pin['patch_sha256'])
+        files = {line.removeprefix('--- a/') for line in preparation.PATCH.read_text().splitlines()
+                 if line.startswith('--- a/')}
+        self.assertEqual(files, set(preparation.SOURCE_SHA256))
+
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)

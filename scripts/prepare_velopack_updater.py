@@ -8,7 +8,7 @@ from pathlib import Path
 import subprocess
 
 COMMIT = '92d6a1c91716729d449034df5c50307dcce39493'
-PATCH_SHA256 = 'a6b8f1bcc0dd597fe8260f4e28ae47748b3d05b3e695f2e5c24ea1a82d1e7b46'
+PATCH_SHA256 = '2118a3b0b85f6f7e581a587ee546c833a2606de06367babe1e6e444490d3ad94'
 SOURCE_SHA256 = {
     'src/bins/Cargo.toml': '4d4f0967fa7249de83a0424c4b4fd0590adf891840b58a1bb1d8560922805f68',
     'src/bins/src/commands/apply.rs': 'f12aa15322c2ff4b42f251a78bc234c193168df8d692afc27d0a66276712ab37',
@@ -16,6 +16,7 @@ SOURCE_SHA256 = {
     'src/bins/src/commands/apply_windows_impl.rs': 'd3db6cfa465053f24245d41ab9532a002091829b2d051eb9942bc64147450d4d',
     'src/bins/src/shared/util_common.rs': '4610125beb18c8766bc009afa2f92c6dc05914d14120d42b9de18fdf9499a5e5',
     'src/bins/src/shared/util_windows.rs': '6e7603aa4c059341903b673fef39ef51bfc7bde4138cb8b15605993e4bfd81ef',
+    'src/bins/src/windows/util.rs': '2a049c423bae091f670c3748ce340af8f026f82b83bf785e7820cb40117c5ee9',
 }
 PATCH = Path(__file__).resolve().parents[1] / 'installer/velopack/0001-tempo-recovery.patch'
 

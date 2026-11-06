@@ -74,7 +74,17 @@
  
  fn remove_temp_dir_timed(path: &PathBuf) {
      if !path.exists() {
-@@ -128,7 +142,12 @@
+@@ -112,6 +126,9 @@
+     // which would also try to acquire the lock — causing a deadlock.
+     let _mutex = old_locator.try_get_exclusive_lock()?;
+ 
++    // Reject active applications before hooks can affect the running package.
++    shared::ensure_package_stopped(&root_path)?;
++
+     let old_version = old_locator.get_manifest_version();
+     let new_version = new_locator.get_manifest_version();
+ 
+@@ -128,7 +145,12 @@
  
      let current_dir = old_locator.get_current_bin_dir();
      let temp_path_new = old_locator.get_temp_dir_rand16();
@@ -88,7 +98,7 @@
  
      // open a dialog showing progress...
      let reporter = dialogs::progress::show_apply_progress(&new_locator.get_manifest_title(), &new_locator.get_manifest_version_full_string());
-@@ -155,12 +174,18 @@
+@@ -155,12 +177,18 @@
              info!("Skipping --veloapp-obsolete hook.");
          }
  
@@ -111,7 +121,7 @@
  
          // let mut requires_robocopy = false;
          // if let Err(e) = fs::rename(&current_dir, &temp_path_old) {
-@@ -172,9 +197,22 @@
+@@ -172,9 +200,22 @@
          // fifth, we try to replace the current dir with temp_path_new
          // if this fails we will yolo a rollback...
          info!("Replacing current dir with {:?}", temp_path_new);
@@ -137,7 +147,7 @@
  
          // if !requires_robocopy {
          //     // if we didn't need robocopy for the backup, we don't need it for the deploy hopefully
-@@ -204,6 +242,7 @@
+@@ -204,6 +245,7 @@
          //     }
          // }
  
@@ -145,7 +155,7 @@
          // from this point on, we're past the point of no return and should not bail
          // sixth, we write the uninstall entry
          if !old_locator.get_is_portable() {
-@@ -226,7 +265,6 @@
+@@ -226,7 +268,6 @@
          // because windows may try to use the "Distributed Link Tracking and Object Identifiers (DLT) service"
          // to update the shortcut to point at the temp/renamed location
          remove_temp_dir_timed(&temp_path_new);
@@ -153,7 +163,7 @@
  
          if !old_locator.get_is_portable() {
              crate::windows::create_or_update_manifest_lnks(&new_locator, Some(old_locator));
-@@ -274,7 +312,6 @@
+@@ -274,7 +315,6 @@
  
      reporter.close();
      remove_temp_dir_timed(&temp_path_new);
@@ -248,3 +258,20 @@
      assert!(processes.len() > 0);
  
      let mut found = false;
+--- a/src/bins/src/windows/util.rs
++++ b/src/bins/src/windows/util.rs
+@@ -56,8 +56,12 @@
+         }
+     }
+ 
+-    // in case the hook left running processes
+-    let _ = shared::force_stop_package(&root_dir);
++    // A hook may leave helpers, or another application may start meanwhile.
++    // Refuse to continue without terminating any existing package process.
++    if let Err(error) = shared::ensure_package_stopped(&root_dir) {
++        error!("Package processes remain after hook; left running: {}", error);
++        success = false;
++    }
+     success
+ }
+ 

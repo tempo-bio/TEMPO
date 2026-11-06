@@ -4,7 +4,7 @@ from pathlib import Path
 import sys
 
 REQUIRED = {'normal', 'guarded_handoff', 'before_old_rename', 'after_old_rename', 'restore_failure',
-            'abrupt_after_old', 'running_process', 'wait_timeout',
+            'abrupt_after_old', 'running_process', 'hook_cleanup', 'wait_timeout',
             'independent_repair', 'offline_forward', 'offline_previous',
             'health_confirmation', 'two_successive_updates'}
 

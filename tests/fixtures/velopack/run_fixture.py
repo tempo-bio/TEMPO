@@ -56,7 +56,7 @@ def signed_release(package, version, key, keys):
 def run(*args, env=None, expect=0, timeout=180):
     result = subprocess.run([str(arg) for arg in args], env=env, timeout=timeout,
                             text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-    if (result.returncode == 0) != (expect == 0):
+    if expect is not None and (result.returncode == 0) != (expect == 0):
         raise RuntimeError(f'Unexpected exit {result.returncode}: {args}\n{result.stdout}')
     return result
 
@@ -99,7 +99,7 @@ def probe(root, expected, env):
         raise AssertionError(f'Wrong installed version: {result.stdout!r}')
 
 
-def apply(root, package, *, env, fault=None, abort=None, wait_pid=None, expect_failure=False):
+def apply(root, package, *, env, fault=None, abort=None, wait_pid=None, expect_failure=False, inspect_exit=False):
     env = dict(env)
     env.pop('TEMPO_FIXTURE_FAULT', None)
     env.pop('TEMPO_FIXTURE_ABORT', None)
@@ -111,12 +111,50 @@ def apply(root, package, *, env, fault=None, abort=None, wait_pid=None, expect_f
             '--rootDir', root, '--packageDir', root / 'packages']
     if wait_pid is not None:
         args.extend(['--waitPid', wait_pid])
-    return run(*args, env=env, expect=1 if fault or abort or expect_failure else 0)
+    expect = None if inspect_exit else (1 if fault or abort or expect_failure else 0)
+    return run(*args, env=env, expect=expect)
+
+
+def fixture_process_running(pid, *, wait_ms=0):
+    """Observe a synthetic hook child without terminating it."""
+    import ctypes
+    from ctypes import wintypes
+    kernel = ctypes.WinDLL('kernel32', use_last_error=True)
+    kernel.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    kernel.OpenProcess.restype = wintypes.HANDLE
+    kernel.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+    kernel.WaitForSingleObject.restype = wintypes.DWORD
+    kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel.CloseHandle.restype = wintypes.BOOL
+    handle = kernel.OpenProcess(0x100000, False, pid)  # SYNCHRONIZE only
+    if not handle:
+        error = ctypes.get_last_error()
+        if error == 87:  # PID no longer exists
+            return False
+        raise ctypes.WinError(error)
+    try:
+        result = kernel.WaitForSingleObject(handle, wait_ms)
+        if result not in (0, 258):  # WAIT_OBJECT_0 / WAIT_TIMEOUT
+            raise ctypes.WinError(ctypes.get_last_error())
+        return result == 258
+    finally:
+        kernel.CloseHandle(handle)
+
+
+def assert_running_app_refused(result, root, *, app_alive):
+    if not app_alive:
+        raise AssertionError('Updater terminated the live fixture app.\n' + result.stdout)
+    if result.returncode == 0:
+        raise AssertionError('Updater accepted an update with a live fixture app.\n' + result.stdout)
+    if (root / 'current' / 'fixture-version.txt').read_text().strip() != '1.0.1':
+        raise AssertionError('Refused update changed the installed application')
+    if (root / 'tempo-previous').exists() or (root / 'tempo-update-pending.txt').exists():
+        raise AssertionError('Refused update began replacing the installed application')
 
 
 def run_scenarios(work, setup, packages, repair, releases, keys, outcomes, report):
     package = packages['1.0.2']
-    for scenario in ('normal', 'guarded_handoff', 'consecutive', 'before_old_rename', 'after_old_rename', 'restore_failure', 'abrupt_after_old', 'running_process', 'wait_timeout'):
+    for scenario in ('normal', 'guarded_handoff', 'consecutive', 'before_old_rename', 'after_old_rename', 'restore_failure', 'abrupt_after_old', 'running_process', 'hook_cleanup', 'wait_timeout'):
         local = work / ('profile-' + scenario)
         local.mkdir()
         root = local / 'TEMPO.Bio.Desktop'
@@ -213,13 +251,29 @@ def run_scenarios(work, setup, packages, repair, releases, keys, outcomes, repor
                     time.sleep(0.1)
                 if not ready.is_file():
                     raise RuntimeError('Fixture app failed to signal readiness')
-                apply(root, package, env=env, wait_pid=held.pid if scenario == 'wait_timeout' else None,
-                      expect_failure=True)
-                if held.poll() is not None:
-                    raise AssertionError('Updater terminated the fixture app')
+                result = apply(root, package, env=env,
+                               wait_pid=held.pid if scenario == 'wait_timeout' else None,
+                               inspect_exit=True)
+                assert_running_app_refused(result, root, app_alive=held.poll() is None)
             finally:
                 Path(env['TEMPO_FIXTURE_STOP']).write_text('exit', encoding='utf-8')
                 held.wait(timeout=15)
+            probe(root, '1.0.1', env)
+        elif scenario == 'hook_cleanup':
+            ready, stop, child_pid = (work / 'hook.ready', work / 'hook.stop', work / 'hook.pid')
+            env.update(TEMPO_FIXTURE_HOOK_CHILD='1', TEMPO_FIXTURE_READY=str(ready),
+                       TEMPO_FIXTURE_STOP=str(stop), TEMPO_FIXTURE_CHILD_PID=str(child_pid))
+            try:
+                result = apply(root, package, env=env, inspect_exit=True)
+                if not ready.exists() or not child_pid.exists():
+                    raise AssertionError('Lifecycle hook did not leave its test helper running')
+                pid = int(child_pid.read_text(encoding='utf-8'))
+                assert_running_app_refused(result, root, app_alive=fixture_process_running(pid))
+            finally:
+                stop.write_text('exit', encoding='utf-8')
+                if child_pid.exists() and fixture_process_running(
+                        int(child_pid.read_text(encoding='utf-8')), wait_ms=15000):
+                    raise AssertionError('Hook helper did not exit after its normal stop request')
             probe(root, '1.0.1', env)
         elif scenario == 'before_old_rename':
             apply(root, package, env=env, fault='before_old_rename')
