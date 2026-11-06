@@ -55,3 +55,18 @@ function Assert-Uninstalled([string]$Target, [double]$CleanupSeconds = 30) {
         Start-Sleep -Milliseconds 100
     }
 }
+
+function Wait-VelopackRemoval([string]$Target, [double]$CleanupSeconds = 30) {
+    # The pinned updater launches a detached cmd to remove its directory after
+    # exiting. Even an already-absent directory is unsafe to reuse while that
+    # command can still delete a newly created installation at the same path.
+    $cleanupCommand = 'rmdir /s /q "' + $Target.TrimEnd('\') + '"'
+    $deadline = [Diagnostics.Stopwatch]::StartNew()
+    while ($true) {
+        $pending = @(Get-CimInstance -ClassName Win32_Process -Filter "Name = 'cmd.exe'" -OperationTimeoutSec 5 -ErrorAction Stop |
+            Where-Object { $_.CommandLine -and $_.CommandLine.IndexOf($cleanupCommand, [StringComparison]::OrdinalIgnoreCase) -ge 0 })
+        if (-not (Test-Path -LiteralPath $Target) -and $pending.Count -eq 0) { return }
+        if ($deadline.Elapsed.TotalSeconds -ge $CleanupSeconds) { throw 'Velopack uninstall cleanup did not complete before its deadline' }
+        Start-Sleep -Milliseconds 100
+    }
+}

@@ -44,6 +44,8 @@ Native adoption, distinct-release and dependency-changing transactions, signed f
 
 To repeat the full-app matrix after a verification-script correction, dispatch `velopack-adoption.yml` on the reviewed development revision with `full_app_source_run_id` set to the completed Windows build run. Its `velopack-full-app.yml` job downloads that run's original immutable candidate payload and uses only the checked-out verification scripts, without installing application dependencies or rebuilding packages. Evidence records both source and fixture commits plus the verifier hash; a replay does not certify the newer application's source. The fixture creates and resolves Windows shell folders in a fresh child after isolating its profile, checks actual shortcut targets, and retains native setup/update logs. Omit the replay input for normal native fixture validation.
 
+The pinned uninstaller schedules directory removal in a detached command after its process exits. The fixture waits for both directory removal and completion of that exact cleanup command before certifying uninstall or reusing the path. An absent directory alone does not establish completion: a pending cleanup command could remove a new installation. This wait does not change the native uninstaller's behavior or establish that an immediate user-driven reinstall is safe.
+
 ## Prepare a candidate bundle
 
 Use an isolated release environment at the exact source revision being certified. Generate a JSON object mapping key IDs to base64-encoded raw Ed25519 **public** keys; never put a private signing key in this file. Build the companion with those same keys:

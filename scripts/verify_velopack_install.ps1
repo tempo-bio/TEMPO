@@ -105,6 +105,13 @@ function Assert-State {
     foreach ($entry in $expected) { Assert-File (Join-Path $profile $entry.path) $entry }
 }
 
+function Assert-VelopackUninstalled {
+    Wait-VelopackRemoval $root
+    if (Test-Path -LiteralPath $registry) { throw 'Uninstall left its registration behind' }
+    foreach ($link in $links) { if (Test-Path -LiteralPath $link) { throw "Uninstall left a shortcut: $link" } }
+    Assert-State
+}
+
 function Assert-MigrationRefused([string]$Reason, [string[]]$Arguments) {
     $stdout=Join-Path $Evidence "refused-$Reason.log"
     $stderr=Join-Path $Evidence "refused-$Reason-error.log"
@@ -150,7 +157,7 @@ function Apply-Revision($Base, $Target, [string]$Label) {
     return @{label=$Label;seconds=$seconds;full_bytes=$Target.full.size;expanded_bytes=$Target.expanded_bytes}
 }
 
-$result = @{schema_version=1;source_commit=$contract.source_commit;fixture_commit=$env:GITHUB_SHA;fixture_sha256=(Get-FileHash $PSCommandPath -Algorithm SHA256).Hash.ToLowerInvariant();release_certified=$false;mode=$Mode;success=$false;scenarios=@{};measurements=@()}
+$result = @{schema_version=1;source_commit=$contract.source_commit;fixture_commit=$env:GITHUB_SHA;fixture_sha256=(Get-FileHash $PSCommandPath -Algorithm SHA256).Hash.ToLowerInvariant();helper_sha256=(Get-FileHash (Join-Path $PSScriptRoot 'windows_installer_helpers.ps1') -Algorithm SHA256).Hash.ToLowerInvariant();release_certified=$false;mode=$Mode;success=$false;scenarios=@{};measurements=@()}
 try {
     Assert-File $repair $contract.repair
     if ($Mode -eq 'gate') {
@@ -160,6 +167,7 @@ try {
         foreach ($report in @($matrix,$migration,$uninstall)) {
             if ($report.success -ne $true -or $report.source_commit -ne $contract.source_commit -or
                 $report.fixture_commit -ne $result.fixture_commit -or $report.fixture_sha256 -ne $result.fixture_sha256 -or
+                $report.helper_sha256 -ne $result.helper_sha256 -or
                 $report.release_certified -ne $false) { throw 'Candidate acceptance failed or has a different identity' }
         }
         foreach ($name in @('full_app_fresh_install','same_source_two_replacements','same_source_skipped_replacement','simulated_missing_current_independent_repair','external_state_bytes_preserved','shortcuts_and_registration')) {
@@ -249,10 +257,7 @@ try {
             if ((Get-FileHash (Join-Path $root 'Update.exe') -Algorithm SHA256).Hash.ToLowerInvariant() -ne $contract.updater_sha256) { throw 'Uninstall owner checksum mismatch' }
             Invoke-Bounded (Join-Path $root 'Update.exe') @('uninstall','--silent','--log',"`"$(Join-Path $Evidence 'uninstall-native.log')`"",'--rootDir',"`"$root`"") 300
         }
-        if (Test-Path (Join-Path $root 'current\TEMPO.exe')) { throw 'Uninstall left the application behind' }
-        if (Test-Path -LiteralPath $registry) { throw 'Uninstall left its registration behind' }
-        foreach ($link in $links) { if (Test-Path -LiteralPath $link) { throw "Uninstall left a shortcut: $link" } }
-        Assert-State
+        Assert-VelopackUninstalled
         $result.scenarios.uninstall_preserves_external_state=$true
     } else {
         if ((Test-Path -LiteralPath $root) -or (Test-Path -LiteralPath $registry)) { throw 'Acceptance requires an unused installation identity' }
@@ -291,7 +296,7 @@ try {
         $result.scenarios.same_source_two_replacements=$true
         # Use the exact first installer again; do not manufacture a prior base.
         Invoke-Bounded (Join-Path $root 'Update.exe') @('uninstall','--silent','--log',"`"$(Join-Path $Evidence 'before-skipped-uninstall.log')`"",'--rootDir',"`"$root`"") 300
-        Assert-State
+        Assert-VelopackUninstalled
         Invoke-Bounded (Join-Path $Payload $first.installer.path) @('--silent','--log',"`"$(Join-Path $Evidence 'skipped-setup.log')`"",'--installto',"`"$root`"") 600
         $result.measurements += Apply-Revision $first $third 'skipped-packaging-revision'
         $result.scenarios.same_source_skipped_replacement=$true
