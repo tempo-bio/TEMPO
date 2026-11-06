@@ -185,7 +185,8 @@ def package(*, full_package, version, commit, channel, sequence, expires_at, sig
             key_id, output, certification, pin_path=PIN, previous_index=None,
             trusted_keys=None, patch_spec=None, nvidia_descriptor=None, now=None,
             native_updater=None, native_patch=None, release_notes=None,
-            base_package_dir=None, storage_schema_version=None, minimum_updater_version=None):
+            base_package_dir=None, storage_schema_version=None, minimum_updater_version=None,
+            additional_signing_keys=None):
     """Build authenticated output after evidence checks; never overwrite differing files."""
     from cryptography.hazmat.primitives import serialization
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
@@ -208,6 +209,23 @@ def package(*, full_package, version, commit, channel, sequence, expires_at, sig
         raise ValueError('Signing key ID conflicts with trusted key map.')
     previous_trust = dict(trust)
     trust[key_id] = public
+    signers = {key_id: private}
+    if additional_signing_keys is not None:
+        if (not isinstance(additional_signing_keys, dict) or not 1 <= len(additional_signing_keys) <= 15
+                or trusted_keys is None):
+            raise ValueError('Co-signing requires 1–15 explicitly trusted additional key IDs.')
+        if previous_trust.get(key_id) != public:
+            raise ValueError('Primary co-signing key differs from the explicit public trust map.')
+        for name, path in additional_signing_keys.items():
+            if not isinstance(name, str) or not 1 <= len(name) <= 128 or name in signers:
+                raise ValueError('Duplicate or invalid co-signing key ID.')
+            other = serialization.load_pem_private_key(Path(path).read_bytes(), password=None)
+            if not isinstance(other, Ed25519PrivateKey):
+                raise ValueError('Co-signing requires Ed25519 PEM private keys.')
+            raw_public = other.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
+            if previous_trust.get(name) != raw_public:
+                raise ValueError('Co-signing key differs from the explicit public trust map.')
+            signers[name] = other
     previous, bases = [], {}
     if previous_index:
         if trusted_keys is None:
@@ -291,8 +309,9 @@ def package(*, full_package, version, commit, channel, sequence, expires_at, sig
                 payload['patches'].append({'base_version': identity[0], 'base_commit': identity[1],
                                            'base_inventory_sha256': identity[2], 'target_version': version,
                                            'target_commit': commit, 'asset': delta})
-    envelope = {'signed': payload, 'signatures': [{'key_id': key_id,
-                'signature': base64.b64encode(private.sign(_canonical(payload))).decode('ascii')}]}
+    envelope = {'signed': payload, 'signatures': [{'key_id': name,
+                'signature': base64.b64encode(signer.sign(_canonical(payload))).decode('ascii')}
+                for name, signer in signers.items()]}
     raw = _canonical(envelope)
     release = load_verified_manifest(raw, trust, now=now, min_sequence=sequence, expected_channel=channel)
     verify_zip(full_package, release.inventory)
@@ -345,6 +364,8 @@ def main(argv=None):
     parser.add_argument('--expires-at')
     parser.add_argument('--signing-key', type=Path)
     parser.add_argument('--key-id')
+    parser.add_argument('--additional-signing-key', action='append', default=[], metavar='KEY_ID=PEM_FILE',
+                        help='co-sign with an additional key already present in --trusted-keys')
     parser.add_argument('--output', type=Path)
     parser.add_argument('--certification', type=Path)
     parser.add_argument('--native-updater', type=Path)
@@ -365,6 +386,12 @@ def main(argv=None):
     missing = [name for name in required if getattr(args, name) is None]
     if missing:
         parser.error('Release output requires: ' + ', '.join('--'+x.replace('_', '-') for x in missing))
+    additional = {}
+    for value in args.additional_signing_key:
+        name, separator, path = value.partition('=')
+        if not separator or not name or not path or name in additional:
+            parser.error('--additional-signing-key requires unique KEY_ID=PEM_FILE entries')
+        additional[name] = Path(path)
     result = package(full_package=args.package, version=args.version, commit=args.commit,
                      channel=args.channel, sequence=args.sequence, expires_at=args.expires_at,
                      signing_key=args.signing_key, key_id=args.key_id, output=args.output,
@@ -373,7 +400,8 @@ def main(argv=None):
                      nvidia_descriptor=args.nvidia_descriptor, native_updater=args.native_updater,
                      native_patch=args.native_patch, release_notes=args.release_notes,
                      base_package_dir=args.base_package_dir, storage_schema_version=args.storage_schema_version,
-                     minimum_updater_version=args.minimum_updater_version)
+                     minimum_updater_version=args.minimum_updater_version,
+                     additional_signing_keys=additional or None)
     print(json.dumps({'version': result.version, 'commit': result.commit, 'output': str(args.output)}))
 
 

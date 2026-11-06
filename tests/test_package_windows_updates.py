@@ -202,6 +202,31 @@ class PackageWindowsUpdatesTests(unittest.TestCase):
             package(**dict(self.args, native_updater=None))
         self.assertFalse(self.args['output'].exists())
 
+    def test_rotation_overlap_signs_one_payload_for_old_and_new_clients(self):
+        other = Ed25519PrivateKey.generate()
+        path = self.root / 'new-private.pem'
+        path.write_bytes(other.private_bytes(serialization.Encoding.PEM,
+            serialization.PrivateFormat.PKCS8, serialization.NoEncryption()))
+        new_public = other.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
+        trust = self.root / 'rotation-public-keys.json'
+        trust.write_text(json.dumps({'old': base64.b64encode(self.public).decode('ascii'),
+                                     'new': base64.b64encode(new_public).decode('ascii')}))
+        release = package(**dict(self.args, key_id='old', trusted_keys=trust, additional_signing_keys={'new': path}))
+        self.assertEqual({sig['key_id'] for sig in json.loads(release.envelope)['signatures']}, {'old', 'new'})
+        for keys in ({'old': self.public}, {'new': new_public}):
+            result = load_verified_manifest(release.envelope, keys, now=self.args['now'], min_sequence=1, expected_channel='stable')
+            self.assertEqual(result.signed_payload, release.signed_payload)
+
+    def test_unreviewed_or_duplicate_additional_signers_produce_no_output(self):
+        trust = self.root / 'public-keys.json'
+        trust.write_text(json.dumps({'key': base64.b64encode(self.public).decode('ascii')}))
+        for kwargs in ({'additional_signing_keys': {'unreviewed': self.key_path}},
+                       {'additional_signing_keys': {'key': self.key_path}, 'trusted_keys': trust},
+                       {'additional_signing_keys': {'unreviewed': self.key_path}, 'trusted_keys': trust}):
+            with self.subTest(kwargs=kwargs), self.assertRaises(ValueError):
+                package(**dict(self.args, **kwargs))
+            self.assertFalse(self.args['output'].exists())
+
 
 if __name__ == '__main__':
     unittest.main()

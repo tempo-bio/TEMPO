@@ -85,6 +85,8 @@ The read-only `scripts/collect_windows_settings_cache.ps1` can inspect an existi
 
 Review source, licensing, privacy findings, and the exact tested installer before public distribution. Keep publication manual and separate from build certification. Distribute the installer from the approved revision rather than rebuilding a different revision under the same filename.
 
+For Velopack, follow the [Windows update release procedure](WINDOWS_UPDATE_RELEASE.md) to retain signed release sets, verify a copy recovered from durable storage, coordinate signing-key transitions and check served artifacts before advertising the feed. This gate is separate from the disabled candidate workflow and requires reviewed full-app/hardware evidence and a Windows signing decision. The retention and publication-check tools perform no uploads or feed writes.
+
 ### Matching source
 
 Link each installer to the matching TEMPO source revision, including the build scripts and Windows dependency lockfile. Keep that source available alongside the installer. Include the generated `dependency-sources` directory with the download: it provides version-specific upstream source links and checksums. The installed application also contains the index under `_internal/third-party-sources`.
