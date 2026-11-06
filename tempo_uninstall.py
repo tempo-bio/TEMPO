@@ -157,7 +157,8 @@ class UninstallTempoDialog(QDialog):
         self._close_poll.stop()
         self._pending_exit = False
         parent = self.parent()
-        if parent is not None and hasattr(parent, 'cancel_close_action'):
+        if (parent is not None and hasattr(parent, 'cancel_close_action')
+                and getattr(parent, '_close_action', None) is self._exit_action):
             parent.cancel_close_action()
         super().done(result)
 
@@ -182,7 +183,11 @@ class UninstallTempoDialog(QDialog):
         self.notice.setText('Waiting for TEMPO to finish its current work before uninstalling. Cancel keeps TEMPO installed.')
         parent = self.parent()
         if parent is not None and hasattr(parent, 'request_close_action'):
-            parent.request_close_action(self._exit_action)
+            try:
+                parent.request_close_action(self._exit_action)
+            except RuntimeError as error:
+                self._reset_pending(str(error))
+                self.notice.setStyleSheet('color: #F2994A; font-size: 11px;')
         elif parent is None or parent.close():
             self._finish_uninstall()
         if self._pending_exit:
@@ -211,6 +216,23 @@ class UninstallTempoDialog(QDialog):
         self._close_poll.stop()
         completed = []
         def prepare():
+            command = None
+            if self.installation.kind == 'velopack':
+                if detect_installation() != self.installation:
+                    raise RuntimeError('The installation changed. Reopen TEMPO and retry.')
+                from tempo_update_coordinator import configured_coordinator
+                try:
+                    coordinator = configured_coordinator()
+                    if coordinator is None:
+                        raise ValueError('The independent uninstall helper is not certified.')
+                    command = coordinator.uninstall_command()
+                except (OSError, ValueError) as error:
+                    raise RuntimeError('Automatic uninstall is unavailable. Use Windows Settings to uninstall TEMPO. '
+                                       + str(error)) from error
+            elif self.uninstaller:
+                if not self.uninstaller.is_file():
+                    raise FileNotFoundError('The Windows uninstaller is missing. Repair the installation and retry.')
+                command = [str(self.uninstaller)]
             prefs, credentials = self._options
             if prefs:
                 try:
@@ -222,18 +244,10 @@ class UninstallTempoDialog(QDialog):
                 from tempo_secure_store import delete_hf_token
                 delete_hf_token()
                 completed.append('Saved token removed.')
-            if self.uninstaller:
-                if not self.uninstaller.is_file():
-                    raise FileNotFoundError('The Windows uninstaller is missing. Repair the installation and retry.')
+            if command is not None:
                 creationflags = 0
                 if sys.platform == 'win32':
                     creationflags = getattr(subprocess, 'DETACHED_PROCESS', 8) | getattr(subprocess, 'CREATE_NEW_PROCESS_GROUP', 512)
-                command = [str(self.uninstaller)]
-                if self.installation.kind == 'velopack':
-                    # Refuse to launch if the installed layout changed during shutdown.
-                    if detect_installation() != self.installation:
-                        raise RuntimeError('The installation changed. Reopen TEMPO and retry.')
-                    command.append('uninstall')
                 subprocess.Popen(command, creationflags=creationflags, close_fds=True)
             return credentials
         try:

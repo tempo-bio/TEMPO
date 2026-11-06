@@ -122,9 +122,9 @@ class Release:
     signed_payload: bytes
     envelope: bytes
     nvidia_descriptor: bytes | None
-    release_notes: str = ''
-    minimum_updater_version: str = '1.2.161'
-    storage_schema_version: int = 1
+    release_notes: str
+    minimum_updater_version: str
+    storage_schema_version: int
 
 
 @dataclass(frozen=True)
@@ -225,8 +225,9 @@ def load_verified_manifest(envelope_bytes, trusted_keys, *, now, min_sequence, e
             raise ValueError('No trusted signature verified.')
         obj = envelope['signed']
         required = {'schema_version', 'package_id', 'version', 'commit', 'architecture', 'channel',
-                    'sequence', 'expires_at', 'full', 'inventory', 'patches'}
-        optional = {'nvidia_descriptor', 'release_notes', 'minimum_updater_version', 'storage_schema_version'}
+                    'sequence', 'expires_at', 'full', 'inventory', 'patches',
+                    'minimum_updater_version', 'storage_schema_version'}
+        optional = {'nvidia_descriptor', 'release_notes'}
         if not isinstance(obj, dict) or not required <= set(obj) or set(obj) - required - optional:
             raise ValueError('Unexpected or missing metadata fields.')
         if type(obj['schema_version']) is not int or obj['schema_version'] != SCHEMA_VERSION or obj['package_id'] != PACKAGE_ID or obj['architecture'] != ARCHITECTURE:
@@ -272,10 +273,10 @@ def load_verified_manifest(envelope_bytes, trusted_keys, *, now, min_sequence, e
         notes = obj.get('release_notes', '')
         if not isinstance(notes, str) or len(notes.encode('utf-8')) > 65536:
             raise ValueError('Invalid or oversized release notes.')
-        minimum = obj.get('minimum_updater_version', '1.2.161')
+        minimum = obj['minimum_updater_version']
         if _version(minimum) > _version('1.2.161'):
             raise ValueError('Release requires a newer updater.')
-        storage = _integer(obj.get('storage_schema_version', 1), 1, 2**31 - 1)
+        storage = _integer(obj['storage_schema_version'], 1, 2**31 - 1)
         return Release(version, commit, obj['channel'], seq, expires, full, inventory, tuple(patches),
                        encoded, envelope_bytes, nvidia, notes, minimum, storage)
     except (UnicodeError, json.JSONDecodeError, TypeError, KeyError, OverflowError) as exc:

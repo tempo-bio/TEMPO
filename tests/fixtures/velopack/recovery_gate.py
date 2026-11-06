@@ -3,13 +3,16 @@ import json
 from pathlib import Path
 import sys
 
-REQUIRED = {'normal', 'before_old_rename', 'after_old_rename', 'restore_failure',
+REQUIRED = {'normal', 'guarded_handoff', 'before_old_rename', 'after_old_rename', 'restore_failure',
             'abrupt_after_old', 'running_process', 'wait_timeout',
-            'independent_repair', 'health_confirmation', 'two_successive_updates'}
+            'independent_repair', 'offline_forward', 'offline_previous',
+            'health_confirmation', 'two_successive_updates'}
 
 
 def main(path):
     report = json.loads(Path(path).read_text(encoding='utf-8'))
+    if report.get('error'):
+        raise SystemExit('Windows recovery fixture reported an error.')
     scenarios = report.get('scenarios', {})
     missing = sorted(name for name in REQUIRED if scenarios.get(name) is not True)
     if missing:

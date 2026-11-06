@@ -30,7 +30,8 @@ def payload(version='1.0.2', commit='a'*40):
     return {'schema_version': 1, 'package_id': m.PACKAGE_ID, 'version': version, 'commit': commit,
             'architecture': 'win-x64', 'channel': 'stable', 'sequence': 1,
             'expires_at': '2027-01-01T00:00:00Z', 'full': asset(version, 'full.zip', size=100),
-            'inventory': [{'path': 'dir/TEMPO.exe', 'size': 3, 'sha256': sha(b'app')}], 'patches': []}
+            'inventory': [{'path': 'dir/TEMPO.exe', 'size': 3, 'sha256': sha(b'app')}], 'patches': [],
+            'minimum_updater_version': '1.2.161', 'storage_schema_version': 1}
 
 
 def signed(obj):
@@ -58,6 +59,13 @@ class UpdateManifestTests(unittest.TestCase):
         obj['expires_at'] = '2025-01-01T00:00:00Z'
         with self.assertRaisesRegex(ValueError, 'Expired'):
             load(obj)
+
+    def test_compatibility_fields_must_be_signed(self):
+        for field in ('minimum_updater_version', 'storage_schema_version'):
+            obj = payload()
+            del obj[field]
+            with self.subTest(field=field), self.assertRaises(ValueError):
+                load(obj)
 
     def test_unsafe_paths(self):
         for path in ['../x', 'C:/x', 'dir\\file', 'dir/CON.txt', 'file:stream', 'x.', '/abs', 'x//y', 'Lpt1/foo']:

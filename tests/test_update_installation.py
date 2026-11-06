@@ -69,6 +69,23 @@ class InstallationTests(unittest.TestCase):
              patch.dict(sys.modules, {'velopack': None}):
             self.assertFalse(installation.initialize_velopack(['TEMPO.exe', '--veloapp-uninstall', '1.0.2']))
 
+    def test_packager_probe_runs_sdk_before_an_installed_layout_exists(self):
+        app = Mock()
+        app.set_auto_apply_on_startup.return_value = app
+        app.set_args.return_value = app
+        with patch.object(sys, 'platform', 'win32'), patch.object(sys, 'frozen', True, create=True), \
+             patch.object(installation, 'detect_installation', return_value=installation.Installation('unknown_frozen')), \
+             patch.dict(sys.modules, {'velopack': SimpleNamespace(App=Mock(return_value=app))}):
+            self.assertTrue(installation.initialize_velopack(['TEMPO.exe', '--veloapp-install', '1.0.2']))
+            app.run.assert_called_once()
+
+    def test_incomplete_current_layout_does_not_bypass_startup_protection(self):
+        with patch.object(sys, 'platform', 'win32'), patch.object(sys, 'frozen', True, create=True), \
+             patch.object(sys, 'executable', str(self.executable)), \
+             patch.object(installation, 'detect_installation', return_value=installation.Installation('unknown_frozen')):
+            with self.assertRaisesRegex(RuntimeError, 'incomplete'):
+                installation.prepare_packaged_startup(['TEMPO.exe'])
+
 
 if __name__ == '__main__':
     unittest.main()

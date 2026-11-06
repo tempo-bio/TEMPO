@@ -2,7 +2,8 @@
 
 The caller must ensure all application and helper processes have exited before
 calling these functions. Recovery never starts an executable or modifies user
-stores. A packaged companion must embed a nonempty trust store before release.
+research stores. Explicit previous-version repair may restore its verified
+NVIDIA selection. A packaged companion must embed a nonempty trust store.
 """
 from __future__ import annotations
 
@@ -12,18 +13,22 @@ import json
 import os
 from pathlib import Path
 import shutil
+import subprocess
 import sys
 import tempfile
+import time
+import uuid
 import zipfile
 from datetime import datetime, timezone
 
-from tempo_update_lock import update_lock
+from tempo_update_lock import application_lock, startup_guard, update_lock
 from tempo_update_manifest import (FileRecord, load_verified_manifest, verify_directory,
                                    verify_zip, validate_path)
 from tempo_update_migration import _safe
 
 # Populated by the separately certified companion build, never from CLI input.
 EMBEDDED_TRUSTED_KEYS = {}
+EMBEDDED_UPDATER_SHA256 = None
 _FORMAT = 'tempo-update-recovery-v1'
 _PREFIX = 'lib/app/'
 
@@ -61,7 +66,7 @@ def _validated_release(data, trusted_keys, channel, *, offline=False):
 
 
 def _schema(release):
-    value = json.loads(release.signed_payload).get('storage_schema_version', 1)
+    value = json.loads(release.signed_payload)['storage_schema_version']
     if type(value) is not int or value < 1:
         raise ValueError('Invalid signed storage schema version.')
     return value
@@ -142,7 +147,17 @@ def arm_recovery(root, external_recovery_dir, base_release, base_package, target
         external.mkdir(parents=True, exist_ok=True)
         record_path = external / 'recovery.json'
         if record_path.exists():
-            raise FileExistsError('A recovery transaction already exists; retain it for repair.')
+            _, previous, _, _, _ = _read_record(record_path, expected_root, packages)
+            (old_base, _), (old_target, _) = _load_pair(external, previous, trusted_keys)
+            if old_base == base and old_target == target and previous['state'] == 'armed':
+                return record_path
+            if previous['state'] != 'confirmed' or (old_target.version, old_target.commit) != (base.version, base.commit):
+                raise FileExistsError('A recovery transaction already exists; retain it for repair.')
+            # Keep previously confirmed offline material outside the next journal.
+            history = _safe(external.with_name('recovery-history'))
+            history.mkdir(exist_ok=True)
+            os.rename(external, history / (old_target.version + '-' + old_target.commit))
+            external.mkdir()
         for name, package in (('base.nupkg', base_package), ('target.nupkg', target_package)):
             _store_copy(package, external / name)
         for name, release in (('base.json', base), ('target.json', target)):
@@ -233,9 +248,19 @@ def recover(record_path, trusted_keys, *, mode, expected_root, packages_dir):
         release, package = (base, base_package) if mode == 'previous' else (target, target_package)
         current, quarantine = _safe(root / 'current'), _safe(root / 'tempo-repair-quarantine')
         if quarantine.exists() and current.exists():
-            _verify_app(current, release)
-            record['state'] = 'recovered_' + mode; _json_write(path, record)
-            return record['state']
+            try:
+                _verify_app(current, release)
+            except ValueError:
+                # An explicit repair in the other direction retains both the
+                # original quarantine and the presently installed payload.
+                quarantine = _safe(root / ('tempo-repair-quarantine-' + uuid.uuid4().hex))
+            else:
+                if mode == 'previous':
+                    from tempo_update_components import restore_previous_runtime
+                    restore_previous_runtime(record, base, target,
+                        runtime_root=packages.parent.parent / 'nvidia-runtime')
+                record['state'] = 'recovered_' + mode; _json_write(path, record)
+                return record['state']
         stage = _stage(root, release, package)
         record['state'] = 'swapping_' + mode; _json_write(path, record)
         if current.exists():
@@ -252,6 +277,10 @@ def recover(record_path, trusted_keys, *, mode, expected_root, packages_dir):
                     pass  # Preserve both paths and journal for independent repair.
             raise
         _verify_app(current, release)
+        if mode == 'previous':
+            from tempo_update_components import restore_previous_runtime
+            restore_previous_runtime(record, base, target,
+                runtime_root=packages.parent.parent / 'nvidia-runtime')
         record['state'] = 'recovered_' + mode; _json_write(path, record)
         return record['state']
 
@@ -271,7 +300,23 @@ def confirm(record_path, trusted_keys, *, running_version, running_commit, expec
         _verify_app(root / 'current', target)
         previous, marker = _safe(root / 'tempo-previous'), _safe(root / 'tempo-update-pending.txt')
         if previous.exists():
-            _verify_app(previous, base)
+            if record['state'] == 'confirming':
+                # A stopped cleanup may already have removed part of this
+                # verified backup. Every remaining byte must still be signed;
+                # unexpected data or links remain a recoverable conflict.
+                remaining = tuple(item for item in _application_inventory(base)
+                                  if _safe(previous / item.path).exists())
+                if remaining:
+                    verify_directory(previous, remaining)
+                else:
+                    for directory, dirs, files in os.walk(previous, followlinks=False,
+                            onerror=lambda error: (_ for _ in ()).throw(error)):
+                        for name in dirs + files:
+                            _safe(Path(directory) / name, missing_ok=False)
+                        if files:
+                            raise ValueError('Unexpected data remains in the previous application backup.')
+            else:
+                _verify_app(previous, base)
         if marker.exists():
             expected = f'TEMPO update pending\nprevious={base.version}\ntarget={target.version}\n'
             if marker.read_text(encoding='utf-8') != expected:
@@ -285,9 +330,92 @@ def confirm(record_path, trusted_keys, *, running_version, running_commit, expec
         return 'confirmed'
 
 
-def main():
+def _wait_for_application(profile):
+    deadline = time.monotonic() + 60
+    with startup_guard(profile):
+        while True:
+            lease = application_lock(profile)
+            try:
+                lease.__enter__()
+                break
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    raise TimeoutError('TEMPO or a worker is still running. Finish its work before updating.')
+                time.sleep(.1)
+    return lease
+
+
+def apply_pending(record_path, trusted_keys, *, expected_root, packages_dir):
+    """Apply only an armed transaction, after all desktop/worker leases settle.
+
+    The separate companion owns the replacement lifetime. It never force-stops
+    an application and does not automatically launch an older application.
+    """
+    path, record, root, external, packages = _read_record(record_path, expected_root, packages_dir)
+    if record['state'] != 'armed':
+        raise ValueError('This transaction requires explicit repair rather than another apply.')
+    lease = _wait_for_application(packages.parent.parent)
+    try:
+        with update_lock(packages):
+            _, record, root, external, packages = _read_record(path, expected_root, packages_dir)
+            if record['state'] != 'armed':
+                raise ValueError('Update transaction changed while waiting for application exit.')
+            (base, _), (target, package) = _load_pair(external, record, trusted_keys)
+            _validated_release(target.envelope, trusted_keys, target.channel)
+            _verify_app(root / 'current', base)
+            updater = _safe(root / 'Update.exe', missing_ok=False)
+            hashes = [item.sha256 for item in _application_inventory(base) if item.path == 'Squirrel.exe']
+            if len(hashes) != 1 or _digest(updater) != hashes[0]:
+                raise ValueError('Native updater does not match the signed installed release.')
+            record['state'] = 'installing'; _json_write(path, record)
+        # Native apply acquires the same package lock. Keep the application
+        # lease, but release the package lock before starting its owner.
+        with open(external / 'native-apply.log', 'ab') as log:
+            result = subprocess.run([str(updater), 'apply', '--norestart',
+                '--package', str(package), '--rootDir', str(root), '--packageDir', str(packages)],
+                stdout=log, stderr=log, check=False)
+        with update_lock(packages):
+            if result.returncode:
+                record['state'] = 'recovery_required'; _json_write(path, record)
+                raise RuntimeError('Installation did not finish. Run TEMPORepair to repair forward or choose the compatible previous version.')
+            _verify_app(root / 'current', target)
+            record['state'] = 'awaiting_confirmation'; _json_write(path, record)
+    finally:
+        lease.__exit__(None, None, None)
+    # Start only the verified target after releasing the application lease.
+    subprocess.Popen([str(root / 'current' / 'TEMPO.exe')], cwd=str(root / 'current'), close_fds=True)
+    return 'awaiting_confirmation'
+
+
+def uninstall_application(root, profile, trusted_keys):
+    """Launch the installation owner only after every TEMPO lease is released."""
+    lease = _wait_for_application(profile)
+    try:
+        from tempo_update_service import read_configuration
+        configuration = read_configuration(_safe(Path(root) / 'current' / '_internal', missing_ok=False))
+        import base64
+        if configuration is None or {
+                key: base64.b64decode(value, validate=True)
+                for key, value in configuration['trusted_keys'].items()} != trusted_keys:
+            raise ValueError('Uninstall trust configuration changed. Use the original installer to repair it.')
+        updater = _safe(Path(root) / 'Update.exe', missing_ok=False)
+        if (not EMBEDDED_UPDATER_SHA256 or _digest(updater) != EMBEDDED_UPDATER_SHA256
+                or configuration['updater_sha256'] != EMBEDDED_UPDATER_SHA256):
+            raise ValueError('The installation owner failed its certified checksum.')
+        result = subprocess.run([str(updater), 'uninstall', '--rootDir', str(root)], check=False)
+        if result.returncode:
+            raise RuntimeError('The uninstaller did not finish. User data was retained; retry from Windows settings.')
+        return 'uninstalled'
+    finally:
+        lease.__exit__(None, None, None)
+
+
+def _main():
     parser = argparse.ArgumentParser(description='Repair an already armed TEMPO installation.')
-    parser.add_argument('--mode', required=True, choices=('forward', 'previous'))
+    parser.add_argument('--mode', default='forward', choices=('apply', 'confirm', 'forward', 'previous', 'uninstall'))
+    parser.add_argument('--version')
+    parser.add_argument('--commit')
+    parser.add_argument('--show-errors', action='store_true', help='show actionable failures when launched by the desktop')
     args = parser.parse_args()
     if sys.platform != 'win32' or not EMBEDDED_TRUSTED_KEYS:
         raise SystemExit('Repair companion has no certified embedded trust keys.')
@@ -295,7 +423,37 @@ def main():
     root = local / 'TEMPO.Bio.Desktop'
     packages = local / 'TEMPO' / 'updates' / 'packages'
     record = local / 'TEMPO' / 'updates' / 'recovery' / 'recovery.json'
-    print(recover(record, EMBEDDED_TRUSTED_KEYS, mode=args.mode, expected_root=root, packages_dir=packages))
+    try:
+        if args.mode == 'uninstall':
+            result = uninstall_application(root, local / 'TEMPO', EMBEDDED_TRUSTED_KEYS)
+        elif args.mode == 'apply':
+            result = apply_pending(record, EMBEDDED_TRUSTED_KEYS, expected_root=root, packages_dir=packages)
+        elif args.mode == 'confirm':
+            result = confirm(record, EMBEDDED_TRUSTED_KEYS, running_version=args.version,
+                             running_commit=args.commit, expected_root=root, packages_dir=packages)
+        else:
+            with startup_guard(local / 'TEMPO'), application_lock(local / 'TEMPO'):
+                result = recover(record, EMBEDDED_TRUSTED_KEYS, mode=args.mode, expected_root=root, packages_dir=packages)
+    except Exception as error:
+        print(str(error), file=sys.stderr, flush=True)
+        if args.show_errors:
+            import ctypes
+            if args.mode == 'uninstall':
+                message = str(error) + '\n\nThe uninstaller did not finish. Use Windows Settings to retry or the original installer to repair the installation.'
+                title = 'TEMPO uninstall needs attention'
+            else:
+                message = (str(error) + '\n\nThe verified packages were retained. Run "' +
+                           sys.executable + '" --mode forward to repair the update, '
+                           'or use --mode previous to request a compatible previous version. '
+                           'Diagnostics: ' + str(record.parent / 'native-apply.log'))
+                title = 'TEMPO update needs attention'
+            ctypes.windll.user32.MessageBoxW(None, message, title, 0x10)
+        raise SystemExit(1) from error
+    print(result)
+
+
+def main():
+    _main()
 
 
 if __name__ == '__main__':

@@ -4,6 +4,9 @@ Reports observed scenarios; it never issues production certification. Windows,
 .NET 8, the locked Python dependencies and a fixture-feature updater are needed.
 """
 import argparse
+import base64
+from datetime import datetime, timezone
+import zipfile
 import hashlib
 import json
 import os
@@ -13,8 +16,41 @@ import subprocess
 import sys
 import tempfile
 import time
+import traceback
 
 HERE = Path(__file__).resolve().parent
+PROJECT = HERE.parents[2]
+
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+import tempo_update_manifest as manifest
+import tempo_update_recovery as recovery
+
+
+def signed_release(package, version, key, keys):
+    inventory = []
+    with zipfile.ZipFile(package) as archive:
+        for item in archive.infolist():
+            if not item.is_dir():
+                data = archive.read(item)
+                inventory.append({'path': item.filename, 'size': len(data),
+                                  'sha256': hashlib.sha256(data).hexdigest()})
+    content = package.read_bytes()
+    obj = {'schema_version': 1, 'package_id': manifest.PACKAGE_ID, 'version': version,
+           'commit': {'1.0.1': 'a', '1.0.2': 'b', '1.0.3': 'c'}[version] * 40,
+           'architecture': 'win-x64', 'channel': 'stable', 'sequence': 1,
+           'expires_at': '2099-01-01T00:00:00Z',
+           'full': {'name': package.name,
+                    'url': 'https://github.com/tempo-bio/TEMPO/releases/download/v' + version + '/' + package.name,
+                    'size': len(content), 'sha256': hashlib.sha256(content).hexdigest()},
+           'inventory': inventory, 'patches': [], 'minimum_updater_version': '1.2.161',
+           'storage_schema_version': 1}
+    signed = json.dumps(obj, sort_keys=True, ensure_ascii=False, separators=(',', ':')).encode()
+    envelope = json.dumps({'signed': obj, 'signatures': [{'key_id': 'fixture',
+        'signature': base64.b64encode(key.sign(signed)).decode()}]}).encode()
+    return manifest.load_verified_manifest(envelope, keys, now=datetime.now(timezone.utc),
+                                           min_sequence=0, expected_channel='stable')
+
 
 
 def run(*args, env=None, expect=0, timeout=180):
@@ -39,26 +75,26 @@ def build_fixture(work, vpk, updater):
         raise RuntimeError('Packager does not contain the candidate fixture updater')
     dist = work / 'dist'
     run(sys.executable, '-m', 'PyInstaller', '--noconfirm', '--clean', '--onedir',
-        '--name', 'TempoFixture', '--distpath', dist, '--workpath', work / 'build',
+        '--name', 'TEMPO', '--paths', PROJECT, '--distpath', dist, '--workpath', work / 'build',
         '--specpath', work, HERE / 'app.py', timeout=300)
-    payload = dist / 'TempoFixture'
+    payload = dist / 'TEMPO'
     releases = work / 'releases'
     releases.mkdir()
     dll = vpk / 'tools' / 'net8.0' / 'any' / 'vpk.dll'
     setup = work / 'base-setup.exe'
-    for version in ('1.0.1', '1.0.2'):
+    for version in ('1.0.1', '1.0.2', '1.0.3'):
         (payload / 'fixture-version.txt').write_text(version, encoding='utf-8')
         run('dotnet', dll, '[win]', 'pack', '--packId', 'TEMPO.RecoveryFixture',
             '--packTitle', 'TEMPO Recovery Fixture', '--packVersion', version,
-            '--packDir', payload, '--mainExe', 'TempoFixture.exe', '--runtime', 'win-x64',
+            '--packDir', payload, '--mainExe', 'TEMPO.exe', '--runtime', 'win-x64',
             '--outputDir', releases, '--noPortable', '--skip-updates', '--yes', '--legacyConsole', timeout=300)
         if version == '1.0.1':
             shutil.copyfile(one('*Setup.exe', releases), setup)
-    return setup, one('*1.0.2-full.nupkg', releases)
+    return setup, {v: one('*' + v + '-full.nupkg', releases) for v in ('1.0.1', '1.0.2', '1.0.3')}
 
 
-def probe(root, expected):
-    result = run(root / 'current' / 'TempoFixture.exe', '--probe')
+def probe(root, expected, env):
+    result = run(root / 'current' / 'TEMPO.exe', '--probe', env=env)
     if expected not in result.stdout.splitlines():
         raise AssertionError(f'Wrong installed version: {result.stdout!r}')
 
@@ -78,22 +114,99 @@ def apply(root, package, *, fault=None, abort=None, wait_pid=None, expect_failur
     return run(*args, env=env, expect=1 if fault or abort or expect_failure else 0)
 
 
-def run_scenarios(work, setup, package):
-    outcomes = {}
-    for scenario in ('normal', 'before_old_rename', 'after_old_rename', 'restore_failure', 'abrupt_after_old', 'running_process', 'wait_timeout'):
-        root = work / ('install-' + scenario)
-        run(setup, '--silent', '--installto', root, timeout=180)
-        probe(root, '1.0.1')
+def run_scenarios(work, setup, packages, repair, releases, keys, outcomes, report):
+    package = packages['1.0.2']
+    for scenario in ('normal', 'guarded_handoff', 'consecutive', 'before_old_rename', 'after_old_rename', 'restore_failure', 'abrupt_after_old', 'running_process', 'wait_timeout'):
+        local = work / ('profile-' + scenario)
+        local.mkdir()
+        root = local / 'TEMPO.Bio.Desktop'
+        lock = local / 'TEMPO' / 'updates' / 'packages'
+        cache = local / 'TEMPO' / 'updates' / 'recovery'
+        env = os.environ.copy()
+        env['LOCALAPPDATA'] = str(local)
+        def arm(base, target):
+            return recovery.arm_recovery(root, cache, releases[base], packages[base],
+                                         releases[target], packages[target], trusted_keys=keys,
+                                         packages_dir=lock, expected_root=root)
+        def repair_mode(mode):
+            run(repair, '--mode', mode, env=env, timeout=180)
+
+        run(setup, '--silent', '--installto', root, env=env, timeout=180)
+        probe(root, '1.0.1', env)
+        if scenario in ('restore_failure', 'abrupt_after_old', 'consecutive', 'guarded_handoff'):
+            arm('1.0.1', '1.0.2')
         if scenario == 'normal':
             apply(root, package)
-            probe(root, '1.0.2')
-            assert (root / 'tempo-previous' / 'TempoFixture.exe').is_file()
+            probe(root, '1.0.2', env)
+            assert (root / 'tempo-previous' / 'TEMPO.exe').is_file()
             assert (root / 'tempo-update-pending.txt').is_file()
+        elif scenario == 'guarded_handoff':
+            ready, stop, launched = (work / 'handoff.ready', work / 'handoff.stop', work / 'handoff.launched')
+            env.update(TEMPO_FIXTURE_READY=str(ready), TEMPO_FIXTURE_STOP=str(stop),
+                       TEMPO_FIXTURE_LAUNCH=str(launched))
+            held = subprocess.Popen([str(root / 'current' / 'TEMPO.exe'), '--hold'], env=env)
+            companion = None
+            try:
+                deadline = time.monotonic() + 30
+                while not ready.exists() and held.poll() is None and time.monotonic() < deadline:
+                    time.sleep(.1)
+                if not ready.exists():
+                    raise RuntimeError('Fixture app failed to acquire its shared lease')
+                companion = subprocess.Popen([str(repair), '--mode', 'apply'], env=env,
+                                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+                # The updater must wait while the live application owns its lease.
+                try:
+                    output, _ = companion.communicate(timeout=3)
+                    raise AssertionError(f'Companion exited while application was active: {output}')
+                except subprocess.TimeoutExpired:
+                    pass
+                if held.poll() is not None or (root / 'current' / 'fixture-version.txt').read_text().strip() != '1.0.1':
+                    raise AssertionError('Active application was stopped or replaced')
+                stop.write_text('exit', encoding='utf-8')
+                if held.wait(timeout=15) != 0:
+                    raise RuntimeError('Fixture app did not exit normally')
+                output, _ = companion.communicate(timeout=180)
+                if companion.returncode:
+                    raise RuntimeError(f'Companion apply failed: {output}')
+                deadline = time.monotonic() + 30
+                while not launched.exists() and time.monotonic() < deadline:
+                    time.sleep(.1)
+                if not launched.exists() or launched.read_text(encoding='utf-8') != '1.0.2':
+                    raise AssertionError('Verified target did not start after companion apply')
+                probe(root, '1.0.2', env)
+                run(repair, '--mode', 'confirm', '--version', '1.0.2', '--commit', 'b' * 40, env=env)
+                if (root / 'tempo-previous').exists() or (root / 'tempo-update-pending.txt').exists():
+                    raise AssertionError('Confirmed update still has native pending state')
+            finally:
+                if held.poll() is None:
+                    stop.write_text('exit', encoding='utf-8')
+                    try:
+                        held.wait(timeout=15)
+                    except subprocess.TimeoutExpired:
+                        held.terminate()
+                        held.wait(timeout=10)
+                if companion is not None and companion.poll() is None:
+                    companion.terminate()
+                    companion.communicate(timeout=10)
+        elif scenario == 'consecutive':
+            apply(root, package)
+            probe(root, '1.0.2', env)  # The frozen application has initialized and answered.
+            run(repair, '--mode', 'confirm', '--version', '1.0.2', '--commit', 'b' * 40, env=env)
+            assert not (root / 'tempo-previous').exists()
+            assert not (root / 'tempo-update-pending.txt').exists()
+            arm('1.0.2', '1.0.3')
+            apply(root, packages['1.0.3'])
+            probe(root, '1.0.3', env)
+            run(repair, '--mode', 'confirm', '--version', '1.0.3', '--commit', 'c' * 40, env=env)
+            assert not (root / 'tempo-previous').exists()
+            assert not (root / 'tempo-update-pending.txt').exists()
+            outcomes['health_confirmation'] = True
+            outcomes['two_successive_updates'] = True
         elif scenario in ('running_process', 'wait_timeout'):
             ready = work / (scenario + '.ready')
-            env = os.environ.copy()
             env['TEMPO_FIXTURE_READY'] = str(ready)
-            held = subprocess.Popen([str(root / 'current' / 'TempoFixture.exe'), '--hold'], env=env)
+            env['TEMPO_FIXTURE_STOP'] = str(work / (scenario + '.stop'))
+            held = subprocess.Popen([str(root / 'current' / 'TEMPO.exe'), '--hold'], env=env)
             try:
                 deadline = time.monotonic() + 30
                 while not ready.is_file() and held.poll() is None and time.monotonic() < deadline:
@@ -105,15 +218,15 @@ def run_scenarios(work, setup, package):
                 if held.poll() is not None:
                     raise AssertionError('Updater terminated the fixture app')
             finally:
-                held.terminate()
-                held.wait(timeout=10)
-            probe(root, '1.0.1')
+                Path(env['TEMPO_FIXTURE_STOP']).write_text('exit', encoding='utf-8')
+                held.wait(timeout=15)
+            probe(root, '1.0.1', env)
         elif scenario == 'before_old_rename':
             apply(root, package, fault='before_old_rename')
-            probe(root, '1.0.1')
+            probe(root, '1.0.1', env)
         elif scenario == 'after_old_rename':
             apply(root, package, fault='after_old_rename')
-            probe(root, '1.0.1')
+            probe(root, '1.0.1', env)
             assert (root / 'tempo-update-pending.txt').is_file()
         else:
             if scenario == 'restore_failure':
@@ -121,15 +234,24 @@ def run_scenarios(work, setup, package):
             else:
                 apply(root, package, abort='after_old_rename')
             assert not (root / 'current').exists()
-            assert (root / 'tempo-previous' / 'TempoFixture.exe').is_file()
+            assert (root / 'tempo-previous' / 'TEMPO.exe').is_file()
             assert (root / 'tempo-update-pending.txt').is_file()
-            # Fixture cleanup only; this is not the required independent repair.
-            (root / 'tempo-previous').rename(root / 'current')
-            probe(root, '1.0.1')
-        outcomes[scenario] = True
+            # Neither a working native updater nor its marker is available to repair.
+            updater_backup = work / (scenario + '-updater.exe')
+            shutil.copyfile(root / 'Update.exe', updater_backup)
+            (root / 'Update.exe').write_bytes(b'broken fixture updater')
+            (root / 'tempo-update-pending.txt').write_text('damaged marker', encoding='utf-8')
+            mode = 'previous' if scenario == 'restore_failure' else 'forward'
+            repair_mode(mode)
+            probe(root, '1.0.1' if mode == 'previous' else '1.0.2', env)
+            outcomes['offline_' + mode] = True
+            shutil.copyfile(updater_backup, root / 'Update.exe')
         # This root and package ID are fixture-only. Uninstall uses the real updater.
-        run(root / 'Update.exe', 'uninstall', '--silent', '--rootDir', root)
-    return outcomes
+        run(root / 'Update.exe', 'uninstall', '--silent', '--rootDir', root, env=env)
+        outcomes[scenario] = True
+        report()
+    outcomes['independent_repair'] = outcomes['restore_failure'] and outcomes['abrupt_after_old']
+    report()
 
 
 def main():
@@ -140,13 +262,38 @@ def main():
     args = parser.parse_args()
     if sys.platform != 'win32':
         raise RuntimeError('The native fixture requires Windows')
-    with tempfile.TemporaryDirectory(prefix='tempo-velopack-fixture-') as tmp:
-        work = Path(tmp)
-        setup, package = build_fixture(work, args.vpk_root.resolve(), args.fixture_updater.resolve())
-        outcomes = run_scenarios(work, setup, package)
+    outcomes = {}
     args.report.parent.mkdir(parents=True, exist_ok=True)
-    args.report.write_text(json.dumps({'scenarios': outcomes, 'certified': False}, indent=2), encoding='utf-8')
-    print('Fixture scenarios passed; production certification still requires independent repair and confirmation tests.')
+    def report(error=None):
+        args.report.write_text(json.dumps({'scenarios': outcomes, 'certified': False,
+                                           'error': error}, indent=2), encoding='utf-8')
+    report()
+    try:
+        with tempfile.TemporaryDirectory(prefix='tempo-velopack-fixture-') as tmp:
+            work = Path(tmp)
+            try:
+                setup, packages = build_fixture(work, args.vpk_root.resolve(), args.fixture_updater.resolve())
+                key = Ed25519PrivateKey.generate()
+                raw = key.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
+                keys = {'fixture': raw}
+                config = work / 'public-keys.json'
+                config.write_text(json.dumps({'fixture': base64.b64encode(raw).decode()}), encoding='utf-8')
+                run(sys.executable, PROJECT / 'scripts' / 'build_update_repair.py', '--public-keys', config,
+                    '--native-updater', args.fixture_updater.resolve(), '--dist', work / 'repair-dist', '--work', work / 'repair-build', timeout=300)
+                repair = work / 'repair-dist' / 'TEMPORepair.exe'
+                releases = {v: signed_release(p, v, key, keys) for v, p in packages.items()}
+                run_scenarios(work, setup, packages, repair, releases, keys, outcomes, report)
+            finally:
+                logs = list(work.glob('profile-*/TEMPO/updates/recovery/native-apply.log'))
+                if logs:
+                    evidence = args.report.parent / 'fixture-native-logs'
+                    evidence.mkdir(parents=True, exist_ok=True)
+                    for log in logs:
+                        shutil.copyfile(log, evidence / (log.relative_to(work).parts[0] + '.log'))
+    except Exception:
+        report(traceback.format_exc())
+        raise
+    print('Fixture scenarios passed; production certification still requires separate evidence.')
 
 
 if __name__ == '__main__':

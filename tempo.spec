@@ -24,9 +24,28 @@ os.environ['YOLO_AUTOINSTALL'] = 'false'
 ultralytics_datas = collect_data_files('ultralytics')
 ultralytics_hidden = collect_submodules('ultralytics')
 
+# An enabled override is accepted only with the same evidence used to stage
+# the independent repair companion. The checked-in default remains disabled.
+update_config = root / 'installer/tempo-updates.json'
+if os.environ.get('TEMPO_UPDATE_CONFIG'):
+    if sys.platform != 'win32':
+        raise RuntimeError('Update candidates must be built on Windows.')
+    from scripts.configure_windows_updates import validate_config
+    update_config = Path(os.environ['TEMPO_UPDATE_CONFIG']).resolve(strict=True)
+    if update_config.name != 'tempo-updates.json':
+        raise RuntimeError('Update configuration must be named tempo-updates.json.')
+    names = ('TEMPO_UPDATE_PUBLIC_KEYS', 'TEMPO_UPDATE_NATIVE_UPDATER',
+             'TEMPO_UPDATE_REPAIR', 'TEMPO_UPDATE_CERTIFICATION', 'TEMPO_UPDATE_SOURCE_COMMIT')
+    if any(not os.environ.get(name) for name in names):
+        raise RuntimeError('Update candidate evidence and tool paths are required.')
+    candidate_data = json.loads(update_config.read_text(encoding='utf-8'))
+    validate_config(update_config, public_keys=os.environ[names[0]], native_updater=os.environ[names[1]],
+                    repair_executable=os.environ[names[2]], certification=os.environ[names[3]],
+                    source_commit=os.environ[names[4]], channel=candidate_data.get('channel'))
+
 # Pre-bundled models and assets
 datas = [
-    (str(root / 'installer/tempo-updates.json'), 'assets'),
+    (str(update_config), 'assets'),
     (str(root / 'assets'), 'assets'),
     (str(root / 'README.md'), '.'),
     (str(root / 'docs/GETTING_STARTED.md'), 'docs'),
@@ -99,6 +118,8 @@ for weight_file in MODEL_FILES.values():
 
 hidden_imports = [
     'tempo_update_installation',
+    'tempo_update_bootstrap',
+    'tempo_update_recovery',
     'tempo_update_storage',
     'tempo_update_migration',
     'tempo_update_manifest',

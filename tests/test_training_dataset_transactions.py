@@ -54,6 +54,17 @@ class TrainingDatasetTransactionTests(unittest.TestCase):
             with self.assertRaises(OSError): build_dataset(self.root)
         self.assert_preserved()
 
+    def test_explicit_collaboration_root_never_writes_to_application(self):
+        application = self.root / 'installed application'
+        application.mkdir()
+        sentinel = application / 'TEMPO.exe'
+        sentinel.write_bytes(b'read-only application payload')
+        before = {p.relative_to(application): p.read_bytes() for p in application.rglob('*') if p.is_file()}
+        output = build_dataset(application, dataset_root=self.root / 'datasets')
+        self.assertEqual(output.parent, self.root / 'datasets')
+        self.assertTrue((output / 'cells' / 'data.yaml').is_file())
+        self.assertEqual({p.relative_to(application): p.read_bytes() for p in application.rglob('*') if p.is_file()}, before)
+
     def test_partial_split_write_or_publication_failure_restores_dataset_and_splits(self):
         write, replace = Path.write_text, os.replace
         failed = []

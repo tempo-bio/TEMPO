@@ -129,24 +129,86 @@ class UninstallDialogTests(unittest.TestCase):
             self.assertIn(str(fake_uninstaller), mock_popen.call_args[0][0])
             parent.close.assert_called_once()
             mock_quit.assert_not_called()
+            from tempo_tasks import pending_task_titles
+            self.assertEqual(pending_task_titles(), [])
 
-    def test_velopack_uninstall_uses_explicit_command_after_shutdown(self):
+    def test_velopack_handoff_waits_for_close_guards(self):
         from tempo_update_installation import Installation
         parent = QMainWindow()
-        parent.close = Mock(return_value=True)
+        parent._close_action = None
+        parent.request_close_action = lambda action: setattr(parent, '_close_action', action)
+        parent.cancel_close_action = lambda: setattr(parent, '_close_action', None)
         updater = Path('/fixture/custom location/Update.exe')
+        helper = '/fixture/profile/tools/TEMPORepair.exe'
         detected = Installation('velopack', updater.parent, updater)
+        coordinator = Mock()
+        coordinator.uninstall_command.return_value = [helper, '--mode', 'uninstall', '--show-errors']
         with patch('tempo_uninstall.detect_installation', return_value=detected), \
              patch('tempo_uninstall.find_windows_uninstaller', return_value=None), \
-             patch.object(Path, 'is_file', return_value=True), \
+             patch('tempo_update_coordinator.configured_coordinator', return_value=coordinator), \
              patch('tempo_uninstall.run_task', side_effect=lambda owner, title, work: work()), \
              patch('subprocess.Popen') as launch:
             dialog = UninstallTempoDialog(parent)
             self.assertEqual(dialog.btn_uninstall.text(), 'Uninstall and Exit')
             dialog.execute_uninstall()
-            self.assertEqual(launch.call_args.args[0], [str(updater), 'uninstall'])
-            parent.close.assert_called_once()
+            launch.assert_not_called()
+            self.assertTrue(parent._close_action())
+            self.assertEqual(launch.call_args.args[0], [helper, '--mode', 'uninstall', '--show-errors'])
+            self.assertNotIn(str(updater), launch.call_args.args[0])
+        close_fixture(dialog); close_fixture(parent)
+
+    def test_velopack_uncertified_installation_fails_before_cleanup(self):
+        from tempo_update_installation import Installation
+        parent = QMainWindow()
+        parent.close = Mock(return_value=True)
+        updater = Path('/fixture/TEMPO/Update.exe')
+        detected = Installation('velopack', updater.parent, updater)
+        with patch('tempo_uninstall.detect_installation', return_value=detected), \
+             patch('tempo_update_coordinator.configured_coordinator', return_value=None), \
+             patch('tempo_uninstall.run_task', side_effect=lambda owner, title, work: work()), \
+             patch('tempo_secure_store.delete_hf_token') as delete, \
+             patch('os.remove') as remove, patch('subprocess.Popen') as launch:
+            dialog = UninstallTempoDialog(parent)
+            dialog.cb_prefs.setChecked(True)
+            dialog.cb_creds.setChecked(True)
+            dialog.execute_uninstall()
+            self.assertIn('Windows Settings', dialog.notice.text())
+            self.assertTrue(dialog.btn_uninstall.isEnabled())
+            delete.assert_not_called(); remove.assert_not_called(); launch.assert_not_called()
         del parent.close
+        close_fixture(dialog); close_fixture(parent)
+
+    def test_velopack_invalid_certification_offers_windows_settings(self):
+        from tempo_update_installation import Installation
+        parent = QMainWindow()
+        parent.close = Mock(return_value=True)
+        updater = Path('/fixture/TEMPO/Update.exe')
+        detected = Installation('velopack', updater.parent, updater)
+        with patch('tempo_uninstall.detect_installation', return_value=detected), \
+             patch('tempo_update_coordinator.configured_coordinator', side_effect=ValueError('Recovery not certified.')), \
+             patch('tempo_uninstall.run_task', side_effect=lambda owner, title, work: work()), \
+             patch('subprocess.Popen') as launch:
+            dialog = UninstallTempoDialog(parent)
+            dialog.execute_uninstall()
+            self.assertIn('Windows Settings', dialog.notice.text())
+            self.assertIn('Recovery not certified', dialog.notice.text())
+            launch.assert_not_called()
+        del parent.close
+        close_fixture(dialog); close_fixture(parent)
+
+    def test_uninstall_does_not_replace_or_cancel_another_pending_action(self):
+        parent = QMainWindow()
+        existing = lambda: None
+        parent._close_action = existing
+        parent.request_close_action = Mock(side_effect=RuntimeError('Another operation is already waiting.'))
+        parent.cancel_close_action = Mock()
+        dialog = UninstallTempoDialog(parent)
+        dialog.execute_uninstall()
+        self.assertIs(parent._close_action, existing)
+        self.assertTrue(dialog.btn_uninstall.isEnabled())
+        self.assertIn('Another operation', dialog.notice.text())
+        dialog.reject()
+        parent.cancel_close_action.assert_not_called()
         close_fixture(dialog); close_fixture(parent)
 
     def test_rejected_close_preserves_data_and_does_not_launch_uninstaller(self):
@@ -167,6 +229,7 @@ class UninstallDialogTests(unittest.TestCase):
     def test_cleanup_failure_is_visible_and_keeps_uninstaller_unlaunched(self):
         parent = QMainWindow()
         with patch('tempo_uninstall.find_windows_uninstaller', return_value=Path('/fixture/unins000.exe')), \
+             patch.object(Path, 'is_file', return_value=True), \
              patch('tempo_secure_store.delete_hf_token', side_effect=RuntimeError('Unlock secure storage and retry.')), \
              patch('subprocess.Popen') as launch:
             dialog = UninstallTempoDialog(parent)

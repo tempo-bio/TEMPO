@@ -6,12 +6,14 @@ from PyQt6.QtCore import QTimer
 from PyQt6.QtWidgets import (QDialog, QHBoxLayout, QLabel, QProgressBar,
                              QPushButton, QTextEdit, QVBoxLayout)
 
-from tempo_tasks import run_background
+from tempo_tasks import run_inline_task
 from tempo_ui import ErrorDetails
 from tempo_update_service import FullDownloadRequired, UpdateCancelled
 
 
 def _size_text(size):
+    if size >= 1024 ** 3:
+        return f'{size / (1024 ** 3):.3f} GB'
     return f'{size / (1024 * 1024):.1f} MB' if size >= 1024 * 1024 else f'{size / 1024:.1f} KB'
 
 
@@ -84,7 +86,8 @@ class PackagedSoftwareUpdateDialog(QDialog):
     def _run(self, action, done):
         self._cancel.clear()
         self._progress_timer.start()
-        self._task = run_background(action, done)
+        self._task = run_inline_task(self, 'Software Update', action, done,
+                                     wait_status=self.status)
 
     def _drain_progress(self):
         latest = None
@@ -123,7 +126,11 @@ class PackagedSoftwareUpdateDialog(QDialog):
         target = plan.target
         notes = target.release_notes or 'Release notes are not available.'
         size = sum(asset.size for asset in plan.assets)
-        self.log_view.setMarkdown(f'## TEMPO {target.version}\n\nUpdate download: {_size_text(size)}\n\n{notes}')
+        component_size = self.coordinator.component_download_size
+        summary = f'Installed: {self.coordinator.version}  \nDownload: {_size_text(size + component_size)}'
+        if component_size:
+            summary += f' (includes {_size_text(component_size)} for NVIDIA support)'
+        self.log_view.setMarkdown(f'## TEMPO {target.version}\n\n{summary}\n\n{notes}')
 
     def check_release(self):
         if self._task is not None:
@@ -159,12 +166,13 @@ class PackagedSoftwareUpdateDialog(QDialog):
                 if full:
                     self.coordinator.use_full_download()
                 self.coordinator.download(cancel=self._cancel.is_set,
-                    progress=lambda received, total: report('Downloading current file', received, total))
+                    progress=lambda received, total: report('Downloading update', received, total))
                 if self._cancel.is_set():
                     raise UpdateCancelled('Update cancelled.')
-                self._mailbox.put(('Preparing NVIDIA support', 0, 0))
-                self.coordinator.prepare_components(
-                    progress=lambda received, total: report('Preparing NVIDIA support', received, total))
+                if self.coordinator.component_required:
+                    self._mailbox.put(('Preparing NVIDIA support', 0, 0))
+                    self.coordinator.prepare_components(
+                        progress=lambda received, total: report('Preparing NVIDIA support', received, total))
                 if self._cancel.is_set():
                     raise UpdateCancelled('Update cancelled.')
                 return True
@@ -180,7 +188,7 @@ class PackagedSoftwareUpdateDialog(QDialog):
         if isinstance(error, UpdateCancelled):
             self._set_state('available')
         elif isinstance(error, FullDownloadRequired):
-            size = _size_text(self.coordinator.plan.target.full.size)
+            size = _size_text(self.coordinator.plan.target.full.size + self.coordinator.component_download_size)
             self.error_details.set_error(f'The incremental update could not be prepared. Download the full update ({size}) or try later.', error)
             self._set_state('full_required')
         elif error:
@@ -204,6 +212,10 @@ class PackagedSoftwareUpdateDialog(QDialog):
         action = getattr(parent, '_close_action', None)
         self._owned_close_action = action if action is not None and action is not prior else None
         if accepted:
+            if parent is not None and not parent.isVisible():
+                self._owned_close_action = None
+                self.accept()
+                return
             self._set_state('waiting')
             self.status.setText('Waiting for TEMPO to finish its current work before restarting.')
             self.status.show()
@@ -217,6 +229,9 @@ class PackagedSoftwareUpdateDialog(QDialog):
         if self._owned_close_action is not None and getattr(parent, '_close_action', None) is not self._owned_close_action:
             self._handoff_timer.stop()
             self._owned_close_action = None
+            if parent is not None and not parent.isVisible():
+                self.accept()
+                return
             self._set_state('ready')
             self.status.setText('Restart cancelled. The update is ready to install.')
             self.status.show()

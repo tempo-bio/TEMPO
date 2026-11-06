@@ -26,8 +26,13 @@ import re
 import shutil
 import stat
 import subprocess
+import sys
 import tempfile
 import zipfile
+
+if __package__ in (None, ''):
+    # Support the documented direct CLI as well as python -m scripts.…
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from tempo_update_manifest import (ARCHITECTURE, MAX_ASSET, MAX_EXPANDED, MAX_FILES,
     MAX_METADATA, PACKAGE_ID, SCHEMA_VERSION, inventory_digest, load_verified_manifest,
@@ -35,6 +40,13 @@ from tempo_update_manifest import (ARCHITECTURE, MAX_ASSET, MAX_EXPANDED, MAX_FI
 
 PIN = Path(__file__).resolve().parents[1] / 'installer' / 'velopack' / 'pin.json'
 HASH = re.compile(r'^[0-9a-f]{64}$')
+COMMIT = re.compile(r'^[0-9a-f]{40}$')
+REQUIRED_CHECKS = frozenset({
+    'real_windows_lifecycle_fixture', 'process_wait_and_no_force_stop',
+    'replacement_failure_restoration', 'interrupted_replacement_independent_repair',
+    'retained_previous_payload_and_confirmation', 'offline_known_good_recovery',
+    'consecutive_updates_and_component_compatibility',
+})
 
 
 def _canonical(value):
@@ -108,8 +120,11 @@ def _certified(pin_path, evidence_path, commit, full_package, native_updater, na
         raise ValueError('Invalid native certification.')
     required = pin.get('required_checks')
     if (pin.get('schema_version') != 1 or pin.get('certification_status') != 'certified'
-            or not isinstance(required, list) or not required or len(required) != len(set(required))
-            or any(not isinstance(x, str) or not x for x in required)):
+            or not isinstance(required, list)
+            or any(not isinstance(x, str) or not x for x in required)
+            or len(required) != len(set(required)) or not REQUIRED_CHECKS.issubset(required)
+            or not isinstance(pin.get('upstream_commit'), str)
+            or not COMMIT.fullmatch(pin['upstream_commit'])):
         raise ValueError('The native updater pin has not been certified.')
     if (evidence.get('schema_version') != 1 or evidence.get('source_commit') != commit
             or evidence.get('upstream_commit') != pin.get('upstream_commit')
@@ -135,6 +150,7 @@ def _certified(pin_path, evidence_path, commit, full_package, native_updater, na
     checks = evidence.get('checks')
     if not isinstance(checks, dict) or any(checks.get(name) is not True for name in required):
         raise ValueError('Native certification is missing required checks.')
+    return evidence['full_package_sha256']
 
 
 def _asset(path, version):
@@ -169,17 +185,19 @@ def package(*, full_package, version, commit, channel, sequence, expires_at, sig
             key_id, output, certification, pin_path=PIN, previous_index=None,
             trusted_keys=None, patch_spec=None, nvidia_descriptor=None, now=None,
             native_updater=None, native_patch=None, release_notes=None,
-            base_package_dir=None, storage_schema_version=1):
+            base_package_dir=None, storage_schema_version=None, minimum_updater_version=None):
     """Build authenticated output after evidence checks; never overwrite differing files."""
     from cryptography.hazmat.primitives import serialization
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
     if not isinstance(key_id, str) or not key_id or len(key_id) > 128:
         raise ValueError('A bounded key ID is required.')
+    if storage_schema_version is None or minimum_updater_version is None:
+        raise ValueError('Explicit storage schema and minimum updater versions are required.')
     if native_patch is None:
         raise ValueError('The certified native patch file is required.')
     if patch_spec is not None and (not previous_index or not base_package_dir or not native_updater):
         raise ValueError('Patch publication requires a previous index, base package directory, and certified native updater.')
-    _certified(pin_path, certification, commit, full_package, native_updater, native_patch)
+    certified_package_hash = _certified(pin_path, certification, commit, full_package, native_updater, native_patch)
     private = serialization.load_pem_private_key(Path(signing_key).read_bytes(), password=None)
     if not isinstance(private, Ed25519PrivateKey):
         raise ValueError('Signing key must be an Ed25519 PEM private key.')
@@ -188,6 +206,7 @@ def package(*, full_package, version, commit, channel, sequence, expires_at, sig
     trust = _trusted(trusted_keys)
     if key_id in trust and trust[key_id] != public:
         raise ValueError('Signing key ID conflicts with trusted key map.')
+    previous_trust = dict(trust)
     trust[key_id] = public
     previous, bases = [], {}
     if previous_index:
@@ -199,7 +218,7 @@ def package(*, full_package, version, commit, channel, sequence, expires_at, sig
         versions, sequences = set(), set()
         for envelope in index['releases']:
             raw = _canonical(envelope)
-            release = load_verified_manifest(raw, trust, now=now, min_sequence=0, expected_channel=channel)
+            release = load_verified_manifest(raw, previous_trust, now=now, min_sequence=0, expected_channel=channel)
             identity = (release.version, release.commit, inventory_digest(release.inventory))
             if identity in bases or release.version in versions or release.sequence in sequences or release.sequence >= sequence:
                 raise ValueError('Previous release is duplicated or not older.')
@@ -215,7 +234,10 @@ def package(*, full_package, version, commit, channel, sequence, expires_at, sig
                'commit': commit, 'architecture': ARCHITECTURE, 'channel': channel,
                'sequence': sequence, 'expires_at': expires_at, 'full': _asset(full_package, version),
                'inventory': inventory_package(full_package), 'patches': [],
-               'storage_schema_version': storage_schema_version}
+               'storage_schema_version': storage_schema_version,
+               'minimum_updater_version': minimum_updater_version}
+    if payload['full']['sha256'] != certified_package_hash:
+        raise ValueError('Full package changed after certification.')
     if release_notes is not None:
         path = Path(release_notes)
         if path.stat().st_size > 65536:
@@ -331,14 +353,15 @@ def main(argv=None):
     parser.add_argument('--trusted-keys', type=Path)
     parser.add_argument('--patch-spec', type=Path)
     parser.add_argument('--base-package-dir', type=Path)
-    parser.add_argument('--storage-schema-version', type=int, default=1)
+    parser.add_argument('--storage-schema-version', type=int)
+    parser.add_argument('--minimum-updater-version')
     parser.add_argument('--nvidia-descriptor', type=Path)
     parser.add_argument('--release-notes', type=Path)
     args = parser.parse_args(argv)
     if args.inventory_only:
         print(json.dumps(inventory_package(args.package), indent=2))
         return
-    required = ('version', 'commit', 'channel', 'sequence', 'expires_at', 'signing_key', 'key_id', 'output', 'certification')
+    required = ('version', 'commit', 'channel', 'sequence', 'expires_at', 'signing_key', 'key_id', 'output', 'certification', 'storage_schema_version', 'minimum_updater_version')
     missing = [name for name in required if getattr(args, name) is None]
     if missing:
         parser.error('Release output requires: ' + ', '.join('--'+x.replace('_', '-') for x in missing))
@@ -349,7 +372,8 @@ def main(argv=None):
                      trusted_keys=args.trusted_keys, patch_spec=args.patch_spec,
                      nvidia_descriptor=args.nvidia_descriptor, native_updater=args.native_updater,
                      native_patch=args.native_patch, release_notes=args.release_notes,
-                     base_package_dir=args.base_package_dir, storage_schema_version=args.storage_schema_version)
+                     base_package_dir=args.base_package_dir, storage_schema_version=args.storage_schema_version,
+                     minimum_updater_version=args.minimum_updater_version)
     print(json.dumps({'version': result.version, 'commit': result.commit, 'output': str(args.output)}))
 
 

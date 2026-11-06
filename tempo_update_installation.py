@@ -2,6 +2,7 @@
 from dataclasses import dataclass
 from pathlib import Path
 import sys
+import atexit
 import xml.etree.ElementTree as ET
 
 PACKAGE_ID = 'TEMPO.Bio.Desktop'
@@ -10,6 +11,7 @@ _LIFECYCLE = frozenset(('--veloapp-install', '--veloapp-updated',
 _WORKERS = frozenset(('--assist-model', '--assist-model-cuda', '--probe-cuda',
                       '--predict-cells', '--predict-nuclei', '--verify-installation',
                       '--verify-probe'))
+_application_lease = None
 
 
 @dataclass(frozen=True)
@@ -60,7 +62,10 @@ def initialize_velopack(argv=None):
     argv, when provided, has the same shape as sys.argv, including executable.
     """
     args = list(sys.argv if argv is None else argv)[1:]
-    if detect_installation().kind != 'velopack' or (args and args[0] in _WORKERS):
+    lifecycle = bool(args and args[0].lower() in _LIFECYCLE)
+    # VPK probes the executable before it has a current/sq.version layout.
+    probe = lifecycle and getattr(sys, 'frozen', False) and sys.platform == 'win32'
+    if (detect_installation().kind != 'velopack' and not probe) or (args and args[0] in _WORKERS):
         return False
     import velopack
     app = velopack.App().set_auto_apply_on_startup(False)
@@ -68,4 +73,31 @@ def initialize_velopack(argv=None):
         app = app.set_args(args)
     app.run()
     # Normally the SDK exits internally; also stop startup in its debug mode.
-    return bool(args and args[0].lower() in _LIFECYCLE)
+    return lifecycle
+
+
+def prepare_packaged_startup(argv=None):
+    """Prepare stable stores before importing services that capture their paths."""
+    global _application_lease
+    args = list(sys.argv if argv is None else argv)[1:]
+    worker = bool(args and args[0] in _WORKERS)
+    installation = detect_installation()
+    # Release-pinned NVIDIA workers are outside the replaceable application
+    # directory. They still own the same lifetime lease as desktop workers.
+    external_worker = worker and getattr(sys, 'frozen', False) and sys.platform == 'win32'
+    if installation.kind != 'velopack' and not external_worker:
+        if (getattr(sys, 'frozen', False) and sys.platform == 'win32'
+                and Path(sys.executable).parent.name.casefold() == 'current'):
+            raise RuntimeError('The TEMPO installation is incomplete. Run the retained TEMPORepair companion before starting it.')
+        return
+    from tempo_config import get_config_dir, get_base_dir
+    from tempo_update_lock import application_lock, startup_guard
+    profile = Path(get_config_dir()).parent
+    with startup_guard(profile):
+        if not worker:
+            from tempo_update_bootstrap import bootstrap_packaged_storage
+            with application_lock(profile):
+                bootstrap_packaged_storage(get_base_dir(), profile)
+        _application_lease = application_lock(profile, shared=True)
+        _application_lease.__enter__()
+    atexit.register(_application_lease.__exit__, None, None, None)

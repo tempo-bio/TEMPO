@@ -3,9 +3,16 @@ import os
 import platform
 
 if __name__ == '__main__':
-    from tempo_update_installation import initialize_velopack
+    from tempo_update_installation import initialize_velopack, prepare_packaged_startup
     if initialize_velopack():
         sys.exit(0)
+    try:
+        prepare_packaged_startup()
+    except Exception as error:
+        if sys.platform == 'win32':
+            import ctypes
+            ctypes.windll.user32.MessageBoxW(None, str(error), 'TEMPO could not start', 0x10)
+        raise
 
 if __name__ == '__main__' and len(sys.argv) > 1 and sys.argv[1] in ('--assist-model', '--assist-model-cuda'):
     if len(sys.argv) != 8:
@@ -7992,6 +7999,20 @@ def run_desktop_application(app):
             views.append(window)
             window.show()
             startup_stage('dashboard.shown')
+            from tempo_update_coordinator import configured_coordinator
+            coordinator = configured_coordinator()
+            if coordinator is not None and (coordinator.service.root / 'recovery' / 'recovery.json').exists():
+                from tempo_tasks import run_inline_task
+                confirmation_status = QLabel('Confirming installed update…', window)
+                window.statusBar().addWidget(confirmation_status)
+                def confirmation_finished(value, error):
+                    window.statusBar().removeWidget(confirmation_status)
+                    confirmation_status.deleteLater()
+                    if error:
+                        window.statusBar().showMessage(str(error))
+                run_inline_task(window, 'Confirming installed update…',
+                    coordinator.confirm_startup, confirmation_finished,
+                    wait_status=confirmation_status)
             finish_diagnostics()
             app.setQuitOnLastWindowClosed(True)
 

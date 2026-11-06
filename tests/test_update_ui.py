@@ -9,11 +9,11 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 
 from PyQt6.QtCore import QPoint, Qt
-from PyQt6.QtGui import QFont
+from PyQt6.QtGui import QFont, QTextCursor
 from PyQt6.QtTest import QTest
 from PyQt6.QtWidgets import QApplication, QMainWindow
 
-from tempo_tasks import dispose_closed_views
+from tempo_tasks import dispose_closed_views, has_active_tasks
 from tempo_ui import install_ui
 from tempo_update_service import FullDownloadRequired, UpdateCancelled
 from tempo_update_ui import PackagedSoftwareUpdateDialog
@@ -36,6 +36,9 @@ def coordinator():
     plan = SimpleNamespace(target=target, assets=(SimpleNamespace(size=4508877),))
     obj = Mock()
     obj.plan = plan
+    obj.version = '1.0.1'
+    obj.component_required = False
+    obj.component_download_size = 0
     obj.check.return_value = plan
     obj.download.return_value = {}
     obj.prepare_components.return_value = None
@@ -72,7 +75,8 @@ class UpdateDialogTests(unittest.TestCase):
         QTest.mouseClick(dialog.btn_update, Qt.MouseButton.LeftButton)
         until(lambda: dialog._state == 'ready')
         service.download.assert_called_once()
-        service.prepare_components.assert_called_once()
+        self.assertIn('Installed: 1.0.1', dialog.log_view.toPlainText())
+        service.prepare_components.assert_not_called()
         QTest.mouseClick(dialog.btn_update, Qt.MouseButton.LeftButton)
         until(lambda: service.request_install.called)
         self.assertEqual(dialog._state, 'ready')
@@ -109,6 +113,7 @@ class UpdateDialogTests(unittest.TestCase):
     def test_only_own_pending_close_action_is_cancelled(self):
         service = coordinator()
         parent = QMainWindow()
+        parent.show()
         self.views.insert(0, parent)
         action = object()
         parent._close_action = None
@@ -129,6 +134,7 @@ class UpdateDialogTests(unittest.TestCase):
     def test_own_pending_close_action_is_cancelled_on_dismissal(self):
         service = coordinator()
         parent = QMainWindow()
+        parent.show()
         self.views.insert(0, parent)
         parent._close_action = None
         parent.cancel_close_action = Mock(side_effect=lambda: setattr(parent, '_close_action', None))
@@ -144,8 +150,84 @@ class UpdateDialogTests(unittest.TestCase):
         dialog.reject()
         parent.cancel_close_action.assert_called_once()
 
+    def test_cancelled_pending_handoff_returns_to_ready(self):
+        service = coordinator()
+        parent = QMainWindow()
+        parent.show()
+        self.views.insert(0, parent)
+        parent._close_action = None
+        def request(owner):
+            owner._close_action = object()
+            return True
+        service.request_install.side_effect = request
+        dialog = self.make(service, parent)
+        dialog.btn_update.click()
+        until(lambda: dialog._state == 'ready')
+        dialog.btn_update.click()
+        until(lambda: dialog._state == 'waiting')
+        parent._close_action = None
+        until(lambda: dialog._state == 'ready')
+        self.assertTrue(parent.isVisible())
+        self.assertTrue(dialog.isVisible())
+        self.assertIn('Restart cancelled', dialog.status.text())
+
+    def test_actual_parent_close_completes_sync_and_delayed_handoffs(self):
+        class GuardedWindow(QMainWindow):
+            def __init__(self, delayed):
+                super().__init__()
+                self._close_action = None
+                self.allowed = not delayed
+                self.handoffs = 0
+
+            def request_close_action(self, action):
+                self._close_action = action
+                return self.close()
+
+            def closeEvent(self, event):
+                if not self.allowed:
+                    event.ignore()
+                    return
+                action = self._close_action
+                self._close_action = None
+                if action is not None and not action():
+                    event.ignore()
+                    return
+                super().closeEvent(event)
+
+        for delayed in (False, True):
+            with self.subTest(delayed=delayed):
+                service = coordinator()
+                parent = GuardedWindow(delayed)
+                parent.show()
+                self.views.insert(0, parent)
+                def request(owner):
+                    def handoff():
+                        owner.handoffs += 1
+                        return True
+                    owner.request_close_action(handoff)
+                    return owner._close_action is handoff or not owner.isVisible()
+                service.request_install.side_effect = request
+                dialog = self.make(service, parent)
+                dialog.btn_update.click()
+                until(lambda: dialog._state == 'ready')
+                dialog.btn_update.click()
+                if delayed:
+                    until(lambda: dialog._state == 'waiting')
+                    self.assertTrue(parent.isVisible())
+                    self.assertTrue(dialog.isVisible())
+                    parent.allowed = True
+                    parent.close()
+                until(lambda: not parent.isVisible() and not dialog.isVisible())
+                self.assertEqual(parent.handoffs, 1)
+                self.assertFalse(has_active_tasks())
+                self.views.remove(dialog)
+                self.views.remove(parent)
+                dispose_closed_views(dialog, parent)
+
     def test_nvidia_preparation_finishes_before_dialog_closes(self):
         service = coordinator()
+        service.component_required = True
+        service.component_download_size = 3 * 1024 ** 3
         started, release = threading.Event(), threading.Event()
         def prepare(*, progress):
             progress(1, 4)
@@ -153,10 +235,16 @@ class UpdateDialogTests(unittest.TestCase):
             release.wait(3)
         service.prepare_components.side_effect = prepare
         dialog = self.make(service)
+        self.assertIn('3.000 GB for NVIDIA support', dialog.log_view.toPlainText())
+        self.assertIn('Download: 3.004 GB', dialog.log_view.toPlainText())
+        output = os.environ.get('TEMPO_UPDATE_PREVIEW_DIR')
+        if output:
+            dialog.grab().save(str(Path(output) / 'ordinary-nvidia-available.png'))
         dialog.btn_update.click()
         until(started.is_set)
         until(lambda: dialog._component_preparing)
         self.assertFalse(dialog.btn_update.isEnabled())
+        self.assertTrue(has_active_tasks())
         dialog.close()
         self.assertTrue(dialog.isVisible())
         self.assertIn('Finishing NVIDIA', dialog.status.text())
@@ -164,11 +252,49 @@ class UpdateDialogTests(unittest.TestCase):
         until(lambda: not dialog.isVisible())
         service.request_install.assert_not_called()
 
+    def test_long_release_notes_scroll_without_hiding_actions(self):
+        APP.setFont(QFont('Arial', 18))
+        service = coordinator()
+        service.component_required = True
+        service.component_download_size = 3 * 1024 ** 3
+        sections = [
+            ('Analysis', 'Compare recordings with improved views of contraction timing and amplitude.'),
+            ('Recording', 'Review capture settings and retain your selected configuration between sessions.'),
+            ('Collaboration', 'Keep drafts and pending submissions available while work is interrupted.'),
+            ('Reliability', 'Recover interrupted preparation and review actionable errors before retrying.'),
+            ('Compatibility', 'Existing recordings and user-selected data locations remain available.'),
+            ('More details', 'See the user guide for complete instructions and troubleshooting.'),
+        ]
+        service.plan.target.release_notes = '\n\n'.join(
+            f'### {heading}\n\n{text}' for heading, text in sections)
+        dialog = self.make(service)
+        dialog.resize(620, 420)
+        APP.processEvents()
+        self.assertIn('Download: 3.004 GB', dialog.log_view.toPlainText())
+        scrollbar = dialog.log_view.verticalScrollBar()
+        self.assertGreater(scrollbar.maximum(), 0)
+        output = os.environ.get('TEMPO_UPDATE_PREVIEW_DIR')
+        if output:
+            Path(output).mkdir(parents=True, exist_ok=True)
+            dialog.grab().save(str(Path(output) / 'large-font-long-start.png'))
+        scrollbar.setValue(scrollbar.maximum())
+        APP.processEvents()
+        self.assertEqual(scrollbar.value(), scrollbar.maximum())
+        cursor = QTextCursor(dialog.log_view.document())
+        cursor.movePosition(QTextCursor.MoveOperation.End)
+        self.assertTrue(dialog.log_view.viewport().rect().contains(dialog.log_view.cursorRect(cursor).bottomRight()))
+        for button in (dialog.retry, dialog.btn_update):
+            self.assertTrue(button.isVisible())
+            self.assertTrue(dialog.rect().contains(button.mapTo(dialog, button.rect().bottomRight())))
+        if output:
+            dialog.grab().save(str(Path(output) / 'large-font-long-end.png'))
+
     def test_real_state_renders_and_controls_fit(self):
         output = os.environ.get('TEMPO_UPDATE_PREVIEW_DIR')
         if output:
             Path(output).mkdir(parents=True, exist_ok=True)
         for size, points, label in (((620, 420), 12, 'ordinary'), ((520, 360), 12, 'small'),
+                                    ((1000, 600), 12, 'wide'),
                                     ((620, 420), 18, 'large-font')):
             APP.setFont(QFont('Arial', points))
             for state in ('available', 'downloading', 'ready', 'error'):
@@ -188,6 +314,8 @@ class UpdateDialogTests(unittest.TestCase):
                         if state == 'downloading':
                             until(started.is_set)
                             until(lambda: dialog.progress.maximum() == 100)
+                            self.assertEqual(dialog.progress.value(), 42)
+                            self.assertEqual(dialog.progress.format(), 'Downloading update: %p%')
                         else:
                             until(lambda: dialog._state == state)
                     QTest.qWait(50)

@@ -8,23 +8,27 @@ jobs:
     runs-on: windows-2022
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           path: tempo
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: velopack/velopack
           ref: 92d6a1c91716729d449034df5c50307dcce39493
           path: velopack
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: '3.12'
+          python-version: '3.13'
           architecture: x64
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@d4c94342e560b34958eacfc5d055d21461ed1c5d # v4.3.1
         with:
           dotnet-version: '8.0.413'
       - name: Install hash-locked fixture dependencies
-        run: python -m pip install --require-hashes -r tempo/tests/fixtures/velopack/requirements-windows.lock
+        shell: pwsh
+        run: |
+          python -m venv .venv_fixture
+          & .venv_fixture/Scripts/python.exe -m pip install --require-hashes --no-deps -r tempo/tests/fixtures/velopack/requirements-windows.lock
+          Add-Content $env:GITHUB_PATH "$pwd/.venv_fixture/Scripts"
       - name: Download pinned packager
         shell: pwsh
         run: |
@@ -41,6 +45,18 @@ jobs:
         working-directory: velopack
         run: cargo build --locked --release -p velopack_bins --bin update --features windows,tempo-fixture-faults --target x86_64-pc-windows-msvc --target-dir ../fixture-target
       - name: Run isolated native fixture
+        env:
+          PYTHONPATH: tempo
         run: python tempo/tests/fixtures/velopack/run_fixture.py --vpk-root vpk --fixture-updater fixture-target/x86_64-pc-windows-msvc/release/update.exe --report fixture-results.json
       - name: Require complete native recovery evidence
         run: python tempo/tests/fixtures/velopack/recovery_gate.py fixture-results.json
+      - name: Retain fixture evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: velopack-native-candidate-evidence
+          path: |
+            fixture-results.json
+            fixture-native-logs/
+            production-target/x86_64-pc-windows-msvc/release/update.exe
+          if-no-files-found: warn

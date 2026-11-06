@@ -3,11 +3,13 @@ from __future__ import annotations
 
 import base64
 import json
+import hashlib
+import os
 from pathlib import Path
+import subprocess
 import sys
 
-from tempo_update_manifest import TransferPlan
-from tempo_update_service import UpdateService, read_configuration
+from tempo_update_service import UpdateService, read_configuration, _safe_directory
 
 
 def configured_coordinator():
@@ -39,15 +41,22 @@ class PackagedUpdateCoordinator:
         self.base_release = None
         self.base_package = None
         self.nvidia_receipt = None
+        self.component_required = False
+        self.component_download_size = 0
+        self.repair_executable = None
+        self._handoff_error = None
+        self._full_fallback = False
 
     def check(self, *, cancel=None):
+        self._full_fallback = False
         releases = self.service.check(cancel=cancel)
         self.base_release = next((r for r in releases if
                                   (r.version, r.commit) == (self.version, self.commit)), None)
         self.base_package = None
         if self.base_release:
             candidates = (self.service.root / 'packages' / self.base_release.full.name,
-                          self.installation.root / 'packages' / self.base_release.full.name)
+                          self.installation.root / 'packages' / self.base_release.full.name,
+                          self.service.root / 'recovery' / 'target.nupkg')
             self.base_package = next((p for p in candidates if p.is_file()), None)
         try:
             self.plan = self.service.plan(installed_version=self.version,
@@ -58,27 +67,37 @@ class PackagedUpdateCoordinator:
             if str(exc) != 'Automatic downgrade or reinstall is not permitted.':
                 raise
             self.plan = None
+        from tempo_nvidia_runtime import active_executable
+        self.component_required = self.plan is not None and active_executable() is not None
+        self.component_download_size = 0
+        if self.component_required:
+            encoded = self.plan.target.nvidia_descriptor
+            if encoded is None:
+                raise ValueError('This update has no matching NVIDIA support. Defer it until a compatible release is available.')
+            self.component_download_size = json.loads(encoded)['archive_size']
         return self.plan
 
     def use_full_download(self):
         """Issue a fresh authenticated full plan after explicit fallback acceptance."""
         self.plan = self.service.plan(installed_version=self.version,
             installed_commit=self.commit, base_release=None, base_package=None)
+        self._full_fallback = True
         return self.plan
 
     def download(self, *, cancel=None, progress=lambda received, total: None):
         if self.plan is None:
             raise ValueError('Check for an available update first.')
         configuration = self.configuration
-        return self.service.prepare(self.plan, base_release=self.base_release,
-            base_package=self.base_package, patcher=self.installation.uninstaller,
+        return self.service.prepare(self.plan,
+            base_release=None if self._full_fallback else self.base_release,
+            base_package=None if self._full_fallback else self.base_package,
+            patcher=self.installation.uninstaller,
             patcher_sha256=configuration.get('updater_sha256'), cancel=cancel,
             progress=progress)
 
     def prepare_components(self, *, progress=lambda received, total: None):
         """Stage a target worker without selecting it for the running application."""
-        from tempo_nvidia_runtime import active_executable
-        if active_executable() is None:
+        if not self.component_required:
             return None
         release, _ = self.service.verified_prepared()
         encoded = getattr(release, 'nvidia_descriptor', None)
@@ -92,6 +111,42 @@ class PackagedUpdateCoordinator:
                      json.dumps(self.nvidia_receipt, allow_nan=False).encode('utf-8'))
         return self.nvidia_receipt
 
+    def confirm_startup(self):
+        """Acknowledge a rendered desktop, after selecting its verified worker."""
+        record_path = self.service.root / 'recovery' / 'recovery.json'
+        if not record_path.exists():
+            return False
+        from tempo_update_recovery import _read_record, _load_pair
+        _, record, root, external, _ = _read_record(record_path,
+            self.installation.root, self.service.root / 'packages')
+        if record['state'] == 'confirmed':
+            return False
+        (_, _), (target, _) = _load_pair(external, record, self.service.keys)
+        if (self.version, self.commit) != (target.version, target.commit):
+            raise ValueError('The running application differs from the pending update. Use explicit repair before updating again.')
+        if record['nvidia_marker'] is not None:
+            path = _safe_directory(self.service.root / 'prepared-nvidia.json')
+            if path.stat().st_size > 65536:
+                raise ValueError('Invalid staged NVIDIA receipt.')
+            receipt = json.loads(path.read_bytes())
+            if receipt.get('previous_marker') != record['nvidia_marker'] or target.nvidia_descriptor is None:
+                raise ValueError('NVIDIA selection differs from the pending update.')
+            from tempo_nvidia_runtime import active_executable
+            if active_executable() is None:
+                from tempo_nvidia_setup import activate_nvidia_runtime
+                activate_nvidia_runtime(receipt, json.loads(target.nvidia_descriptor),
+                    target_version=target.version, target_commit=target.commit)
+                if active_executable() is None:
+                    raise ValueError('The matching NVIDIA worker could not be selected. Recovery confirmation is deferred.')
+        self._verify_native_tools()
+        result = subprocess.run([str(self.repair_executable), '--mode', 'confirm',
+            '--version', self.version, '--commit', self.commit], check=False,
+            timeout=120, capture_output=True, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+        if result.returncode:
+            raise RuntimeError('The update is running, but recovery confirmation failed. Retained repair material is still available. ' +
+                               result.stderr.decode('utf-8', errors='replace')[-2000:])
+        return True
+
     def installation_consequences(self):
         """Return compatibility blockers before requesting application shutdown."""
         from tempo_update_migration import discover_addons
@@ -101,5 +156,66 @@ class PackagedUpdateCoordinator:
             raise ValueError('An optional package modifies this installation. Remove it using its verified removal procedure or defer the update.')
         if self.base_release is None or self.base_package is None:
             raise ValueError('A verified offline recovery package is required before installation. Repair this installation before updating.')
-        return self.service.verified_prepared()
+        target, package = self.service.verified_prepared()
+        if self.component_required and self.nvidia_receipt is None:
+            raise ValueError('Prepare matching NVIDIA support before installing this update.')
+        # Companions use the reserved per-user identity, never a record-supplied root.
+        expected_root = Path(os.environ['LOCALAPPDATA']) / 'TEMPO.Bio.Desktop'
+        if self.installation.root != expected_root:
+            raise ValueError('Automatic updates require the supported per-user installation location.')
+        self._verify_native_tools()
+        from tempo_update_recovery import arm_recovery
+        self.recovery_record = arm_recovery(self.installation.root,
+            self.service.root / 'recovery', self.base_release, self.base_package,
+            target, package, trusted_keys=self.service.keys,
+            packages_dir=self.service.root / 'packages', expected_root=expected_root,
+            nvidia_marker=(self.nvidia_receipt or {}).get('previous_marker'))
+        return target, package
+
+    def _verify_native_tools(self):
+        from tempo_update_recovery import _store_copy
+        updater = _safe_directory(self.installation.uninstaller)
+        repair = _safe_directory(self.installation.root / 'current' / 'TEMPORepair.exe')
+        for path, field in ((updater, 'updater_sha256'), (repair, 'repair_sha256')):
+            if hashlib.sha256(path.read_bytes()).hexdigest() != self.configuration.get(field):
+                raise ValueError('The installed update or repair tool failed certification verification.')
+        tools = _safe_directory(self.service.root / 'tools')
+        tools.mkdir(parents=True, exist_ok=True)
+        self.repair_executable = tools / ('TEMPORepair-' + self.configuration['repair_sha256'] + '.exe')
+        _store_copy(repair, self.repair_executable)
+
+    def request_install(self, parent):
+        """Queue a handoff through the desktop's existing save/hardware guards."""
+        if parent is None or not hasattr(parent, 'request_close_action'):
+            raise ValueError('Open this update from the TEMPO desktop before installing.')
+        if not getattr(self, 'recovery_record', None) or self.repair_executable is None:
+            raise ValueError('Prepare verified offline recovery before requesting restart.')
+        if getattr(parent, '_close_action', None) is not None:
+            raise RuntimeError('Another operation is already waiting for TEMPO to close.')
+
+        def handoff():
+            try:
+                self._verify_native_tools()
+                # The independent companion waits for the desktop/worker lease;
+                # it reauthenticates the journal and payloads after actual exit.
+                subprocess.Popen([str(self.repair_executable), '--mode', 'apply', '--show-errors'],
+                    cwd=str(self.service.root), close_fds=True,
+                    creationflags=(getattr(subprocess, 'CREATE_NEW_PROCESS_GROUP', 0) |
+                                   getattr(subprocess, 'CREATE_NO_WINDOW', 0)))
+                return True
+            except Exception as exc:
+                self._handoff_error = exc
+                parent.statusBar().showMessage('Could not start the update. The current application is retained. ' + str(exc))
+                return False
+        parent.request_close_action(handoff)
+        # Qt close() returns False while asynchronous guards are pending.
+        return self._handoff_error is None and (
+            getattr(parent, '_close_action', None) is handoff or not parent.isVisible())
+
+    def uninstall_command(self):
+        """Prepare an independent owner that waits for actual application exit."""
+        if self.installation.root != Path(os.environ['LOCALAPPDATA']) / 'TEMPO.Bio.Desktop':
+            raise ValueError('The installation is outside the supported per-user location.')
+        self._verify_native_tools()
+        return [str(self.repair_executable), '--mode', 'uninstall', '--show-errors']
 

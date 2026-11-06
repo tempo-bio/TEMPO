@@ -7,7 +7,6 @@ existing manual-installer route.
 from __future__ import annotations
 
 import base64
-from dataclasses import asdict
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -80,6 +79,8 @@ def read_configuration(bundle_root):
     if path.stat().st_size > 65536:
         raise ValueError('Update configuration is oversized.')
     value = _json(path.read_bytes())
+    if not isinstance(value, dict):
+        raise ValueError('Invalid update configuration.')
     if value.get('schema_version') != 1 or value.get('enabled') is not True:
         return None
     if value.get('package_id') != 'TEMPO.Bio.Desktop' or value.get('channel') not in FEEDS:
@@ -93,6 +94,10 @@ def read_configuration(bundle_root):
     # Enabling a download UI is not permission to use an uncertified installer.
     if value.get('native_recovery_certified') is not True:
         raise ValueError('Windows update recovery has not been certified for this build.')
+    import re
+    for field in ('updater_sha256', 'repair_sha256'):
+        if not isinstance(value.get(field), str) or not re.fullmatch('[0-9a-f]{64}', value[field]):
+            raise ValueError('Certified native updater and repair identities are required.')
     return value
 
 
@@ -283,7 +288,11 @@ class UpdateService:
                 if shutil.disk_usage(self.root).free < required:
                     raise OSError('Insufficient free space to prepare and recover this update.')
                 self._state('downloading', version=plan.target.version, commit=plan.target.commit)
-                files = [self._download(a, cancel=cancel, progress=progress) for a in plan.assets]
+                total, completed, files = sum(a.size for a in plan.assets), 0, []
+                for asset in plan.assets:
+                    files.append(self._download(asset, cancel=cancel,
+                        progress=lambda received, _size, offset=completed: progress(offset + received, total)))
+                    completed += asset.size
                 self._state('verifying', version=plan.target.version, commit=plan.target.commit)
                 if plan.kind == 'patch':
                     output = None
