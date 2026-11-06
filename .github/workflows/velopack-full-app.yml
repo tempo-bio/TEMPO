@@ -1,0 +1,90 @@
+name: Replay full TEMPO Velopack acceptance
+
+on:
+  workflow_call:
+    inputs:
+      source_run_id:
+        required: true
+        type: string
+  workflow_dispatch:
+    inputs:
+      source_run_id:
+        description: 'Completed Windows release-build run containing the original candidate payload'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  verify:
+    runs-on: windows-2025
+    timeout-minutes: 100
+    steps:
+      # Only test scripts are checked out; no application source/runtime setup.
+      - name: Check out reviewed verification scripts
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: fixture
+          sparse-checkout: |
+            scripts/verify_velopack_install.ps1
+            scripts/windows_installer_helpers.ps1
+          sparse-checkout-cone-mode: false
+      - name: Validate original artifact run and parse PowerShell fixtures
+        env:
+          SOURCE_RUN_ID: ${{ inputs.source_run_id }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if ($env:SOURCE_RUN_ID -notmatch '^[1-9][0-9]{0,19}$') { throw 'Invalid source run ID' }
+          $headers = @{Authorization="Bearer $env:GH_TOKEN";Accept='application/vnd.github+json'}
+          $run = Invoke-RestMethod -Uri "https://api.github.com/repos/$env:GITHUB_REPOSITORY/actions/runs/$env:SOURCE_RUN_ID" -Headers $headers
+          if ($run.status -ne 'completed' -or $run.path -ne '.github/workflows/release-windows.yml' -or
+              $run.repository.full_name -ne $env:GITHUB_REPOSITORY -or $run.head_branch -ne 'v1.0.2-dev' -or
+              $run.head_repository.full_name -ne $env:GITHUB_REPOSITORY -or $run.head_sha -notmatch '^[0-9a-f]{40}$') {
+              throw 'The source must be a completed Windows release build from this development branch'
+          }
+          Add-Content $env:GITHUB_ENV "CANDIDATE_SOURCE_SHA=$($run.head_sha)"
+          New-Item -ItemType Directory evidence | Out-Null
+          @{source_run_id=$env:SOURCE_RUN_ID;source_commit=$run.head_sha;fixture_commit=$env:GITHUB_SHA} |
+              ConvertTo-Json | Set-Content evidence/replay-origin.json -Encoding utf8NoBOM
+          foreach ($file in Get-ChildItem fixture/scripts/*.ps1) {
+              $tokens=$null; $errors=$null
+              $null=[Management.Automation.Language.Parser]::ParseFile($file.FullName,[ref]$tokens,[ref]$errors)
+              if ($errors.Count) { throw ($errors | Out-String) }
+          }
+      - name: Download original immutable full application candidates
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: Windows_velopack_candidate_payload
+          path: payload
+          run-id: ${{ inputs.source_run_id }}
+          github-token: ${{ github.token }}
+      - name: Exercise installed full application and independent recovery
+        id: matrix
+        run: ./fixture/scripts/verify_velopack_install.ps1 -Mode matrix -Payload payload -Evidence evidence -SourceCommit $env:CANDIDATE_SOURCE_SHA
+      - name: Exercise published legacy CPU installer migration and component refusal
+        if: ${{ !cancelled() && steps.matrix.outcome == 'success' }}
+        run: ./fixture/scripts/verify_velopack_install.ps1 -Mode migration -Payload payload -Evidence evidence -SourceCommit $env:CANDIDATE_SOURCE_SHA
+      - name: Uninstall candidate and check retained state
+        if: ${{ !cancelled() && steps.matrix.outcome != 'skipped' }}
+        run: ./fixture/scripts/verify_velopack_install.ps1 -Mode uninstall -Payload payload -Evidence evidence -SourceCommit $env:CANDIDATE_SOURCE_SHA
+      - name: Require complete evidence for the exact candidate artifacts
+        if: ${{ !cancelled() }}
+        run: ./fixture/scripts/verify_velopack_install.ps1 -Mode gate -Payload payload -Evidence evidence -SourceCommit $env:CANDIDATE_SOURCE_SHA
+      - name: Retain original identity and replay evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: Windows_velopack_replay_evidence
+          retention-days: 7
+          path: |
+            payload/candidate-contract.json
+            fixture/scripts/*.ps1
+            evidence/*-result.json
+            evidence/*-verification.json
+            evidence/*-shell-folders.json
+            evidence/replay-origin.json
+            evidence/preserved-state.json
+            evidence/**/*.log
+          if-no-files-found: error

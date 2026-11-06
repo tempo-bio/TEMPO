@@ -42,6 +42,8 @@ The migration mode downloads the exact published v1.0.1 CPU installer, verifies 
 
 Native adoption, distinct-release and dependency-changing transactions, signed feed downloads/fallback, NVIDIA/add-on migration, user-state interpretation, real interruption boundaries and physical hardware acceptance remain separate gates. Neither a successful candidate job nor its `release_certified: false` report changes the tracked native pin or enables updates. Actions artifacts last seven days; they are temporary test transport, not durable release/recovery storage.
 
+To repeat the full-app matrix after a verification-script correction, dispatch `velopack-adoption.yml` on the reviewed development revision with `full_app_source_run_id` set to the completed Windows build run. Its `velopack-full-app.yml` job downloads that run's original immutable candidate payload and uses only the checked-out verification scripts, without installing application dependencies or rebuilding packages. Evidence records both source and fixture commits plus the verifier hash; a replay does not certify the newer application's source. The fixture creates and resolves Windows shell folders in a fresh child after isolating its profile, checks actual shortcut targets, and retains native setup/update logs. Omit the replay input for normal native fixture validation.
+
 ## Prepare a candidate bundle
 
 Use an isolated release environment at the exact source revision being certified. Generate a JSON object mapping key IDs to base64-encoded raw Ed25519 **public** keys; never put a private signing key in this file. Build the companion with those same keys:

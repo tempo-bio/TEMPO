@@ -1,7 +1,8 @@
 param(
     [Parameter(Mandatory)][ValidateSet('matrix','migration','uninstall','gate')][string]$Mode,
     [Parameter(Mandatory)][string]$Payload,
-    [Parameter(Mandatory)][string]$Evidence
+    [Parameter(Mandatory)][string]$Evidence,
+    [ValidatePattern('^[0-9a-f]{40}$')][string]$SourceCommit = $env:GITHUB_SHA
 )
 $ErrorActionPreference = 'Stop'
 New-Item -ItemType Directory -Force $Evidence | Out-Null
@@ -10,14 +11,11 @@ $Evidence = (Resolve-Path $Evidence).Path
 . (Join-Path $PSScriptRoot 'windows_installer_helpers.ps1')
 $contract = Get-Content (Join-Path $Payload 'candidate-contract.json') -Raw | ConvertFrom-Json
 $verification = Get-Content (Join-Path $Payload 'verification-contract.json') -Raw | ConvertFrom-Json
-if ($contract.schema_version -ne 1 -or $contract.source_commit -ne $env:GITHUB_SHA -or
-    $verification.commit -ne $env:GITHUB_SHA -or $contract.release_certified -ne $false -or
+if ($contract.schema_version -ne 1 -or $contract.source_commit -ne $SourceCommit -or
+    $verification.commit -ne $SourceCommit -or $contract.release_certified -ne $false -or
     $contract.purpose -ne 'isolated-full-app-acceptance' -or @($contract.revisions).Count -ne 3) {
     throw 'Candidate identity/verification contract mismatch'
 }
-$desktop = [Environment]::GetFolderPath('Desktop')
-$startMenu = [Environment]::GetFolderPath('StartMenu')
-$links = @((Join-Path $desktop "$($contract.title).lnk"), (Join-Path $startMenu "Programs\$($contract.title).lnk"))
 $registry = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\$($contract.package_id)"
 
 # The app and all helpers run with disposable state, no checkout or external runtime.
@@ -27,6 +25,27 @@ foreach ($entry in @{LOCALAPPDATA='AppData\Local';APPDATA='AppData\Roaming';USER
     New-Item -ItemType Directory -Force $directory | Out-Null
     [Environment]::SetEnvironmentVariable($entry.Key,$directory,'Process')
 }
+# Resolve/create shell folders in a fresh child with the installer's environment.
+# The parent may have cached paths before USERPROFILE/APPDATA were isolated;
+# Velopack's known-folder lookup also requires the directories to exist.
+$folderProbe = @'
+$ErrorActionPreference = 'Stop'
+@{
+    desktop = [Environment]::GetFolderPath('DesktopDirectory', 'Create')
+    programs = [Environment]::GetFolderPath('Programs', 'Create')
+} | ConvertTo-Json -Compress
+'@
+$encodedProbe = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($folderProbe))
+$folderJson = & (Join-Path $PSHOME 'pwsh.exe') -NoLogo -NoProfile -NonInteractive -EncodedCommand $encodedProbe
+if ($LASTEXITCODE -ne 0) { throw 'Isolated shell-folder preparation failed' }
+$shellFolders = $folderJson | ConvertFrom-Json
+foreach ($folder in @($shellFolders.desktop, $shellFolders.programs)) {
+    if (-not $folder -or -not (Test-Path -LiteralPath $folder -PathType Container)) { throw 'Isolated shell folder is unavailable' }
+}
+$shellFolders | ConvertTo-Json | Set-Content (Join-Path $Evidence "$Mode-shell-folders.json") -Encoding utf8NoBOM
+$desktop = $shellFolders.desktop
+$startPrograms = $shellFolders.programs
+$links = @((Join-Path $desktop "$($contract.title).lnk"), (Join-Path $startPrograms "$($contract.title).lnk"))
 foreach ($name in @('PYTHONPATH','PYTHONHOME','QT_PLUGIN_PATH','QT_QPA_PLATFORM_PLUGIN_PATH')) {
     [Environment]::SetEnvironmentVariable($name,$null,'Process')
 }
@@ -119,7 +138,7 @@ function Apply-Revision($Base, $Target, [string]$Label) {
     Assert-Installed $Base
     Arm-Recovery $Base $Target
     $timer = [Diagnostics.Stopwatch]::StartNew()
-    Invoke-Bounded (Join-Path $root 'Update.exe') @('apply','--silent','--norestart','--package',"`"$(Join-Path $Payload $Target.full.path)`"",'--rootDir',"`"$root`"",'--packageDir',"`"$packages`"") 600
+    Invoke-Bounded (Join-Path $root 'Update.exe') @('apply','--silent','--log',"`"$(Join-Path $Evidence "$Label-native.log")`"",'--norestart','--package',"`"$(Join-Path $Payload $Target.full.path)`"",'--rootDir',"`"$root`"",'--packageDir',"`"$packages`"") 600
     $seconds = $timer.Elapsed.TotalSeconds
     Assert-Installed $Target
     Invoke-Diagnostics $Label
@@ -131,7 +150,7 @@ function Apply-Revision($Base, $Target, [string]$Label) {
     return @{label=$Label;seconds=$seconds;full_bytes=$Target.full.size;expanded_bytes=$Target.expanded_bytes}
 }
 
-$result = @{schema_version=1;source_commit=$contract.source_commit;release_certified=$false;mode=$Mode;success=$false;scenarios=@{};measurements=@()}
+$result = @{schema_version=1;source_commit=$contract.source_commit;fixture_commit=$env:GITHUB_SHA;fixture_sha256=(Get-FileHash $PSCommandPath -Algorithm SHA256).Hash.ToLowerInvariant();release_certified=$false;mode=$Mode;success=$false;scenarios=@{};measurements=@()}
 try {
     Assert-File $repair $contract.repair
     if ($Mode -eq 'gate') {
@@ -140,6 +159,7 @@ try {
         $uninstall = Get-Content (Join-Path $Evidence 'uninstall-result.json') -Raw | ConvertFrom-Json
         foreach ($report in @($matrix,$migration,$uninstall)) {
             if ($report.success -ne $true -or $report.source_commit -ne $contract.source_commit -or
+                $report.fixture_commit -ne $result.fixture_commit -or $report.fixture_sha256 -ne $result.fixture_sha256 -or
                 $report.release_certified -ne $false) { throw 'Candidate acceptance failed or has a different identity' }
         }
         foreach ($name in @('full_app_fresh_install','same_source_two_replacements','same_source_skipped_replacement','simulated_missing_current_independent_repair','external_state_bytes_preserved','shortcuts_and_registration')) {
@@ -178,7 +198,7 @@ try {
         if ((Get-FileHash $oldInstaller -Algorithm SHA256).Hash.ToLowerInvariant() -ne $contract.legacy_source.installer_sha256) { throw 'Published legacy installer checksum mismatch' }
         Invoke-Bounded $oldInstaller @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/SP-', '/TASKS=desktopicon',"/DIR=`"$legacy`"","/LOG=`"$(Join-Path $Evidence 'legacy-installation.log')`"") 600
         if ((Get-FileHash (Join-Path $legacy 'TEMPO.exe') -Algorithm SHA256).Hash.ToLowerInvariant() -ne $contract.legacy_source.executable_sha256) { throw 'Actual installed old executable differs from reviewed migration source' }
-        $oldLinks=@((Join-Path $desktop 'TEMPO.lnk'),(Join-Path $startMenu 'Programs\TEMPO\TEMPO.lnk'))
+        $oldLinks=@((Join-Path $desktop 'TEMPO.lnk'),(Join-Path $startPrograms 'TEMPO\TEMPO.lnk'))
         foreach ($link in $oldLinks) { if (-not (Test-Path -LiteralPath $link)) { throw "Old installer did not create its shortcut: $link" } }
         $data=Join-Path $legacy '_internal\datasets'
         New-Item -ItemType Directory -Force (Join-Path $data 'fixture'),(Join-Path $data 'migration-fixture') | Out-Null
@@ -210,7 +230,7 @@ try {
         if (Test-Path (Join-Path $legacy 'TEMPO.exe')) { throw 'Old uninstall left its executable behind' }
         foreach ($link in $oldLinks) { if (Test-Path -LiteralPath $link) { throw "Old uninstall left its shortcut: $link" } }
         # Re-running the exact candidate setup also restores any shared shortcuts.
-        Invoke-Bounded (Join-Path $Payload $third.installer.path) @('--silent','--installto',"`"$root`"") 600
+        Invoke-Bounded (Join-Path $Payload $third.installer.path) @('--silent','--log',"`"$(Join-Path $Evidence 'migration-setup.log')`"",'--installto',"`"$root`"") 600
         Invoke-Bounded $repair @('--mode','finish-migration') 600
         $draft=Get-Content (Join-Path $state 'collaboration\migration-fixture\draft.json') -Raw | ConvertFrom-Json
         if ($draft.image_path -ne (Join-Path $state 'collaboration\migration-fixture\image.png')) { throw 'Saved image reference was not relocated' }
@@ -227,7 +247,7 @@ try {
     } elseif ($Mode -eq 'uninstall') {
         if (Test-Path (Join-Path $root 'Update.exe')) {
             if ((Get-FileHash (Join-Path $root 'Update.exe') -Algorithm SHA256).Hash.ToLowerInvariant() -ne $contract.updater_sha256) { throw 'Uninstall owner checksum mismatch' }
-            Invoke-Bounded (Join-Path $root 'Update.exe') @('uninstall','--silent','--rootDir',"`"$root`"") 300
+            Invoke-Bounded (Join-Path $root 'Update.exe') @('uninstall','--silent','--log',"`"$(Join-Path $Evidence 'uninstall-native.log')`"",'--rootDir',"`"$root`"") 300
         }
         if (Test-Path (Join-Path $root 'current\TEMPO.exe')) { throw 'Uninstall left the application behind' }
         if (Test-Path -LiteralPath $registry) { throw 'Uninstall left its registration behind' }
@@ -261,7 +281,7 @@ try {
         }
         ConvertTo-Json -InputObject $preserved -Depth 8 | Set-Content (Join-Path $Evidence 'preserved-state.json') -Encoding utf8NoBOM
         $first,$second,$third = $contract.revisions
-        Invoke-Bounded (Join-Path $Payload $first.installer.path) @('--silent','--installto',"`"$root`"") 600
+        Invoke-Bounded (Join-Path $Payload $first.installer.path) @('--silent','--log',"`"$(Join-Path $Evidence 'fresh-setup.log')`"",'--installto',"`"$root`"") 600
         Assert-Installed $first
         Invoke-Diagnostics 'fresh'
         Assert-State
@@ -270,9 +290,9 @@ try {
         $result.measurements += Apply-Revision $second $third 'replacement-2'
         $result.scenarios.same_source_two_replacements=$true
         # Use the exact first installer again; do not manufacture a prior base.
-        Invoke-Bounded (Join-Path $root 'Update.exe') @('uninstall','--silent','--rootDir',"`"$root`"") 300
+        Invoke-Bounded (Join-Path $root 'Update.exe') @('uninstall','--silent','--log',"`"$(Join-Path $Evidence 'before-skipped-uninstall.log')`"",'--rootDir',"`"$root`"") 300
         Assert-State
-        Invoke-Bounded (Join-Path $Payload $first.installer.path) @('--silent','--installto',"`"$root`"") 600
+        Invoke-Bounded (Join-Path $Payload $first.installer.path) @('--silent','--log',"`"$(Join-Path $Evidence 'skipped-setup.log')`"",'--installto',"`"$root`"") 600
         $result.measurements += Apply-Revision $first $third 'skipped-packaging-revision'
         $result.scenarios.same_source_skipped_replacement=$true
         # Simulate a missing current directory and unavailable native owner. This

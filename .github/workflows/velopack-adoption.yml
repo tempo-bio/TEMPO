@@ -1,14 +1,22 @@
 name: Experimental Velopack recovery gate
 on:
   workflow_dispatch:
+    inputs:
+      full_app_source_run_id:
+        description: 'Optional completed Windows build run: replay its full-app payload instead of rebuilding native fixtures'
+        required: false
+        default: ''
+        type: string
   workflow_call:
   push:
     branches:
       - v1.0.2-dev
 permissions:
   contents: read
+  actions: read
 jobs:
   native-recovery:
+    if: ${{ inputs.full_app_source_run_id == '' }}
     runs-on: windows-2022
     timeout-minutes: 90
     steps:
@@ -95,3 +103,9 @@ jobs:
             fixture-native-logs/
             production-target/x86_64-pc-windows-msvc/release/update.exe
           if-no-files-found: warn
+
+  full-app-replay:
+    if: ${{ inputs.full_app_source_run_id != '' }}
+    uses: ./.github/workflows/velopack-full-app.yml
+    with:
+      source_run_id: ${{ inputs.full_app_source_run_id }}

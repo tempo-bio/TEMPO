@@ -10,6 +10,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 env:
   QT_QPA_PLATFORM: offscreen
@@ -474,6 +475,7 @@ jobs:
             payload/candidate-contract.json
             evidence/*-result.json
             evidence/*-verification.json
+            evidence/*-shell-folders.json
             evidence/preserved-state.json
             evidence/**/*.log
           if-no-files-found: error
