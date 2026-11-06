@@ -3,7 +3,7 @@ on:
   workflow_dispatch:
   push:
     branches:
-      - codex/velopack-adoption-review
+      - v1.0.2-dev
 permissions:
   contents: read
 jobs:
@@ -40,7 +40,11 @@ jobs:
           if ((Get-FileHash vpk.zip -Algorithm SHA256).Hash.ToLowerInvariant() -ne '2b56ce117f803fc70c103cb423bd040e395e40370f6ff6e10818e9ff9c26a323') { throw 'Packager hash mismatch' }
           Expand-Archive vpk.zip -DestinationPath vpk
       - name: Prepare pinned source
-        run: python tempo/scripts/prepare_velopack_updater.py velopack
+        shell: pwsh
+        run: |
+          git -C velopack config core.autocrlf false
+          git -C velopack checkout-index --all --force
+          python tempo/scripts/prepare_velopack_updater.py velopack
       - name: Build production-feature candidate
         working-directory: velopack
         run: cargo build --locked --release -p velopack_bins --bin update --features windows --target x86_64-pc-windows-msvc --target-dir ../production-target

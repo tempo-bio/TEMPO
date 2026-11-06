@@ -4,6 +4,7 @@
 requirements*.txt text eol=lf
 requirements-windows*.lock text eol=lf
 installer/dependency-sources*.json text eol=lf
+installer/velopack/*.patch text eol=lf
 
 # Upstream notices are checksum-verified as original bytes.
 assets/licenses/** -text
