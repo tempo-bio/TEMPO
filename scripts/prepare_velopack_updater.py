@@ -34,8 +34,9 @@ def prepare(root, patch=PATCH):
     patch = Path(patch).resolve(strict=True)
     if git(root, 'rev-parse', 'HEAD') != COMMIT:
         raise ValueError('Velopack checkout is not the pinned commit')
-    if git(root, 'status', '--porcelain', '--untracked-files=all'):
-        raise ValueError('Velopack checkout must be clean')
+    status = git(root, 'status', '--porcelain', '--untracked-files=all')
+    if status:
+        raise ValueError('Velopack checkout must be clean: ' + status[:4000])
     if sha256(patch) != PATCH_SHA256:
         raise ValueError('Recovery patch SHA-256 mismatch')
     for relative, expected in SOURCE_SHA256.items():

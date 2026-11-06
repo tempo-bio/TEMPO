@@ -11,6 +11,8 @@ jobs:
     runs-on: windows-2022
     timeout-minutes: 90
     steps:
+      - name: Preserve pinned checkout bytes
+        run: git config --global core.autocrlf false
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           path: tempo
@@ -40,11 +42,7 @@ jobs:
           if ((Get-FileHash vpk.zip -Algorithm SHA256).Hash.ToLowerInvariant() -ne '2b56ce117f803fc70c103cb423bd040e395e40370f6ff6e10818e9ff9c26a323') { throw 'Packager hash mismatch' }
           Expand-Archive vpk.zip -DestinationPath vpk
       - name: Prepare pinned source
-        shell: pwsh
-        run: |
-          git -C velopack config core.autocrlf false
-          git -C velopack checkout-index --all --force
-          python tempo/scripts/prepare_velopack_updater.py velopack
+        run: python tempo/scripts/prepare_velopack_updater.py velopack
       - name: Build production-feature candidate
         working-directory: velopack
         run: cargo build --locked --release -p velopack_bins --bin update --features windows --target x86_64-pc-windows-msvc --target-dir ../production-target
