@@ -73,8 +73,19 @@ def _schema(release):
 
 
 def _application_inventory(release):
+    """Project the signed ZIP inventory onto Velopack's installed current tree.
+
+    The pinned native extractor excludes its Squirrel.exe updater and obsolete
+    execution stubs. Those bytes stay authenticated in the full package; they
+    are installation-owner files, not files installed under current.
+    """
+    updaters = [item for item in release.inventory if item.path.endswith('Squirrel.exe')]
+    if updaters and (len(updaters) != 1 or updaters[0].path != _PREFIX + 'Squirrel.exe'):
+        raise ValueError('Ambiguous native updater layout in signed package.')
     entries = [FileRecord(item.path[len(_PREFIX):], item.size, item.sha256)
-               for item in release.inventory if item.path.startswith(_PREFIX)]
+               for item in release.inventory if item.path.startswith(_PREFIX)
+               and item.path != _PREFIX + 'Squirrel.exe'
+               and not item.path.endswith('_ExecutionStub.exe')]
     if not entries:
         raise ValueError('Signed inventory contains no application payload.')
     for item in entries:
@@ -364,7 +375,7 @@ def apply_pending(record_path, trusted_keys, *, expected_root, packages_dir):
             _validated_release(target.envelope, trusted_keys, target.channel)
             _verify_app(root / 'current', base)
             updater = _safe(root / 'Update.exe', missing_ok=False)
-            hashes = [item.sha256 for item in _application_inventory(base) if item.path == 'Squirrel.exe']
+            hashes = [item.sha256 for item in base.inventory if item.path == _PREFIX + 'Squirrel.exe']
             if len(hashes) != 1 or _digest(updater) != hashes[0]:
                 raise ValueError('Native updater does not match the signed installed release.')
             record['state'] = 'installing'; _json_write(path, record)

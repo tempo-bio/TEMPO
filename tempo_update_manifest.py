@@ -333,12 +333,14 @@ def verify_directory(root, inventory):
             relative = path.relative_to(root).as_posix()
             record = expected.get(relative)
             if record is None or not stat.S_ISREG(os.lstat(path).st_mode):
-                raise ValueError('Unexpected inventory file.')
+                raise ValueError('Unexpected inventory file: ' + relative)
             with path.open('rb') as stream:
                 _verify_stream(stream, record.size, record.sha256)
             found.add(relative)
     if found != set(expected):
-        raise ValueError('Missing inventory file.')
+        missing = sorted(set(expected) - found)
+        raise ValueError('Missing inventory file: ' + ', '.join(missing[:10]) +
+                         (f' ({len(missing)} files missing)' if len(missing) > 10 else ''))
 
 
 def verify_zip(path, inventory):

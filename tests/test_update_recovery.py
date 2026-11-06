@@ -38,11 +38,14 @@ class RecoveryTests(unittest.TestCase):
             z.writestr('metadata.xml', b'meta')
             if updater is not None:
                 z.writestr('lib/app/Squirrel.exe', updater)
+                z.writestr('lib/app/TEMPO_ExecutionStub.exe', b'installer stub')
         inv = [{'path': p, 'size': len(b), 'sha256': hashlib.sha256(b).hexdigest()}
                for p, b in [('lib/app/TEMPO.exe', body), ('metadata.xml', b'meta')]]
         if updater is not None:
             inv.append({'path': 'lib/app/Squirrel.exe', 'size': len(updater),
                         'sha256': hashlib.sha256(updater).hexdigest()})
+            inv.append({'path': 'lib/app/TEMPO_ExecutionStub.exe', 'size': len(b'installer stub'),
+                        'sha256': hashlib.sha256(b'installer stub').hexdigest()})
         content = archive.read_bytes()
         obj = {'schema_version': 1, 'package_id': manifest.PACKAGE_ID, 'version': version,
                'commit': commit * 40, 'architecture': 'win-x64', 'channel': 'stable',
@@ -150,11 +153,53 @@ class RecoveryTests(unittest.TestCase):
 
     def prepare_apply(self):
         updater = b'verified native updater'
-        (self.current / 'Squirrel.exe').write_bytes(updater)
         (self.install / 'Update.exe').write_bytes(updater)
         self.base, self.base_zip = self.release('1.0.1', b'base', 'a', updater)
         self.target, self.target_zip = self.release('1.0.2', b'target', 'b', updater)
         return self.arm()
+
+    def test_native_package_control_files_are_not_installed_or_staged(self):
+        path = self.prepare_apply()
+        with zipfile.ZipFile(self.base_zip) as archive:
+            self.assertIn('lib/app/Squirrel.exe', archive.namelist())
+            self.assertIn('lib/app/TEMPO_ExecutionStub.exe', archive.namelist())
+        self.assertFalse((self.current / 'Squirrel.exe').exists())
+        self.assertFalse((self.current / 'TEMPO_ExecutionStub.exe').exists())
+        stage = recovery._stage(self.install, self.target, self.target_zip)
+        self.assertEqual((stage / 'TEMPO.exe').read_bytes(), b'target')
+        self.assertFalse((stage / 'Squirrel.exe').exists())
+        self.assertFalse((stage / 'TEMPO_ExecutionStub.exe').exists())
+        self.assertEqual(self.recover(path), 'recovered_forward')
+        self.assertFalse((self.current / 'Squirrel.exe').exists())
+        self.assertFalse((self.current / 'TEMPO_ExecutionStub.exe').exists())
+
+    def test_arm_rejects_missing_or_corrupt_installed_payload(self):
+        updater = b'verified native updater'
+        self.base, self.base_zip = self.release('1.0.1', b'base', 'a', updater)
+        self.target, self.target_zip = self.release('1.0.2', b'target', 'b', updater)
+        executable = self.current / 'TEMPO.exe'
+        for content in (None, b'tampered'):
+            with self.subTest(content=content):
+                if content is None:
+                    executable.unlink()
+                else:
+                    executable.write_bytes(content)
+                with self.assertRaises(ValueError):
+                    self.arm()
+        executable.write_bytes(b'base')
+        self.assertTrue(self.arm().exists())
+
+    def test_arm_still_verifies_packaged_control_files(self):
+        updater = b'verified native updater'
+        self.base, self.base_zip = self.release('1.0.1', b'base', 'a', updater)
+        self.target, self.target_zip = self.release('1.0.2', b'target', 'b', updater)
+        with zipfile.ZipFile(self.target_zip, 'w') as archive:
+            archive.writestr('lib/app/TEMPO.exe', b'target')
+            archive.writestr('metadata.xml', b'meta')
+            archive.writestr('lib/app/Squirrel.exe', updater)
+            archive.writestr('lib/app/TEMPO_ExecutionStub.exe', b'tampered stub')
+        with self.assertRaises(ValueError):
+            self.arm()
 
     def apply(self, path):
         return recovery.apply_pending(path, self.keys, expected_root=self.install,

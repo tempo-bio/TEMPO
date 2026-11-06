@@ -99,8 +99,8 @@ def probe(root, expected, env):
         raise AssertionError(f'Wrong installed version: {result.stdout!r}')
 
 
-def apply(root, package, *, fault=None, abort=None, wait_pid=None, expect_failure=False):
-    env = os.environ.copy()
+def apply(root, package, *, env, fault=None, abort=None, wait_pid=None, expect_failure=False):
+    env = dict(env)
     env.pop('TEMPO_FIXTURE_FAULT', None)
     env.pop('TEMPO_FIXTURE_ABORT', None)
     if fault:
@@ -136,7 +136,7 @@ def run_scenarios(work, setup, packages, repair, releases, keys, outcomes, repor
         if scenario in ('restore_failure', 'abrupt_after_old', 'consecutive', 'guarded_handoff'):
             arm('1.0.1', '1.0.2')
         if scenario == 'normal':
-            apply(root, package)
+            apply(root, package, env=env)
             probe(root, '1.0.2', env)
             assert (root / 'tempo-previous' / 'TEMPO.exe').is_file()
             assert (root / 'tempo-update-pending.txt').is_file()
@@ -189,13 +189,13 @@ def run_scenarios(work, setup, packages, repair, releases, keys, outcomes, repor
                     companion.terminate()
                     companion.communicate(timeout=10)
         elif scenario == 'consecutive':
-            apply(root, package)
+            apply(root, package, env=env)
             probe(root, '1.0.2', env)  # The frozen application has initialized and answered.
             run(repair, '--mode', 'confirm', '--version', '1.0.2', '--commit', 'b' * 40, env=env)
             assert not (root / 'tempo-previous').exists()
             assert not (root / 'tempo-update-pending.txt').exists()
             arm('1.0.2', '1.0.3')
-            apply(root, packages['1.0.3'])
+            apply(root, packages['1.0.3'], env=env)
             probe(root, '1.0.3', env)
             run(repair, '--mode', 'confirm', '--version', '1.0.3', '--commit', 'c' * 40, env=env)
             assert not (root / 'tempo-previous').exists()
@@ -213,7 +213,7 @@ def run_scenarios(work, setup, packages, repair, releases, keys, outcomes, repor
                     time.sleep(0.1)
                 if not ready.is_file():
                     raise RuntimeError('Fixture app failed to signal readiness')
-                apply(root, package, wait_pid=held.pid if scenario == 'wait_timeout' else None,
+                apply(root, package, env=env, wait_pid=held.pid if scenario == 'wait_timeout' else None,
                       expect_failure=True)
                 if held.poll() is not None:
                     raise AssertionError('Updater terminated the fixture app')
@@ -222,17 +222,17 @@ def run_scenarios(work, setup, packages, repair, releases, keys, outcomes, repor
                 held.wait(timeout=15)
             probe(root, '1.0.1', env)
         elif scenario == 'before_old_rename':
-            apply(root, package, fault='before_old_rename')
+            apply(root, package, env=env, fault='before_old_rename')
             probe(root, '1.0.1', env)
         elif scenario == 'after_old_rename':
-            apply(root, package, fault='after_old_rename')
+            apply(root, package, env=env, fault='after_old_rename')
             probe(root, '1.0.1', env)
             assert (root / 'tempo-update-pending.txt').is_file()
         else:
             if scenario == 'restore_failure':
-                apply(root, package, fault='after_old_rename,before_restore')
+                apply(root, package, env=env, fault='after_old_rename,before_restore')
             else:
-                apply(root, package, abort='after_old_rename')
+                apply(root, package, env=env, abort='after_old_rename')
             assert not (root / 'current').exists()
             assert (root / 'tempo-previous' / 'TEMPO.exe').is_file()
             assert (root / 'tempo-update-pending.txt').is_file()
