@@ -18,7 +18,9 @@ The build requires repository privacy/file checks, dependency consistency checks
 
 The actual packaged executable repeats the runtime checks. These include native model imports, credential-store write/read/delete with an isolated synthetic entry, offscreen startup and shutdown, plot lifecycle, scientific processing and export, and combined native-library initialization.
 
-A separate Windows runner downloads the exact installer without a source checkout or Python setup. It verifies the checksum, installs in a path containing spaces, checks the installed app offline with an isolated user environment, and uninstalls it. Final certification requires both jobs to succeed.
+A separate Windows runner downloads the exact Inno installer without a source checkout or Python setup. It verifies the checksum, installs in a path containing spaces, checks the installed app offline with an isolated user environment, and uninstalls it.
+
+The release workflow also requires the [disabled full-app Velopack candidate checks](../installer/velopack/README.md#full-application-candidate-automation). It packages the complete tested CPU folder, verifies native delta reconstruction against full inventories, and transfers the exact artifacts to another fresh runner. That runner checks installation, same-source replacements, simulated independent recovery, published v1.0.1 CPU migration, component refusal and uninstall. Its report binds the accepted artifact hashes. All existing build gates and both installer paths must succeed for the final build check. This is not Velopack release-adoption certification: signing/trust, distinct releases, component compatibility, the complete update transaction matrix and hardware acceptance still apply, and in-app updates remain disabled.
 
 These checks do not connect to microscope hardware, use real collaborator accounts, or run Colab GPU training.
 
@@ -34,8 +36,13 @@ These checks do not connect to microscope hardware, use real collaborator accoun
 | `Windows_bundle_evidence` | Packaged-runtime checks and bundler diagnostics | 3 days |
 | `Windows_build_evidence` | Collected build reports, logs, and captures | 7 days |
 | `Windows_install_evidence` | Fresh-runner installation, runtime, and uninstall reports | 7 days |
+| `velopack-production-feature-candidate` | Production-feature updater, source/patch identity and native fixture linkage; unverified adoption pin | 7 days |
+| `Windows_velopack_candidate_payload` | Three same-source full-app packaging revisions, original setup executables, deltas, test companion, public test key and exact artifact contract | 7 days |
+| `Windows_velopack_candidate_evidence` | Installed diagnostics, replacement/recovery/migration/uninstall results and exact artifact acceptance gate | 7 days |
 
 Download the payload before expiry. Keep the installer, checksum, and provenance together. The filename `TEMPO_Setup_v1.0.1.exe` alone does not identify which test build produced it. The workflow does not publish release assets.
+
+Velopack candidate artifacts use disposable test trust and must not be distributed to collaborators or uploaded to the update feed. Expiring workflow artifacts do not satisfy durable retention for a user release or its repair packages.
 
 The NVIDIA runtime is split into sequential `TEMPO_NVIDIA_Runtime_v1.0.1.zip.part001`, `.part002`, etc., each no larger than 1 GiB. Publish **every part named by `nvidia-runtime.json`** to the matching release tag, preserving filenames. Publish that descriptor alongside them for maintainers. Do not upload the outer Actions artifact ZIP or concatenate the parts into a single release asset: the complete runtime exceeds GitHub's individual file-size limit. Before publication, verify the downloaded artifact with:
 

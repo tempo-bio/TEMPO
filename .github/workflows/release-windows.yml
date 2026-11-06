@@ -25,6 +25,10 @@ jobs:
   preflight:
     uses: ./.github/workflows/windows-preflight.yml
 
+  velopack-native:
+    needs: preflight
+    uses: ./.github/workflows/velopack-adoption.yml
+
   validate-source:
     name: Validate Windows source before packaging
     needs: preflight
@@ -152,11 +156,14 @@ jobs:
   build-windows:
     name: Test and build Windows payload
     runs-on: windows-2025
-    needs: build-nvidia-runtime
+    needs: [build-nvidia-runtime, velopack-native]
     timeout-minutes: 180
     outputs:
       installer: ${{ steps.installer.outcome }}
+      velopack: ${{ steps.velopack_payload.outcome }}
     steps:
+      - name: Preserve pinned source and patch bytes
+        run: git config --global core.autocrlf false
       - name: Check out tested revision
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Set up Python 3.13.16 x64 without dependency caches
@@ -331,13 +338,44 @@ jobs:
             Output/dependency-sources/SHA256SUMS.txt
             Output/dependency-sources/source-verification.json
           if-no-files-found: error
+      - name: Retrieve the native candidate from this workflow run
+        if: ${{ !cancelled() && steps.portable_check.outcome == 'success' && steps.payload.outcome == 'success' }}
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: velopack-production-feature-candidate
+          path: native-candidate
+      - name: Set up pinned packager runtime on the builder
+        if: ${{ !cancelled() && steps.portable_check.outcome == 'success' && steps.payload.outcome == 'success' }}
+        uses: actions/setup-dotnet@d4c94342e560b34958eacfc5d055d21461ed1c5d # v4.3.1
+        with:
+          dotnet-version: '8.0.413'
+      - name: Package complete disabled TEMPO Velopack candidates
+        id: velopack
+        if: ${{ !cancelled() && steps.portable_check.outcome == 'success' && steps.payload.outcome == 'success' }}
+        timeout-minutes: 70
+        run: |
+          $ProgressPreference = 'SilentlyContinue'
+          $packager = Join-Path $env:RUNNER_TEMP 'tempo-vpk.1.2.161.nupkg'
+          Invoke-WebRequest 'https://github.com/velopack/velopack/releases/download/1.2.161/vpk.1.2.161.nupkg' -OutFile $packager
+          & .\.venv_build\Scripts\python.exe -m scripts.build_velopack_candidate --bundle dist/TEMPO --vpk-archive $packager --updater native-candidate/production-target/x86_64-pc-windows-msvc/release/update.exe --native-evidence native-candidate/native-candidate.json --output Output/velopack-candidate --commit "$env:GITHUB_SHA"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Transfer exact full application candidates
+        id: velopack_payload
+        if: ${{ !cancelled() && steps.velopack.outcome == 'success' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: Windows_velopack_candidate_payload
+          retention-days: 7
+          compression-level: 0
+          path: Output/velopack-candidate/*
+          if-no-files-found: error
       - name: Aggregate required build gates
         id: build_gates
         if: ${{ always() }}
         env:
           GATE_OUTCOMES: ${{ toJSON(steps) }}
         run: |
-          & .\.venv_build\Scripts\python.exe -m scripts.windows_gates --output Output/build-gates.json runtime repository_checks notebook notebook_artifact installer_tests presentation source prebuild_evidence portable payload_privacy dependency_sources portable_check bundle_evidence inno installer payload
+          & .\.venv_build\Scripts\python.exe -m scripts.windows_gates --output Output/build-gates.json runtime repository_checks notebook notebook_artifact installer_tests presentation source prebuild_evidence portable payload_privacy dependency_sources portable_check bundle_evidence inno installer payload velopack velopack_payload
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Retain all build evidence
         if: ${{ always() }}
@@ -399,9 +437,50 @@ jobs:
           path: evidence/**
           if-no-files-found: error
 
+  verify-velopack:
+    name: Verify full TEMPO Velopack candidates on a fresh Windows runner
+    needs: build-windows
+    if: ${{ !cancelled() && needs.build-windows.outputs.velopack == 'success' }}
+    runs-on: windows-2025
+    timeout-minutes: 100
+    steps:
+      # No source checkout, Python setup, .NET setup, or application dependencies.
+      - name: Download exact full application candidates
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: Windows_velopack_candidate_payload
+          path: payload
+      - name: Exercise installed full application and independent recovery
+        id: matrix
+        run: ./payload/verify_velopack_install.ps1 -Mode matrix -Payload payload -Evidence evidence
+      - name: Exercise published legacy CPU installer migration and component refusal
+        id: migration
+        if: ${{ !cancelled() && steps.matrix.outcome == 'success' }}
+        run: ./payload/verify_velopack_install.ps1 -Mode migration -Payload payload -Evidence evidence
+      - name: Uninstall candidate and check retained state
+        id: uninstall
+        if: ${{ !cancelled() && steps.matrix.outcome != 'skipped' }}
+        run: ./payload/verify_velopack_install.ps1 -Mode uninstall -Payload payload -Evidence evidence
+      - name: Require complete evidence for the exact candidate artifacts
+        if: ${{ !cancelled() }}
+        run: ./payload/verify_velopack_install.ps1 -Mode gate -Payload payload -Evidence evidence
+      - name: Retain full application candidate evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: Windows_velopack_candidate_evidence
+          retention-days: 7
+          path: |
+            payload/candidate-contract.json
+            evidence/*-result.json
+            evidence/*-verification.json
+            evidence/preserved-state.json
+            evidence/**/*.log
+          if-no-files-found: error
+
   certify:
     name: Certify every required Windows gate
-    needs: [preflight, validate-source, build-windows, verify-installed]
+    needs: [preflight, validate-source, build-windows, verify-installed, velopack-native, verify-velopack]
     if: ${{ always() }}
     runs-on: windows-2025
     steps:
@@ -411,6 +490,8 @@ jobs:
           SOURCE_RESULT: ${{ needs.validate-source.result }}
           BUILD_RESULT: ${{ needs.build-windows.result }}
           INSTALL_RESULT: ${{ needs.verify-installed.result }}
+          NATIVE_RESULT: ${{ needs.velopack-native.result }}
+          VELOPACK_RESULT: ${{ needs.verify-velopack.result }}
         run: |
-          if ($env:PREFLIGHT_RESULT -ne 'success' -or $env:SOURCE_RESULT -ne 'success' -or $env:BUILD_RESULT -ne 'success' -or $env:INSTALL_RESULT -ne 'success') { throw 'Windows certification failed or required checks were skipped' }
-          "Certified revision: $env:GITHUB_SHA" >> $env:GITHUB_STEP_SUMMARY
+          if ($env:PREFLIGHT_RESULT -ne 'success' -or $env:SOURCE_RESULT -ne 'success' -or $env:BUILD_RESULT -ne 'success' -or $env:INSTALL_RESULT -ne 'success' -or $env:NATIVE_RESULT -ne 'success' -or $env:VELOPACK_RESULT -ne 'success') { throw 'Windows build acceptance failed or required checks were skipped' }
+          "Windows build checks passed for: $env:GITHUB_SHA. Velopack remains an unpublished, disabled candidate; this does not certify native adoption or rollout." >> $env:GITHUB_STEP_SUMMARY

@@ -19,6 +19,29 @@ The preparation script verifies the commit, clean tree, upstream source hashes a
 
 The signed package inventory covers every ZIP member. Verification of the installed `current` directory uses the pinned extractor's layout: `Squirrel.exe` and `*_ExecutionStub.exe` remain installation-owner files and are excluded from that directory. Offline repair uses the same layout. The root `Update.exe` is verified separately against the signed `lib/app/Squirrel.exe` checksum before apply; missing or changed application files still fail verification.
 
+## Full application candidate automation
+
+`release-windows.yml` calls the native workflow at the same TEMPO revision, then packages the complete CPU PyInstaller folder after the existing source, privacy, licensing, NVIDIA-descriptor and frozen-runtime gates. `scripts/build_velopack_candidate.py` verifies the pinned VPK archive, the native candidate identity and every file from the tested folder. It explicitly runs the real frozen executable's four lifecycle hooks with bounded offscreen environments before packaging, and leaves VPK's compatibility checking enabled. VPK's managed-code inspection alone cannot establish Python lifecycle support. The production-feature updater reconstructs each generated delta; its complete target inventory must match the independently packaged full target.
+
+The workflow retains three immutable `1.0.2-velopack.1` through `.3` packaging revisions and each original setup executable. All three contain the **same source and executable version**; they exercise replacement mechanics, not distinct TEMPO release acceptance. These candidate package identities do not change the maintained application release version. The completion marker, `candidate-contract.json`, binds the source commit, updater, companion, installers, full packages, installed inventories and reconstructed deltas. A failed build does not write that marker.
+
+The independent test companion embeds a fresh public test key. Its private key exists only in builder memory, is never exported, and cannot sign a user release. The full application retains the tracked disabled configuration and empty trust store. These artifacts must not be published or used to replace a collaborator's installation.
+
+On a separate Windows runner with no checkout, Python setup, .NET setup or application dependency installation, the workflow runs:
+
+```powershell
+./payload/verify_velopack_install.ps1 -Mode matrix -Payload payload -Evidence evidence
+./payload/verify_velopack_install.ps1 -Mode migration -Payload payload -Evidence evidence
+./payload/verify_velopack_install.ps1 -Mode uninstall -Payload payload -Evidence evidence
+./payload/verify_velopack_install.ps1 -Mode gate -Payload payload -Evidence evidence
+```
+
+The matrix installs into an isolated path containing spaces and non-ASCII text, verifies every installed file, checks registration and shortcuts, and repeats the real bundled diagnostics after fresh installation, two replacements, a skipped packaging revision and independent offline forward repair. The repair scenario deliberately removes `current` and temporarily makes `Update.exe` unavailable; it is simulated damage, not a power-loss test. Fixture preferences, onboarding state, drafts, models, recording and analysis bytes are checked after each transaction and uninstall. Diagnostic entrypoints do not establish that the interactive desktop loaded those saved values.
+
+The migration mode downloads the exact published v1.0.1 CPU installer, verifies its reviewed checksum and installed executable, creates disposable data/model fixtures, and runs prepare, the actual old uninstaller, candidate setup repair and finish. It checks relocated image references, retained model bytes and offline installer, old shortcut removal and the companion's registration-retirement guard. It also requires refusal of optional-package receipts and an unreviewed NVIDIA selection. The gate reads back all diagnostic reports and matches the accepted installer/full hashes to the candidate contract.
+
+Native adoption, distinct-release and dependency-changing transactions, signed feed downloads/fallback, NVIDIA/add-on migration, user-state interpretation, real interruption boundaries and physical hardware acceptance remain separate gates. Neither a successful candidate job nor its `release_certified: false` report changes the tracked native pin or enables updates. Actions artifacts last seven days; they are temporary test transport, not durable release/recovery storage.
+
 ## Prepare a candidate bundle
 
 Use an isolated release environment at the exact source revision being certified. Generate a JSON object mapping key IDs to base64-encoded raw Ed25519 **public** keys; never put a private signing key in this file. Build the companion with those same keys:

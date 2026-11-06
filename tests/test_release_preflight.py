@@ -35,7 +35,7 @@ class ReleasePreflightTests(unittest.TestCase):
         source = release.split('\n  validate-source:\n', 1)[1].split('\n  build-nvidia-runtime:\n', 1)[0]
         self.assertIn('\n    needs: preflight\n', source)
         self.assertIn('Run complete regression and scientific suites', source)
-        self.assertIn('needs: [preflight, validate-source, build-windows, verify-installed]', release)
+        self.assertIn('needs: [preflight, validate-source, build-windows, verify-installed, velopack-native, verify-velopack]', release)
         self.assertIn("$env:PREFLIGHT_RESULT -ne 'success'", release)
         fast = (ROOT / '.github/workflows/windows-preflight.yml').read_text(encoding='utf-8')
         self.assertIn('python -S -m unittest -v tests.test_assistance_launch tests.test_release_preflight', fast)
