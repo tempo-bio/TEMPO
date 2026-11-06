@@ -60,6 +60,29 @@ catch {
 if (-not $refused -or (Get-Content $file -Raw).Trim() -ne 'must remain') { throw 'Incomplete uninstall was accepted or changed' }
 ''')
 
+    def test_running_owner_directory_can_be_retired_without_reusing_its_cleanup_path(self):
+        self.run_shell(r'''
+$target=$env:TEMPO_CLEANUP_TEST_ROOT
+$retired=$target + '.retired'
+New-Item -ItemType Directory $target | Out-Null
+$owner=Join-Path $target 'Update.exe'
+Copy-Item "$env:SystemRoot\System32\cmd.exe" $owner
+$running=Start-Process -FilePath $owner -ArgumentList '/D /C choice /C Y /N /D Y /T 3 >nul' -WorkingDirectory (Split-Path $target) -PassThru
+$null=$running.Handle
+try {
+    if ($running.WaitForExit(0)) { throw 'Fixture owner did not remain running' }
+    Move-Item -LiteralPath $target -Destination $retired
+    New-Item -ItemType Directory $target | Out-Null
+    Set-Content (Join-Path $target 'replacement.txt') 'keep replacement'
+    if (-not $running.WaitForExit(10000)) { throw 'Retired owner did not exit' }
+    Remove-Item -LiteralPath $retired -Recurse
+    if (-not (Test-Path (Join-Path $target 'replacement.txt'))) { throw 'Retired cleanup affected the replacement' }
+} finally {
+    if (-not $running.WaitForExit(5000)) { $running.Kill($true); $running.WaitForExit() }
+    $running.Dispose()
+}
+''')
+
     def test_fixture_initialization_failure_retains_a_structured_report(self):
         self.run_shell(r'''
 $payload=Join-Path $env:TEMPO_CLEANUP_TEST_ROOT 'payload'

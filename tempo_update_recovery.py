@@ -100,6 +100,77 @@ def _verify_app(root, release):
     verify_directory(root, _application_inventory(release))
 
 
+def _owner_record(release):
+    records = [item for item in release.inventory if item.path.endswith('Squirrel.exe')]
+    if len(records) != 1 or records[0].path != _PREFIX + 'Squirrel.exe':
+        raise ValueError('Signed release must contain one canonical native updater.')
+    return records[0]
+
+
+def _owner_location(root):
+    owner = _safe(root / 'Update.exe')
+    if owner.exists() and not owner.is_file():
+        raise ValueError('Native updater location is not an ordinary file.')
+    return owner
+
+
+def _verify_owner(root, release):
+    record = _owner_record(release)
+    owner = _owner_location(root)
+    if (not owner.is_file() or owner.stat().st_size != record.size or _digest(owner) != record.sha256):
+        raise ValueError('Native updater does not match the signed application release.')
+    return owner
+
+
+def _restore_owner(root, release, package):
+    """Restore authenticated owner bytes without executing or discarding old bytes.
+
+    A stopped restoration remains retryable from the retained signed package.
+    Exclusive hard-link creation prevents overwriting a concurrently created owner.
+    """
+    record = _owner_record(release)
+    owner = _owner_location(root)
+    if owner.is_file() and owner.stat().st_size == record.size and _digest(owner) == record.sha256:
+        return
+    fd, temporary = tempfile.mkstemp(prefix='.tempo-repair-owner-', dir=root)
+    temporary = Path(temporary)
+    try:
+        with os.fdopen(fd, 'wb') as destination, zipfile.ZipFile(package) as archive:
+            with archive.open(record.path) as source:
+                shutil.copyfileobj(source, destination, 1024 * 1024)
+            destination.flush(); os.fsync(destination.fileno())
+        if temporary.stat().st_size != record.size or _digest(temporary) != record.sha256:
+            raise ValueError('Restored native updater differs from the signed package.')
+        if owner.exists():
+            quarantine = _safe(root / ('tempo-repair-owner-quarantine-' + uuid.uuid4().hex + '.exe'))
+            os.link(owner, quarantine)
+            owner.unlink()
+        try:
+            os.link(temporary, owner)
+        except FileExistsError:
+            _verify_owner(root, release)
+        _verify_owner(root, release)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _retain_native_pending(root):
+    """Retain obsolete native transaction state after explicit verified repair.
+
+    A damaged marker cannot authorize deletion and must not block the next
+    update. The verified offline pair remains outside the application directory.
+    Repeated calls resume after either rename without overwriting prior copies.
+    """
+    for name, directory in (('tempo-previous', True), ('tempo-update-pending.txt', False)):
+        source = _safe(root / name)
+        if not source.exists():
+            continue
+        if (directory and not source.is_dir()) or (not directory and not source.is_file()):
+            raise ValueError('Unexpected native transaction path; retain it for review.')
+        destination = _safe(root / ('tempo-repair-retained-' + name + '-' + uuid.uuid4().hex))
+        os.rename(source, destination)
+
+
 def _store_copy(source, destination):
     source = _safe(source, missing_ok=False)
     destination = _safe(destination)
@@ -147,8 +218,10 @@ def arm_recovery(root, external_recovery_dir, base_release, base_package, target
     if base.channel != target.channel or base.version == target.version:
         raise ValueError('Incompatible recovery release pair.')
     _application_inventory(base); _application_inventory(target)
+    _owner_record(base); _owner_record(target)
     with update_lock(packages):
         _verify_app(root / 'current', base)
+        _verify_owner(root, base)
         for release, package in ((base, base_package), (target, target_package)):
             verify_zip(_safe(package, missing_ok=False), release.inventory)
         if nvidia_marker is not None:
@@ -257,15 +330,19 @@ def recover(record_path, trusted_keys, *, mode, expected_root, packages_dir):
         if mode == 'previous' and _schema(base) != _schema(target):
             raise ValueError('Previous application is incompatible with the newer data schema.')
         release, package = (base, base_package) if mode == 'previous' else (target, target_package)
+        _owner_record(release); _owner_location(root)
         current, quarantine = _safe(root / 'current'), _safe(root / 'tempo-repair-quarantine')
-        if quarantine.exists() and current.exists():
+        if current.exists():
             try:
                 _verify_app(current, release)
             except ValueError:
                 # An explicit repair in the other direction retains both the
                 # original quarantine and the presently installed payload.
-                quarantine = _safe(root / ('tempo-repair-quarantine-' + uuid.uuid4().hex))
+                if quarantine.exists():
+                    quarantine = _safe(root / ('tempo-repair-quarantine-' + uuid.uuid4().hex))
             else:
+                _restore_owner(root, release, package)
+                _retain_native_pending(root)
                 if mode == 'previous':
                     from tempo_update_components import restore_previous_runtime
                     restore_previous_runtime(record, base, target,
@@ -288,6 +365,8 @@ def recover(record_path, trusted_keys, *, mode, expected_root, packages_dir):
                     pass  # Preserve both paths and journal for independent repair.
             raise
         _verify_app(current, release)
+        _restore_owner(root, release, package)
+        _retain_native_pending(root)
         if mode == 'previous':
             from tempo_update_components import restore_previous_runtime
             restore_previous_runtime(record, base, target,
@@ -309,6 +388,7 @@ def confirm(record_path, trusted_keys, *, running_version, running_commit, expec
         if (running_version, running_commit) != (target.version, target.commit):
             raise ValueError('Running version does not match the signed target.')
         _verify_app(root / 'current', target)
+        _verify_owner(root, target)
         from tempo_update_components import verify_selected_runtime
         receipt = None
         if record['nvidia_marker'] is not None:
@@ -408,6 +488,7 @@ def apply_pending(record_path, trusted_keys, *, expected_root, packages_dir):
                 record['state'] = 'recovery_required'; _json_write(path, record)
                 raise RuntimeError('Installation did not finish. Run TEMPORepair to repair forward or choose the compatible previous version.')
             _verify_app(root / 'current', target)
+            _verify_owner(root, target)
             record['state'] = 'awaiting_confirmation'; _json_write(path, record)
     finally:
         lease.__exit__(None, None, None)

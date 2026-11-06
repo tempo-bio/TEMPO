@@ -46,6 +46,7 @@ REQUIRED_CHECKS = frozenset({
     'replacement_failure_restoration', 'interrupted_replacement_independent_repair',
     'retained_previous_payload_and_confirmation', 'offline_known_good_recovery',
     'consecutive_updates_and_component_compatibility',
+    'repaired_native_owner_and_next_update', 'uninstall_reinstall_ownership',
 })
 
 

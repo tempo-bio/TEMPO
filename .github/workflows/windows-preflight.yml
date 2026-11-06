@@ -24,7 +24,7 @@ jobs:
           architecture: x64
       - name: Check contracts without application dependencies
         run: |
-          python -S -m unittest -v tests.test_assistance_launch tests.test_release_preflight tests.test_nvidia_manifest tests.test_nvidia_runtime_package
+          python -S -m unittest -v tests.test_assistance_launch tests.test_release_preflight tests.test_nvidia_manifest tests.test_nvidia_runtime_package tests.test_windows_installer_cleanup
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Prepare minimal process-control test environment
         run: |

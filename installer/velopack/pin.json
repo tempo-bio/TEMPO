@@ -2,7 +2,7 @@
   "schema_version": 1,
   "upstream_version": "1.2.161",
   "upstream_commit": "92d6a1c91716729d449034df5c50307dcce39493",
-  "patch_sha256": "2118a3b0b85f6f7e581a587ee546c833a2606de06367babe1e6e444490d3ad94",
+  "patch_sha256": "88a3124f069c0f5db1be6ed67fa8d281df9e4d6575de6103a064e6e533894c47",
   "certification_status": "unverified",
   "required_checks": [
     "real_windows_lifecycle_fixture",
@@ -11,6 +11,8 @@
     "interrupted_replacement_independent_repair",
     "retained_previous_payload_and_confirmation",
     "offline_known_good_recovery",
-    "consecutive_updates_and_component_compatibility"
+    "consecutive_updates_and_component_compatibility",
+    "repaired_native_owner_and_next_update",
+    "uninstall_reinstall_ownership"
   ]
 }

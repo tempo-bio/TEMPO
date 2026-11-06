@@ -24,6 +24,7 @@ class RecoveryTests(unittest.TestCase):
         self.current = self.install / 'current'
         self.current.mkdir(parents=True)
         (self.current / 'TEMPO.exe').write_bytes(b'base')
+        (self.install / 'Update.exe').write_bytes(b'verified native updater')
         self.cache = self.root / 'profile' / 'recovery'
         self.packages = self.root / 'profile' / 'packages'
         self.key = Ed25519PrivateKey.generate()
@@ -31,7 +32,7 @@ class RecoveryTests(unittest.TestCase):
         self.base, self.base_zip = self.release('1.0.1', b'base', 'a')
         self.target, self.target_zip = self.release('1.0.2', b'target', 'b')
 
-    def release(self, version, body, commit, updater=None):
+    def release(self, version, body, commit, updater=b'verified native updater'):
         archive = self.root / (version + '.zip')
         with zipfile.ZipFile(archive, 'w') as z:
             z.writestr('lib/app/TEMPO.exe', body)
@@ -80,13 +81,113 @@ class RecoveryTests(unittest.TestCase):
         self.assertEqual((self.current / 'TEMPO.exe').read_bytes(), b'target')
         self.assertEqual((self.install / 'tempo-repair-quarantine' / 'TEMPO.exe').read_bytes(), b'base')
 
-    def test_explicit_previous_then_forward_preserves_both_quarantines(self):
+    def test_missing_and_corrupt_owner_recovered_from_selected_signed_package(self):
+        self.target, self.target_zip = self.release('1.0.2', b'target', 'b', b'new signed owner')
+        path = self.arm()
+        owner = self.install / 'Update.exe'
+        owner.unlink()
+        with patch.object(recovery.subprocess, 'run') as run, patch.object(recovery.subprocess, 'Popen') as launch:
+            self.assertEqual(self.recover(path), 'recovered_forward')
+            self.assertEqual(owner.read_bytes(), b'new signed owner')
+            owner.write_bytes(b'damaged owner; never execute')
+            self.assertEqual(self.recover(path), 'recovered_forward')
+            self.assertEqual(owner.read_bytes(), b'new signed owner')
+            self.assertEqual([p.read_bytes() for p in self.install.glob('tempo-repair-owner-quarantine-*')],
+                             [b'damaged owner; never execute'])
+            self.assertEqual(self.recover(path, 'previous'), 'recovered_previous')
+            self.assertEqual(owner.read_bytes(), b'verified native updater')
+            run.assert_not_called(); launch.assert_not_called()
+
+    def test_interrupted_owner_activation_can_resume_without_losing_old_bytes(self):
+        path = self.arm()
+        owner = self.install / 'Update.exe'
+        owner.write_bytes(b'damaged owner')
+        original = recovery.os.link
+        def link(source, destination):
+            if Path(destination) == owner:
+                raise OSError('interrupted owner activation')
+            return original(source, destination)
+        with patch.object(recovery.os, 'link', side_effect=link), self.assertRaises(OSError):
+            self.recover(path)
+        self.assertFalse(owner.exists())
+        self.assertEqual([p.read_bytes() for p in self.install.glob('tempo-repair-owner-quarantine-*')], [b'damaged owner'])
+        self.assertNotEqual(json.loads(path.read_text())['state'], 'recovered_forward')
+        self.assertEqual(self.recover(path), 'recovered_forward')
+        self.assertEqual(owner.read_bytes(), b'verified native updater')
+
+    def test_explicit_repair_retains_damaged_marker_and_previous_without_blocking_next_update(self):
+        path = self.arm()
+        self.current.rename(self.install / 'tempo-previous')
+        marker = self.install / 'tempo-update-pending.txt'
+        marker.write_bytes(b'damaged marker with useful evidence')
+        (self.install / 'Update.exe').write_bytes(b'damaged owner')
+        self.assertEqual(self.recover(path), 'recovered_forward')
+        self.assertFalse(marker.exists())
+        self.assertFalse((self.install / 'tempo-previous').exists())
+        self.assertEqual([p.read_bytes() for p in self.install.glob('tempo-repair-retained-tempo-update-pending.txt-*')],
+                         [b'damaged marker with useful evidence'])
+        saved = list(self.install.glob('tempo-repair-retained-tempo-previous-*'))
+        self.assertEqual((saved[0] / 'TEMPO.exe').read_bytes(), b'base')
+        recovery.confirm(path, self.keys, running_version='1.0.2', running_commit='b'*40,
+                         expected_root=self.install, packages_dir=self.packages)
+        third, archive = self.release('1.0.3', b'third', 'c')
+        next_path = recovery.arm_recovery(self.install, self.cache, self.target, self.target_zip, third, archive,
+                                         trusted_keys=self.keys, expected_root=self.install, packages_dir=self.packages)
+        def native(*args, **kwargs):
+            self.assertFalse(marker.exists())
+            self.assertFalse((self.install / 'tempo-previous').exists())
+            (self.current / 'TEMPO.exe').write_bytes(b'third')
+            return SimpleNamespace(returncode=0)
+        with patch.object(recovery.subprocess, 'run', side_effect=native), patch.object(recovery.subprocess, 'Popen'):
+            self.assertEqual(self.apply(next_path), 'awaiting_confirmation')
+        self.assertTrue(saved[0].is_dir())
+
+    def test_owner_directory_or_link_is_never_replaced(self):
+        path = self.arm()
+        owner = self.install / 'Update.exe'
+        owner.unlink(); owner.mkdir()
+        (owner / 'keep.txt').write_bytes(b'unknown data')
+        with self.assertRaisesRegex(ValueError, 'ordinary file'):
+            self.recover(path)
+        self.assertEqual((self.current / 'TEMPO.exe').read_bytes(), b'base')
+        self.assertEqual((owner / 'keep.txt').read_bytes(), b'unknown data')
+        (owner / 'keep.txt').unlink(); owner.rmdir()
+        outside = self.root / 'outside.exe'; outside.write_bytes(b'never change')
+        owner.symlink_to(outside)
+        with self.assertRaisesRegex(ValueError, 'Link or reparse'):
+            self.recover(path)
+        self.assertEqual(outside.read_bytes(), b'never change')
+
+    def test_arm_and_confirm_require_intact_authenticated_owner(self):
+        owner = self.install / 'Update.exe'
+        owner.write_bytes(b'tampered')
+        with self.assertRaisesRegex(ValueError, 'Native updater'):
+            self.arm()
+        owner.write_bytes(b'verified native updater')
+        path = self.arm()
+        self.current.rename(self.install / 'tempo-previous')
+        self.current.mkdir(); (self.current / 'TEMPO.exe').write_bytes(b'target')
+        owner.unlink()
+        with self.assertRaisesRegex(ValueError, 'Native updater'):
+            recovery.confirm(path, self.keys, running_version='1.0.2', running_commit='b'*40,
+                             expected_root=self.install, packages_dir=self.packages)
+        self.assertTrue((self.install / 'tempo-previous').exists())
+
+    def test_target_without_authenticated_owner_is_rejected_before_arming(self):
+        self.target, self.target_zip = self.release('1.0.2', b'target', 'b', updater=None)
+        with self.assertRaisesRegex(ValueError, 'canonical native updater'):
+            self.arm()
+        self.assertFalse((self.cache / 'recovery.json').exists())
+        self.assertEqual((self.current / 'TEMPO.exe').read_bytes(), b'base')
+
+    def test_already_installed_previous_is_not_moved_then_forward_preserves_it(self):
         path = self.arm()
         self.assertEqual(self.recover(path, mode='previous'), 'recovered_previous')
+        self.assertFalse((self.install / 'tempo-repair-quarantine').exists())
         self.assertEqual(self.recover(path), 'recovered_forward')
         self.assertEqual((self.current / 'TEMPO.exe').read_bytes(), b'target')
         retained = list(self.install.glob('tempo-repair-quarantine*'))
-        self.assertEqual(len(retained), 2)
+        self.assertEqual(len(retained), 1)
         self.assertTrue(all((folder / 'TEMPO.exe').read_bytes() == b'base' for folder in retained))
 
     def test_corruption_or_wrong_trust_does_not_replace_application(self):

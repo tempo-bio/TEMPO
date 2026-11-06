@@ -186,7 +186,7 @@ function Apply-Revision($Base, $Target, [string]$Label) {
             $reports[$stage]=$report
         }
         $matrix=$reports.matrix; $migration=$reports.migration; $uninstall=$reports.uninstall
-        foreach ($name in @('full_app_fresh_install','same_source_two_replacements','same_source_skipped_replacement','simulated_missing_current_independent_repair','external_state_bytes_preserved','shortcuts_and_registration')) {
+        foreach ($name in @('full_app_fresh_install','same_source_two_replacements','same_source_skipped_replacement','simulated_missing_current_independent_repair','independent_native_owner_repair','repaired_owner_next_update','immediate_reinstall_preserves_owner','external_state_bytes_preserved','shortcuts_and_registration')) {
             if ($matrix.scenarios.$name -ne $true) { throw "Candidate scenario is missing: $name" }
         }
         if ($uninstall.scenarios.uninstall_preserves_external_state -ne $true) { throw 'Uninstall preservation evidence is missing' }
@@ -200,7 +200,7 @@ function Apply-Revision($Base, $Target, [string]$Label) {
             if ($observed.version -ne $expected.version -or $observed.installer_sha256 -ne $expected.installer.sha256 -or
                 $observed.full_package_sha256 -ne $expected.full.sha256) { throw 'Acceptance describes different package bytes' }
         }
-        foreach ($label in @('fresh','replacement-1','replacement-2','skipped-packaging-revision','offline-repaired','migrated')) {
+        foreach ($label in @('fresh','replacement-1','replacement-2','skipped-packaging-revision','offline-repaired','after-repair-next-update','migrated')) {
             Assert-Verification (Get-Content (Join-Path $Evidence "$label-verification.json") -Raw | ConvertFrom-Json) $verification
         }
         Assert-State
@@ -321,25 +321,37 @@ function Apply-Revision($Base, $Target, [string]$Label) {
         Invoke-Bounded (Join-Path $root 'Update.exe') @('uninstall','--silent','--log',"`"$(Join-Path $Evidence 'before-skipped-uninstall.log')`"",'--rootDir',"`"$root`"") 300
         Assert-VelopackUninstalled
         Invoke-Bounded (Join-Path $Payload $first.installer.path) @('--silent','--log',"`"$(Join-Path $Evidence 'skipped-setup.log')`"",'--installto',"`"$root`"") 600
-        $result.measurements += Apply-Revision $first $third 'skipped-packaging-revision'
-        $result.scenarios.same_source_skipped_replacement=$true
-        # Simulate a missing current directory and unavailable native owner. This
-        # establishes full-payload independent repair, not a power-loss result.
+        Assert-Installed $first
+        $result.scenarios.immediate_reinstall_preserves_owner=$true
+        # Repair into the second revision so the next real native update can be
+        # exercised. No updater is manually copied back after either repair.
+        Arm-Recovery $first $second
         Move-Item (Join-Path $root 'current') (Join-Path $root 'fixture-interrupted-current')
-        Move-Item (Join-Path $root 'Update.exe') (Join-Path $root 'fixture-unavailable-Update.exe')
-        try {
-            Invoke-Bounded $repair @('--mode','forward') 600
-        } finally {
-            Move-Item (Join-Path $root 'fixture-unavailable-Update.exe') (Join-Path $root 'Update.exe')
-        }
-        Assert-Installed $third
+        Remove-Item -LiteralPath (Join-Path $root 'Update.exe')
+        [IO.File]::WriteAllText((Join-Path $root 'tempo-update-pending.txt'),'damaged fixture marker')
+        Invoke-Bounded $repair @('--mode','forward') 600
+        Assert-Installed $second
+        [IO.File]::WriteAllText((Join-Path $root 'Update.exe'),'damaged fixture owner; never execute')
+        Invoke-Bounded $repair @('--mode','forward') 600
+        Assert-Installed $second
+        $retainedOwners=@(Get-ChildItem -LiteralPath $root -Filter 'tempo-repair-owner-quarantine-*' -File)
+        if ($retainedOwners.Count -ne 1 -or (Get-Content $retainedOwners[0].FullName -Raw) -ne 'damaged fixture owner; never execute') { throw 'Repair did not retain the damaged native owner' }
         Invoke-Diagnostics 'offline-repaired'
         Assert-State
         $result.scenarios.simulated_missing_current_independent_repair=$true
+        $result.scenarios.independent_native_owner_repair=$true
+        Invoke-Bounded $repair @('--mode','confirm','--version',$second.version,'--commit',$contract.source_commit) 300
+        $result.measurements += Apply-Revision $second $third 'after-repair-next-update'
+        $result.scenarios.repaired_owner_next_update=$true
+        Invoke-Bounded (Join-Path $root 'Update.exe') @('uninstall','--silent','--log',"`"$(Join-Path $Evidence 'before-skipped-final-uninstall.log')`"",'--rootDir',"`"$root`"") 300
+        Assert-VelopackUninstalled
+        Invoke-Bounded (Join-Path $Payload $first.installer.path) @('--silent','--log',"`"$(Join-Path $Evidence 'skipped-final-setup.log')`"",'--installto',"`"$root`"") 600
+        $result.measurements += Apply-Revision $first $third 'skipped-packaging-revision'
+        $result.scenarios.same_source_skipped_replacement=$true
         $result.scenarios.external_state_bytes_preserved=$true
         $result.scenarios.shortcuts_and_registration=$true
         $result.artifacts=@($contract.revisions | ForEach-Object { @{version=$_.version;installer_sha256=$_.installer.sha256;full_package_sha256=$_.full.sha256} })
-        $result.limits=@('same source in all packaging revisions','diagnostic entrypoints; interactive desktop not accepted','no physical camera, stimulation, or GPU acceptance','no HTTP update selection/download transaction','no power-loss injection','repair restores current only; native updater is manually restored by the fixture','legacy migration limited to reviewed v1.0.1 CPU; NVIDIA and add-ons refused','fixture bytes preserved; saved state not loaded by desktop')
+        $result.limits=@('same source in all packaging revisions','diagnostic entrypoints; interactive desktop not accepted','no physical camera, stimulation, or GPU acceptance','no HTTP update selection/download transaction','no power-loss injection','legacy migration limited to reviewed v1.0.1 CPU; NVIDIA and add-ons refused','fixture bytes preserved; saved state not loaded by desktop')
     }
     $result.success=$true
 } catch {
