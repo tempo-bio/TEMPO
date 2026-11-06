@@ -8,7 +8,9 @@ from pathlib import Path
 from types import SimpleNamespace
 import zipfile
 
-from tempo_update_components import restore_previous_runtime
+from tempo_update_components import (restore_previous_runtime, read_runtime_marker,
+    packaged_descriptor, verify_component_transition, activate_staged_runtime, verify_selected_runtime)
+from tempo_update_manifest import FileRecord
 
 
 def fixture(version, commit, payload):
@@ -119,6 +121,84 @@ class ComponentsTests(unittest.TestCase):
         self.marker_path.unlink()
         self.assertFalse(restore_previous_runtime(record, self.base, self.target, runtime_root=self.root))
         self.assertFalse(self.marker_path.exists())
+
+    def target_package(self, *, embedded=None):
+        data = embedded or self.target.nvidia_descriptor
+        path = self.root / 'target.nupkg'
+        with zipfile.ZipFile(path, 'w') as source:
+            source.writestr('lib/app/_internal/assets/nvidia-runtime.json', data)
+        self.target.inventory = (FileRecord('lib/app/_internal/assets/nvidia-runtime.json',
+                                            len(data), hashlib.sha256(data).hexdigest()),)
+        return path
+
+    def staged(self):
+        _, selected, archive = fixture('1.0.2', 'b'*40, b'target')
+        (self.root / (selected['bundle'] + '.zip')).write_bytes(archive)
+        with zipfile.ZipFile(io.BytesIO(archive)) as source:
+            source.extractall(self.root / selected['bundle'])
+        return dict(schema_version=1, descriptor=json.loads(self.target.nvidia_descriptor),
+                    bundle=selected['bundle'], previous_marker=self.previous)
+
+    def test_signed_descriptor_must_agree_with_the_descriptor_inside_target_package(self):
+        expected = json.loads(self.target.nvidia_descriptor)
+        self.assertEqual(packaged_descriptor(self.target, self.target_package()), expected)
+        other = dict(expected, archive_sha256='c'*64)
+        package = self.target_package(embedded=json.dumps(other).encode())
+        with self.assertRaisesRegex(ValueError, 'differs from signed component metadata'):
+            packaged_descriptor(self.target, package)
+
+    def test_transition_rechecks_both_complete_runtimes_and_activates_idempotently(self):
+        package, receipt = self.target_package(), self.staged()
+        self.set_marker(self.previous)
+        self.assertEqual(verify_component_transition(self.base, self.target, package, receipt,
+            runtime_root=self.root, expected_marker=self.previous), self.previous)
+        self.assertEqual(read_runtime_marker(self.root), self.previous)
+        descriptor = json.loads(self.target.nvidia_descriptor)
+        self.assertTrue(activate_staged_runtime(receipt, descriptor,
+            runtime_root=self.root, previous_marker=self.previous))
+        self.assertFalse(activate_staged_runtime(receipt, descriptor,
+            runtime_root=self.root, previous_marker=self.previous))
+        self.assertEqual(read_runtime_marker(self.root), self.selected)
+        (self.root / self.selected['bundle'] / 'TEMPO/_internal/library.dll').write_bytes(b'bad')
+        with self.assertRaisesRegex(ValueError, 'inventory differs'):
+            activate_staged_runtime(receipt, descriptor, runtime_root=self.root, previous_marker=self.previous)
+
+    def test_transition_refuses_changed_selection_and_corrupt_retained_base(self):
+        package, receipt = self.target_package(), self.staged()
+        with self.assertRaisesRegex(ValueError, 'selection changed'):
+            verify_component_transition(self.base, self.target, package, receipt,
+                runtime_root=self.root, expected_marker=self.previous)
+        self.set_marker(self.previous)
+        before = self.marker_path.read_bytes()
+        (self.root / self.previous['bundle'] / 'TEMPO/_internal/library.dll').write_bytes(b'bad')
+        with self.assertRaisesRegex(ValueError, 'inventory differs'):
+            verify_component_transition(self.base, self.target, package, receipt,
+                runtime_root=self.root, expected_marker=self.previous)
+        self.assertEqual(self.marker_path.read_bytes(), before)
+
+    def test_confirmation_requires_the_selected_verified_target_not_only_a_prepared_receipt(self):
+        package, receipt = self.target_package(), self.staged()
+        self.set_marker(self.previous)
+        with self.assertRaisesRegex(ValueError, 'has not been selected'):
+            verify_selected_runtime(self.target, package, receipt, runtime_root=self.root, previous_marker=self.previous)
+        self.set_marker(self.selected)
+        verify_selected_runtime(self.target, package, receipt, runtime_root=self.root, previous_marker=self.previous)
+        (self.root / self.selected['bundle'] / 'TEMPO/_internal/library.dll').write_bytes(b'changed')
+        with self.assertRaisesRegex(ValueError, 'inventory differs'):
+            verify_selected_runtime(self.target, package, receipt, runtime_root=self.root, previous_marker=self.previous)
+
+    def test_invalid_duplicate_or_linked_marker_is_never_a_cpu_selection(self):
+        for data in ('broken', 'null', '{"schema_version":1,"schema_version":1}'):
+            self.marker_path.write_text(data)
+            with self.subTest(data=data), self.assertRaisesRegex(ValueError, 'Invalid NVIDIA selection'):
+                read_runtime_marker(self.root)
+        self.marker_path.unlink()
+        try:
+            self.marker_path.symlink_to(self.root / 'missing.json')
+        except (OSError, NotImplementedError):
+            self.skipTest('Symbolic links are unavailable')
+        with self.assertRaisesRegex(ValueError, 'Link or reparse point'):
+            read_runtime_marker(self.root)
 
 
 if __name__ == '__main__':

@@ -38,7 +38,7 @@ class NvidiaSetupTests(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
-        self.root = Path(temporary.name)
+        self.root = Path(temporary.name).resolve()
         self.url = 'https://github.com/tempo-bio/TEMPO/releases/download/v1.0.1/TEMPO_NVIDIA_Runtime_v1.0.1.zip'
 
     def descriptor(self, data):
@@ -264,6 +264,30 @@ class NvidiaSetupTests(unittest.TestCase):
             self.assertTrue(setup.activate_nvidia_runtime(receipt, descriptor,
                 target_version='2.0.0', target_commit='a'*40))
             self.assertEqual(json.loads((self.root/'active.json').read_text())['version'], '2.0.0')
+
+    def test_legacy_archive_is_retained_without_extraction_probe_or_selection_change(self):
+        data = _archive()
+        descriptor, payloads = self.multipart(data)
+        marker = dict(schema_version=1, version=VERSION, commit=descriptor['commit'],
+            bundle=descriptor['commit']+'-'+descriptor['archive_sha256'][:12],
+            executable=descriptor['executable'], executable_sha256=descriptor['executable_sha256'],
+            archive_sha256=descriptor['archive_sha256'])
+        path = self.root / 'active.json'
+        path.write_text(json.dumps(marker))
+        before = path.read_bytes()
+        def opener(request, timeout):
+            return _Response(payloads[request.full_url], request.full_url)
+        with patch.object(setup, 'runtime_root', return_value=self.root), \
+             patch.object(setup, '_probe') as probe, patch.object(setup, '_extract_checked') as extract:
+            archive = setup.retain_nvidia_archive(descriptor, marker, open_url=opener)
+            self.assertEqual(archive.read_bytes(), data)
+            self.assertEqual(setup.retain_nvidia_archive(descriptor, marker, open_url=lambda *a, **k: self.fail('cached archive was downloaded again')), archive)
+            archive.write_bytes(b'changed retained archive')
+            with self.assertRaisesRegex(ValueError, 'archive changed'):
+                setup.retain_nvidia_archive(descriptor, marker, open_url=opener)
+            probe.assert_not_called()
+            extract.assert_not_called()
+        self.assertEqual(path.read_bytes(), before)
 
     def test_stage_cancellation_and_stale_activation_preserve_marker(self):
         data = _archive(); descriptor = self.descriptor(data)

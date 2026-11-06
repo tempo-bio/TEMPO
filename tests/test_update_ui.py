@@ -82,6 +82,14 @@ class UpdateDialogTests(unittest.TestCase):
         self.assertEqual(dialog._state, 'ready')
         service.installation_consequences.assert_called_once()
 
+    def test_component_check_blocker_does_not_misdiagnose_a_connection_failure(self):
+        service = coordinator()
+        service.check.side_effect = ValueError('Invalid NVIDIA selection. Repair NVIDIA support or defer the update.')
+        dialog = self.make(service)
+        self.assertEqual(dialog._state, 'error')
+        self.assertIn('Repair NVIDIA support or defer the update.', dialog.error_details.summary.text())
+        self.assertNotIn('Check your connection', dialog.error_details.summary.text())
+
     def test_cancel_waits_for_worker_and_does_not_prepare_component(self):
         service = coordinator()
         started = threading.Event()

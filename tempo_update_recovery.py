@@ -305,10 +305,19 @@ def confirm(record_path, trusted_keys, *, running_version, running_commit, expec
     path, record, root, external, packages = _read_record(record_path, expected_root, packages_dir)
     with update_lock(packages):
         path, record, root, external, packages = _read_record(path, expected_root, packages_dir)
-        (base, _), (target, _) = _load_pair(external, record, trusted_keys)
+        (base, _), (target, package) = _load_pair(external, record, trusted_keys)
         if (running_version, running_commit) != (target.version, target.commit):
             raise ValueError('Running version does not match the signed target.')
         _verify_app(root / 'current', target)
+        from tempo_update_components import verify_selected_runtime
+        receipt = None
+        if record['nvidia_marker'] is not None:
+            receipt_path = _safe(packages.parent / 'prepared-nvidia.json', missing_ok=False)
+            if receipt_path.stat().st_size > 65536:
+                raise ValueError('Invalid staged NVIDIA receipt.')
+            receipt = json.loads(receipt_path.read_bytes())
+        verify_selected_runtime(target, package, receipt, runtime_root=packages.parent.parent / 'nvidia-runtime',
+                                previous_marker=record['nvidia_marker'])
         previous, marker = _safe(root / 'tempo-previous'), _safe(root / 'tempo-update-pending.txt')
         if previous.exists():
             if record['state'] == 'confirming':
@@ -374,6 +383,15 @@ def apply_pending(record_path, trusted_keys, *, expected_root, packages_dir):
             (base, _), (target, package) = _load_pair(external, record, trusted_keys)
             _validated_release(target.envelope, trusted_keys, target.channel)
             _verify_app(root / 'current', base)
+            from tempo_update_components import verify_component_transition
+            receipt = None
+            if record['nvidia_marker'] is not None:
+                receipt_path = _safe(packages.parent / 'prepared-nvidia.json', missing_ok=False)
+                if receipt_path.stat().st_size > 65536:
+                    raise ValueError('Invalid staged NVIDIA receipt.')
+                receipt = json.loads(receipt_path.read_bytes())
+            verify_component_transition(base, target, package, receipt,
+                runtime_root=packages.parent.parent / 'nvidia-runtime', expected_marker=record['nvidia_marker'])
             updater = _safe(root / 'Update.exe', missing_ok=False)
             hashes = [item.sha256 for item in base.inventory if item.path == _PREFIX + 'Squirrel.exe']
             if len(hashes) != 1 or _digest(updater) != hashes[0]:
@@ -424,15 +442,21 @@ def uninstall_application(root, profile, trusted_keys):
 def _main():
     parser = argparse.ArgumentParser(description='Repair or migrate a TEMPO installation.')
     parser.add_argument('--mode', default='forward', choices=('apply', 'confirm', 'forward', 'previous', 'uninstall',
-                                                            'prepare-migration', 'finish-migration'))
+                                                            'prepare-migration', 'finish-migration', 'snapshot-packages'))
     parser.add_argument('--version')
     parser.add_argument('--commit')
     parser.add_argument('--legacy-root', type=Path)
     parser.add_argument('--legacy-installer', type=Path)
     parser.add_argument('--target-manifest', type=Path)
     parser.add_argument('--target-package', type=Path)
+    parser.add_argument('--prepare-nvidia', action='store_true',
+                        help='download and probe the signed target worker before preparing legacy retirement')
     parser.add_argument('--show-errors', action='store_true', help='show actionable failures when launched by the desktop')
     args = parser.parse_args()
+    if args.prepare_nvidia and args.mode != 'prepare-migration':
+        parser.error('--prepare-nvidia applies only to prepare-migration')
+    if args.mode == 'snapshot-packages' and args.legacy_root is None:
+        parser.error('snapshot-packages requires --legacy-root')
     if args.mode == 'prepare-migration' and any(getattr(args, name) is None for name in
             ('legacy_root', 'legacy_installer', 'target_manifest', 'target_package')):
         parser.error('prepare-migration requires --legacy-root, --legacy-installer, --target-manifest and --target-package')
@@ -443,12 +467,16 @@ def _main():
     packages = local / 'TEMPO' / 'updates' / 'packages'
     record = local / 'TEMPO' / 'updates' / 'recovery' / 'recovery.json'
     try:
-        if args.mode == 'prepare-migration':
+        if args.mode == 'snapshot-packages':
+            from tempo_update_addons import snapshot_addons
+            result = snapshot_addons(args.legacy_root, local / 'TEMPO')
+        elif args.mode == 'prepare-migration':
             from tempo_legacy_migration import prepare_legacy_migration, _read
             channel = _read(args.target_manifest).get('signed', {}).get('channel')
             target_release = _validated_release(args.target_manifest.read_bytes(), EMBEDDED_TRUSTED_KEYS, channel)
             result = prepare_legacy_migration(args.legacy_root, local / 'TEMPO', args.legacy_installer,
-                target_release, args.target_package, root, trusted_keys=EMBEDDED_TRUSTED_KEYS)
+                target_release, args.target_package, root, trusted_keys=EMBEDDED_TRUSTED_KEYS,
+                prepare_nvidia=args.prepare_nvidia)
         elif args.mode == 'finish-migration':
             from tempo_legacy_migration import finish_legacy_migration
             result = finish_legacy_migration(local / 'TEMPO', trusted_keys=EMBEDDED_TRUSTED_KEYS)
@@ -466,7 +494,10 @@ def _main():
         print(str(error), file=sys.stderr, flush=True)
         if args.show_errors:
             import ctypes
-            if args.mode in ('prepare-migration', 'finish-migration'):
+            if args.mode == 'snapshot-packages':
+                message = str(error) + '\n\nThe package snapshot did not finish. Keep the old installation, receipts and backups; no package was removed.'
+                title = 'TEMPO package recovery needs attention'
+            elif args.mode in ('prepare-migration', 'finish-migration'):
                 message = str(error) + '\n\nMigration did not finish. Keep the old installation until preparation succeeds. Verified copies were retained for review.'
                 title = 'TEMPO migration needs attention'
             elif args.mode == 'uninstall':

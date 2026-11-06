@@ -139,7 +139,8 @@ class CoordinatorTests(unittest.TestCase):
         with patch('tempo_update_recovery._read_record', return_value=(record_path, record, self.root, recovery, None)), \
              patch('tempo_update_recovery._load_pair', return_value=((self.base, None), (self.target, None))), \
              patch('tempo_nvidia_runtime.active_executable', return_value=None), \
-             patch('tempo_nvidia_setup.activate_nvidia_runtime', return_value=True), \
+             patch('tempo_update_components.packaged_descriptor', return_value={}), \
+             patch('tempo_update_components.activate_staged_runtime', return_value=True), \
              patch('tempo_update_coordinator.subprocess.run') as run:
             with self.assertRaises(ValueError):
                 self.coordinator.confirm_startup()
@@ -159,17 +160,31 @@ class CoordinatorTests(unittest.TestCase):
     def test_cpu_and_gpu_check_require_matching_nvidia_descriptor(self):
         self.service.check.return_value = [self.base]
         self.service.plan.return_value = SimpleNamespace(target=self.target)
-        with patch('tempo_nvidia_runtime.active_executable', return_value=None):
+        self.coordinator.check()
+        self.assertFalse(self.coordinator.component_required)
+        self.assertEqual(self.coordinator.component_download_size, 0)
+        runtime = self.coordinator.profile / 'nvidia-runtime'
+        runtime.mkdir()
+        marker = runtime / 'active.json'
+        marker.write_text('{"selected":"unavailable worker"}')
+        with self.assertRaisesRegex(ValueError, 'no matching NVIDIA'):
             self.coordinator.check()
-            self.assertFalse(self.coordinator.component_required)
-            self.assertEqual(self.coordinator.component_download_size, 0)
-        with patch('tempo_nvidia_runtime.active_executable', return_value='nvidia-worker'):
-            with self.assertRaisesRegex(ValueError, 'no matching NVIDIA'):
-                self.coordinator.check()
-            self.target.nvidia_descriptor = b'{"archive_size":12345}'
+        self.target.nvidia_descriptor = b'{"archive_size":12345}'
+        self.coordinator.check()
+        self.assertTrue(self.coordinator.component_required)
+        self.assertEqual(self.coordinator.component_download_size, 12345)
+        marker.write_text('broken selection')
+        with self.assertRaisesRegex(ValueError, 'Invalid NVIDIA selection'):
             self.coordinator.check()
-            self.assertTrue(self.coordinator.component_required)
-            self.assertEqual(self.coordinator.component_download_size, 12345)
+
+    def test_selection_added_after_check_cannot_be_silently_dropped_at_handoff(self):
+        runtime = self.coordinator.profile / 'nvidia-runtime'
+        runtime.mkdir()
+        (runtime / 'active.json').write_text('{"selected":"changed since check"}')
+        with patch('tempo_update_recovery.arm_recovery') as arm:
+            with self.assertRaisesRegex(ValueError, 'Prepare matching NVIDIA support'):
+                self.coordinator.installation_consequences()
+        arm.assert_not_called()
 
 
 if __name__ == '__main__':

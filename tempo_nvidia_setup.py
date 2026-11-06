@@ -179,38 +179,72 @@ def _bundle_matches(expected, installed):
         and _digest(expected/name) == _digest(installed/name) for name in expected_files)
 
 
-def _stage_runtime(root, descriptor, report, open_url):
+def _download_archive(descriptor, archive, report, open_url):
     opener = open_url or urllib.request.urlopen
+    received = 0
+    digest = hashlib.sha256()
+    parts = descriptor.get('parts') if descriptor['schema_version'] == 2 else [dict(
+        url=descriptor['archive_url'], size=descriptor['archive_size'], sha256=descriptor['archive_sha256'])]
+    with archive.open('wb') as output:
+        for part in parts:
+            request = urllib.request.Request(part['url'], headers={'User-Agent': 'TEMPO/' + VERSION})
+            part_received = 0
+            part_digest = hashlib.sha256()
+            with opener(request, timeout=30) as response:
+                final_url = urlsplit(response.geturl())
+                if final_url.scheme != 'https' or final_url.hostname not in (
+                        'github.com', 'release-assets.githubusercontent.com', 'objects.githubusercontent.com'):
+                    raise ValueError('NVIDIA runtime download redirected outside GitHub.')
+                while block := response.read(1024 * 1024):
+                    part_received += len(block)
+                    if part_received > part['size']:
+                        raise ValueError('NVIDIA runtime download exceeded its declared size.')
+                    received += len(block)
+                    digest.update(block)
+                    part_digest.update(block)
+                    output.write(block)
+                    report(received, descriptor['archive_size'])
+            if part_received != part['size'] or part_digest.hexdigest() != part['sha256']:
+                raise ValueError('NVIDIA runtime download failed its release checksum.')
+    if received != descriptor['archive_size'] or digest.hexdigest() != descriptor['archive_sha256']:
+        raise ValueError('NVIDIA runtime download failed its release checksum.')
+
+
+def retain_nvidia_archive(descriptor, marker, *, report=lambda received, total: None, open_url=None):
+    """Retain an authenticated old ZIP without executing or selecting its worker.
+
+    Legacy setup discarded its archive. A source descriptor must be independently
+    authenticated before this call; a marker alone does not authorize downloads.
+    """
+    from tempo_update_components import _valid_marker
+    from tempo_update_migration import _safe
+    validate_descriptor(descriptor, version=descriptor.get('app_version'), commit=descriptor.get('commit'), allow_legacy=False)
+    if not _valid_marker(marker, descriptor):
+        raise ValueError('NVIDIA archive selection differs from the authenticated source.')
+    root = _safe(runtime_root())
+    def retain():
+        destination = _safe(root / (marker['bundle'] + '.zip'))
+        if destination.exists():
+            if (not destination.is_file() or destination.stat().st_size != descriptor['archive_size']
+                    or _digest(destination) != descriptor['archive_sha256']):
+                raise ValueError('Retained NVIDIA archive changed. Keep both copies for review.')
+            return destination
+        if shutil.disk_usage(root).free < descriptor['archive_size']:
+            raise OSError('Insufficient space to retain the old NVIDIA archive for offline recovery.')
+        with tempfile.TemporaryDirectory(prefix='nvidia-download-', dir=root) as folder:
+            archive = Path(folder) / 'runtime.zip'
+            _download_archive(descriptor, archive, report, open_url)
+            # Atomic creation retains any competing writer's destination.
+            os.link(archive, destination)
+        return destination
+    return _locked(root, retain)
+
+
+def _stage_runtime(root, descriptor, report, open_url):
     with tempfile.TemporaryDirectory(prefix='nvidia-download-', dir=root) as folder:
         staging = Path(folder)
         archive = staging / 'runtime.zip'
-        received = 0
-        digest = hashlib.sha256()
-        parts = descriptor.get('parts') if descriptor['schema_version'] == 2 else [dict(
-            url=descriptor['archive_url'], size=descriptor['archive_size'], sha256=descriptor['archive_sha256'])]
-        with archive.open('wb') as output:
-            for part in parts:
-                request = urllib.request.Request(part['url'], headers={'User-Agent': 'TEMPO/' + VERSION})
-                part_received = 0
-                part_digest = hashlib.sha256()
-                with opener(request, timeout=30) as response:
-                    final_url = urlsplit(response.geturl())
-                    if final_url.scheme != 'https' or final_url.hostname not in (
-                            'github.com', 'release-assets.githubusercontent.com', 'objects.githubusercontent.com'):
-                        raise ValueError('NVIDIA runtime download redirected outside GitHub.')
-                    while block := response.read(1024 * 1024):
-                        part_received += len(block)
-                        if part_received > part['size']:
-                            raise ValueError('NVIDIA runtime download exceeded its declared size.')
-                        received += len(block)
-                        digest.update(block)
-                        part_digest.update(block)
-                        output.write(block)
-                        report(received, descriptor['archive_size'])
-                if part_received != part['size'] or part_digest.hexdigest() != part['sha256']:
-                    raise ValueError('NVIDIA runtime download failed its release checksum.')
-        if received != descriptor['archive_size'] or digest.hexdigest() != descriptor['archive_sha256']:
-            raise ValueError('NVIDIA runtime download failed its release checksum.')
+        _download_archive(descriptor, archive, report, open_url)
         unpacked = staging / 'unpacked'
         _extract_checked(archive, unpacked)
         executable = unpacked / 'TEMPO' / 'TEMPO.exe'

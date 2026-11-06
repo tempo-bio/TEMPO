@@ -250,6 +250,19 @@ class RecoveryTests(unittest.TestCase):
             self.assertEqual((self.cache / name).read_bytes(), original[name])
         self.assertEqual((self.current / 'TEMPO.exe').read_bytes(), b'base')
 
+    def test_selection_changed_after_arming_blocks_native_replacement(self):
+        path = self.prepare_apply()
+        runtime = self.packages.parent.parent / 'nvidia-runtime'
+        runtime.mkdir(parents=True, exist_ok=True)
+        (runtime / 'active.json').write_text('{"new":"selection"}')
+        with patch.object(recovery.subprocess, 'run') as native, patch.object(recovery.subprocess, 'Popen') as launch:
+            with self.assertRaisesRegex(ValueError, 'selection changed'):
+                self.apply(path)
+            native.assert_not_called()
+            launch.assert_not_called()
+        self.assertEqual(json.loads(path.read_text())['state'], 'armed')
+        self.assertEqual((self.current / 'TEMPO.exe').read_bytes(), b'base')
+
     def test_success_requires_verified_target_before_launch(self):
         path = self.prepare_apply()
         with patch.object(recovery.subprocess, 'run', return_value=SimpleNamespace(returncode=0)), \

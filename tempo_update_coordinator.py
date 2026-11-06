@@ -49,6 +49,7 @@ class PackagedUpdateCoordinator:
 
     def check(self, *, cancel=None):
         self._full_fallback = False
+        self.nvidia_receipt = None
         releases = self.service.check(cancel=cancel)
         self.base_release = next((r for r in releases if
                                   (r.version, r.commit) == (self.version, self.commit)), None)
@@ -67,8 +68,8 @@ class PackagedUpdateCoordinator:
             if str(exc) != 'Automatic downgrade or reinstall is not permitted.':
                 raise
             self.plan = None
-        from tempo_nvidia_runtime import active_executable
-        self.component_required = self.plan is not None and active_executable() is not None
+        from tempo_update_components import read_runtime_marker
+        self.component_required = self.plan is not None and read_runtime_marker(self.profile / 'nvidia-runtime') is not None
         self.component_download_size = 0
         if self.component_required:
             encoded = self.plan.target.nvidia_descriptor
@@ -99,12 +100,11 @@ class PackagedUpdateCoordinator:
         """Stage a target worker without selecting it for the running application."""
         if not self.component_required:
             return None
-        release, _ = self.service.verified_prepared()
-        encoded = getattr(release, 'nvidia_descriptor', None)
-        if encoded is None:
-            raise ValueError('This update does not provide a matching NVIDIA worker. Defer it or explicitly choose CPU support.')
+        release, package = self.service.verified_prepared()
+        from tempo_update_components import packaged_descriptor
+        descriptor = packaged_descriptor(release, package)
         from tempo_nvidia_setup import stage_nvidia_runtime
-        self.nvidia_receipt = stage_nvidia_runtime(json.loads(encoded),
+        self.nvidia_receipt = stage_nvidia_runtime(descriptor,
             target_version=release.version, target_commit=release.commit, report=progress)
         from tempo_annotation_store import atomic_bytes
         atomic_bytes(self.service.root / 'prepared-nvidia.json',
@@ -121,7 +121,7 @@ class PackagedUpdateCoordinator:
             self.installation.root, self.service.root / 'packages')
         if record['state'] == 'confirmed':
             return False
-        (_, _), (target, _) = _load_pair(external, record, self.service.keys)
+        (_, _), (target, package) = _load_pair(external, record, self.service.keys)
         if (self.version, self.commit) != (target.version, target.commit):
             raise ValueError('The running application differs from the pending update. Use explicit repair before updating again.')
         if record['nvidia_marker'] is not None:
@@ -131,13 +131,12 @@ class PackagedUpdateCoordinator:
             receipt = json.loads(path.read_bytes())
             if receipt.get('previous_marker') != record['nvidia_marker'] or target.nvidia_descriptor is None:
                 raise ValueError('NVIDIA selection differs from the pending update.')
+            from tempo_update_components import activate_staged_runtime, packaged_descriptor
+            activate_staged_runtime(receipt, packaged_descriptor(target, package),
+                runtime_root=self.profile / 'nvidia-runtime', previous_marker=record['nvidia_marker'])
             from tempo_nvidia_runtime import active_executable
             if active_executable() is None:
-                from tempo_nvidia_setup import activate_nvidia_runtime
-                activate_nvidia_runtime(receipt, json.loads(target.nvidia_descriptor),
-                    target_version=target.version, target_commit=target.commit)
-                if active_executable() is None:
-                    raise ValueError('The matching NVIDIA worker could not be selected. Recovery confirmation is deferred.')
+                raise ValueError('The matching NVIDIA worker could not be selected. Recovery confirmation is deferred.')
         self._verify_native_tools()
         result = subprocess.run([str(self.repair_executable), '--mode', 'confirm',
             '--version', self.version, '--commit', self.commit], check=False,
@@ -157,8 +156,12 @@ class PackagedUpdateCoordinator:
         if self.base_release is None or self.base_package is None:
             raise ValueError('A verified offline recovery package is required before installation. Repair this installation before updating.')
         target, package = self.service.verified_prepared()
-        if self.component_required and self.nvidia_receipt is None:
+        from tempo_update_components import read_runtime_marker, verify_component_transition
+        marker = read_runtime_marker(self.profile / 'nvidia-runtime')
+        if marker is not None and self.nvidia_receipt is None:
             raise ValueError('Prepare matching NVIDIA support before installing this update.')
+        verify_component_transition(self.base_release, target, package, self.nvidia_receipt,
+            runtime_root=self.profile / 'nvidia-runtime', expected_marker=marker)
         # Companions use the reserved per-user identity, never a record-supplied root.
         expected_root = Path(os.environ['LOCALAPPDATA']) / 'TEMPO.Bio.Desktop'
         if self.installation.root != expected_root:
@@ -169,7 +172,7 @@ class PackagedUpdateCoordinator:
             self.service.root / 'recovery', self.base_release, self.base_package,
             target, package, trusted_keys=self.service.keys,
             packages_dir=self.service.root / 'packages', expected_root=expected_root,
-            nvidia_marker=(self.nvidia_receipt or {}).get('previous_marker'))
+            nvidia_marker=marker)
         return target, package
 
     def _verify_native_tools(self):

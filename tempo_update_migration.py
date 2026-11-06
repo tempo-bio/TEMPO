@@ -80,6 +80,13 @@ def discover_addons(install_root):
                 result.append({'path': str(path), 'compatibility': 'requires_review'})
     # An unrecognized or partial package directory must not be treated as absent.
     if not result:
+        # The published overlay remover deletes its own child, leaving this
+        # empty parent. Only exact restoration of its reviewed before-files
+        # distinguishes that state from an unknown partial installation.
+        if not any(root.iterdir()):
+            from tempo_update_addons import reviewed_base_restored
+            if reviewed_base_restored(_safe(install_root)):
+                return []
         result.append({'path': str(root), 'compatibility': 'requires_review'})
     return result
 

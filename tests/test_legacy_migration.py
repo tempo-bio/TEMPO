@@ -4,9 +4,12 @@ from dataclasses import replace
 from datetime import datetime, timezone
 import hashlib
 import json
+import io
+import os
 from pathlib import Path
 import tempfile
 import unittest
+import zipfile
 from unittest.mock import patch
 
 from cryptography.hazmat.primitives import serialization
@@ -16,6 +19,11 @@ import tempo_legacy_migration as migration
 from tempo_update_bootstrap import bootstrap_packaged_storage, StorageBootstrapError
 from tests.test_update_bootstrap import Registry
 from tests import test_update_recovery as recovery_fixtures
+from tests.test_update_components import fixture as runtime_fixture
+from tests.test_nvidia_setup import _Response
+import tempo_nvidia_setup as nvidia_setup
+from tempo_update_manifest import load_verified_manifest
+from tempo_update_lock import application_lock, startup_guard
 
 
 def sha(value):
@@ -45,7 +53,7 @@ class LegacyMigrationTests(unittest.TestCase):
         self.keys = {'test': self.key.public_key().public_bytes(serialization.Encoding.Raw,
                                                                serialization.PublicFormat.Raw)}
         self.release, self.package = recovery_fixtures.RecoveryTests.release(self, '1.0.2', b'target', 'b')
-        self.guard = patch.object(migration, 'legacy_writer_guard', side_effect=lambda *args: nullcontext())
+        self.guard = patch.object(migration, 'legacy_writer_guard', side_effect=lambda *args, **kwargs: nullcontext())
         self.guard.start(); self.addCleanup(self.guard.stop)
         model_patch = patch('tempo_model_catalog.installed_model_dir', return_value=self.profile / 'models' / 'repository')
         model_patch.start(); self.addCleanup(model_patch.stop)
@@ -75,6 +83,132 @@ class LegacyMigrationTests(unittest.TestCase):
     def retire(self):
         self.old_exe.unlink()
         (self.legacy / '_internal/assets/build-provenance.json').unlink()
+
+    def nvidia_fixture(self, *, retain_old_archive=True):
+        old, previous, archive = runtime_fixture('1.0.1', 'a'*40, b'old worker')
+        new, selected, target_archive = runtime_fixture('1.0.2', 'b'*40, b'new worker')
+        root = self.profile / 'nvidia-runtime'
+        root.mkdir(parents=True)
+        with zipfile.ZipFile(io.BytesIO(archive)) as source:
+            source.extractall(root / previous['bundle'])
+        if retain_old_archive:
+            (root / (previous['bundle'] + '.zip')).write_bytes(archive)
+        marker = root / 'active.json'
+        marker.write_text(json.dumps(previous))
+        self.put(self.legacy, '_internal/assets/nvidia-runtime.json', old.nvidia_descriptor)
+        self.nvidia_supported = {'1.0.1': sha(old.nvidia_descriptor)}
+        # The target descriptor is authenticated twice: the signed release field
+        # and the complete signed inventory of the actual CPU package.
+        self.put(self.bundle, 'assets/nvidia-runtime.json', new.nvidia_descriptor)
+        with zipfile.ZipFile(self.package, 'a') as source:
+            source.writestr('lib/app/_internal/assets/nvidia-runtime.json', new.nvidia_descriptor)
+        from scripts.package_windows_updates import inventory_package, _canonical
+        import base64
+        value = json.loads(self.release.signed_payload)
+        value.update(nvidia_descriptor=json.loads(new.nvidia_descriptor), inventory=inventory_package(self.package))
+        value['full'].update(size=self.package.stat().st_size, sha256=sha(self.package.read_bytes()))
+        envelope = _canonical(dict(signed=value, signatures=[dict(key_id='test',
+            signature=base64.b64encode(self.key.sign(_canonical(value))).decode('ascii'))]))
+        self.release = load_verified_manifest(envelope, self.keys, now=datetime.now(timezone.utc), min_sequence=0, expected_channel='stable')
+        data = {json.loads(old.nvidia_descriptor)['parts'][0]['url']: archive,
+                json.loads(new.nvidia_descriptor)['parts'][0]['url']: target_archive}
+        def opener(request, timeout):
+            return _Response(data[request.full_url], request.full_url)
+        def probe(executable, descriptor):
+            self.assertEqual(json.loads(marker.read_bytes()), previous)
+            # A real modern probe needs these leases. Preparation must not hold
+            # its exclusive lease or startup guard across that subprocess.
+            with startup_guard(self.profile), application_lock(self.profile, shared=True):
+                pass
+            return {'success': True}
+        for change in (patch.object(nvidia_setup, 'runtime_root', return_value=root),
+                       patch.object(nvidia_setup.urllib.request, 'urlopen', side_effect=opener),
+                       patch.object(nvidia_setup, '_probe', side_effect=probe)):
+            change.start(); self.addCleanup(change.stop)
+        return root, marker, previous, selected
+
+    def test_nvidia_migration_retains_old_archive_and_selects_target_only_on_finish(self):
+        root, marker, previous, selected = self.nvidia_fixture(retain_old_archive=False)
+        original = marker.read_bytes()
+        kwargs = dict(prepare_nvidia=True, supported_nvidia=self.nvidia_supported)
+        self.assertEqual(self.prepare(**kwargs)['status'], 'prepared')
+        self.assertEqual(marker.read_bytes(), original)
+        self.assertTrue((root / (previous['bundle'] + '.zip')).is_file())
+        with patch.object(nvidia_setup, 'stage_nvidia_runtime', side_effect=AssertionError('prepared target downloaded again')):
+            self.assertEqual(self.prepare(**kwargs)['status'], 'prepared')
+        self.retire()
+        self.assertEqual(self.finish(supported_nvidia=self.nvidia_supported)['status'], 'complete')
+        self.assertEqual(json.loads(marker.read_bytes()), selected)
+        self.assertTrue((root / previous['bundle'] / 'TEMPO/TEMPO.exe').is_file())
+        self.assertTrue((migration._transaction(self.profile) / 'legacy-nvidia-descriptor.json').is_file())
+        self.assertTrue(self.finish(supported_nvidia=self.nvidia_supported)['already_published'])
+
+    def test_nvidia_preparation_and_probe_failure_preserve_old_pair_and_data(self):
+        root, marker, previous, selected = self.nvidia_fixture()
+        original = marker.read_bytes()
+        with self.assertRaisesRegex(ValueError, 'matching NVIDIA migration'):
+            self.prepare()
+        with patch.object(nvidia_setup, '_probe', side_effect=RuntimeError('GPU check failed')):
+            with self.assertRaisesRegex(RuntimeError, 'GPU check failed'):
+                self.prepare(prepare_nvidia=True, supported_nvidia=self.nvidia_supported)
+        self.assertEqual(marker.read_bytes(), original)
+        self.assertTrue(self.old_exe.exists())
+        self.assertFalse((migration._transaction(self.profile) / 'prepared.json').exists())
+        self.assertFalse((self.profile / 'config/collaboration-location.json').exists())
+
+    def test_unreviewed_source_descriptor_cannot_authorize_any_nvidia_download(self):
+        _, marker, _, _ = self.nvidia_fixture()
+        original = marker.read_bytes()
+        with patch.object(nvidia_setup, 'retain_nvidia_archive') as retain, \
+                patch.object(nvidia_setup, 'stage_nvidia_runtime') as stage:
+            with self.assertRaisesRegex(ValueError, 'not a reviewed migration source'):
+                self.prepare(prepare_nvidia=True, supported_nvidia={})
+            retain.assert_not_called()
+            stage.assert_not_called()
+        self.assertEqual(marker.read_bytes(), original)
+        self.assertTrue(self.old_exe.exists())
+
+    def test_nvidia_corruption_or_new_selection_blocks_finish_without_publication(self):
+        root, marker, previous, selected = self.nvidia_fixture()
+        self.prepare(prepare_nvidia=True, supported_nvidia=self.nvidia_supported)
+        self.retire()
+        original = marker.read_bytes()
+        library = root / selected['bundle'] / 'TEMPO/_internal/library.dll'
+        body = library.read_bytes()
+        library.write_bytes(b'changed library')
+        with self.assertRaisesRegex(ValueError, 'inventory differs'):
+            self.finish(supported_nvidia=self.nvidia_supported)
+        self.assertEqual(marker.read_bytes(), original)
+        library.write_bytes(body)
+        marker.write_text(json.dumps(dict(previous, commit='c'*40)))
+        with self.assertRaisesRegex(ValueError, 'selection changed'):
+            self.finish(supported_nvidia=self.nvidia_supported)
+        self.assertFalse((self.profile / 'config/collaboration-location.json').exists())
+
+    def test_nvidia_interrupted_publication_resumes_with_both_pairs_retained(self):
+        root, marker, previous, selected = self.nvidia_fixture()
+        self.prepare(prepare_nvidia=True, supported_nvidia=self.nvidia_supported)
+        self.retire()
+        with patch.object(migration, 'prepare_packaged_storage', side_effect=OSError('interrupted publication')):
+            with self.assertRaisesRegex(OSError, 'interrupted publication'):
+                self.finish(supported_nvidia=self.nvidia_supported)
+        self.assertEqual(json.loads(marker.read_bytes()), selected)
+        self.assertFalse((migration._transaction(self.profile) / 'completed.json').exists())
+        self.assertEqual(self.finish(supported_nvidia=self.nvidia_supported)['status'], 'complete')
+        self.assertTrue((root / previous['bundle'] / 'TEMPO/TEMPO.exe').is_file())
+
+    @unittest.skipUnless(os.name == 'nt', 'Windows file-share behavior')
+    def test_guard_hashes_external_worker_using_its_owned_executable_handle(self):
+        from tempo_update_components import _verify_retained
+        root, marker, previous, _ = self.nvidia_fixture()
+        self.guard.stop()
+        descriptor = json.loads((self.legacy / '_internal/assets/nvidia-runtime.json').read_bytes())
+        bundle = root / previous['bundle']
+        with migration.legacy_writer_guard(bundle, hash_executables=True) as locked:
+            self.assertEqual(locked['TEMPO/TEMPO.exe'], [len(b'old worker'), sha(b'old worker')])
+            with self.assertRaises(PermissionError):
+                (bundle / 'TEMPO/TEMPO.exe').read_bytes()
+            _verify_retained(root, previous, descriptor, locked_files=locked)
 
     def test_preparation_retirement_and_publication_preserve_all_work(self):
         settings = self.put(self.profile, 'config/setup_state.json', b'{"stage":"complete"}')

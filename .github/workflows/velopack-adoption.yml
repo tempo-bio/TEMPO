@@ -46,7 +46,7 @@ jobs:
         run: python tempo/scripts/prepare_velopack_updater.py velopack
       - name: Verify legacy data transactions and Windows lease behavior
         working-directory: tempo
-        run: python -m unittest -q tests.test_legacy_migration tests.test_update_bootstrap tests.test_update_storage tests.test_update_migration tests.test_update_lock
+        run: python -m unittest -q tests.test_legacy_migration tests.test_update_bootstrap tests.test_update_storage tests.test_update_migration tests.test_update_lock tests.test_update_components tests.test_update_coordinator tests.test_update_addons tests.test_nvidia_setup
       - name: Build production-feature candidate
         working-directory: velopack
         run: cargo build --locked --release -p velopack_bins --bin update --features windows --target x86_64-pc-windows-msvc --target-dir ../production-target

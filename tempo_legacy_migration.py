@@ -28,6 +28,11 @@ SUPPORTED_LEGACY = {
         'provenance_sha256': 'afb218ece211f40c7bd644841e3db45806769a2ff28c595b8e074257ac048ebe',
     },
 }
+# Exact descriptor bytes extracted from the reviewed published CPU installer.
+# Keep this separate from the existing CPU identity to preserve pending journals.
+SUPPORTED_LEGACY_NVIDIA = {
+    '1.0.1': '4cd48cb0b5dc40f0fb59ff8fa66bcda8c46b68d147b46f4ab326817ffc6d369a',
+}
 
 
 def _read(path):
@@ -82,7 +87,7 @@ def _identify(root, supported):
 
 
 @contextmanager
-def legacy_writer_guard(root, executable_sha256=None):
+def legacy_writer_guard(root, executable_sha256=None, *, hash_executables=False):
     """Deny new executable opens while excluding already-running legacy writers.
 
     This is Windows-only. Denying executable reads prevents another legacy
@@ -110,6 +115,7 @@ def legacy_writer_guard(root, executable_sha256=None):
                                     ctypes.POINTER(wintypes.DWORD)]
     psapi.EnumProcesses.restype = wintypes.BOOL
     handles = []
+    locked_files = {}
     root = _safe(root)
     try:
         for directory, dirs, files in os.walk(root, followlinks=False,
@@ -124,16 +130,19 @@ def legacy_writer_guard(root, executable_sha256=None):
                 if handle == wintypes.HANDLE(-1).value:
                     raise BlockingIOError('Close the old TEMPO installation and its workers before migrating.')
                 handles.append(handle)
-                if path == root / 'TEMPO.exe' and executable_sha256 is not None:
+                if hash_executables or (path == root / 'TEMPO.exe' and executable_sha256 is not None):
                     digest, buffer = hashlib.sha256(), ctypes.create_string_buffer(1024 * 1024)
                     count = wintypes.DWORD()
+                    size = 0
                     while True:
                         if not kernel.ReadFile(handle, buffer, len(buffer), ctypes.byref(count), None):
                             raise ctypes.WinError(ctypes.get_last_error())
                         if not count.value:
                             break
+                        size += count.value
                         digest.update(buffer.raw[:count.value])
-                    if digest.hexdigest() != executable_sha256:
+                    locked_files[path.relative_to(root).as_posix()] = [size, digest.hexdigest()]
+                    if path == root / 'TEMPO.exe' and executable_sha256 is not None and digest.hexdigest() != executable_sha256:
                         raise ValueError('Legacy executable changed before migration acquired its lock.')
         # EnumProcesses truncates silently if the buffer is full; grow until complete.
         capacity = 4096
@@ -159,7 +168,7 @@ def legacy_writer_guard(root, executable_sha256=None):
                         raise BlockingIOError('The old TEMPO installation still has a running process. Close it before migrating.')
             finally:
                 kernel.CloseHandle(handle)
-        yield
+        yield locked_files
     finally:
         for handle in reversed(handles):
             kernel.CloseHandle(handle)
@@ -192,7 +201,7 @@ def _record(profile, supported):
     folder = _transaction(profile)
     record = _read(folder / 'migration.json')
     fields = {'format', 'legacy_root', 'target_root', 'version', 'identity', 'stores', 'selected', 'model_root'}
-    if (not isinstance(record, dict) or set(record) != fields or record['format'] != FORMAT
+    if (not isinstance(record, dict) or set(record) not in (fields, fields | {'nvidia'}) or record['format'] != FORMAT
             or not isinstance(record['version'], str) or not isinstance(record['identity'], dict)
             or not isinstance(record['stores'], dict)
             or not all(isinstance(store, dict) for store in record['stores'].values())
@@ -209,6 +218,99 @@ def _record(profile, supported):
     if root == Path(profile) or root in Path(profile).parents or Path(profile) in root.parents:
         raise ValueError('Legacy installation overlaps personal storage.')
     return folder, record, root, target
+
+
+def _legacy_nvidia_descriptor(path, version, identity, supported_nvidia):
+    from tempo_nvidia_manifest import validate_descriptor
+    expected = supported_nvidia.get(version)
+    if expected is None or _hash(_safe(path, missing_ok=False)) != expected:
+        raise ValueError('The old NVIDIA descriptor is not a reviewed migration source. Keep the old installation.')
+    value = _read(path)
+    validate_descriptor(value, version=version, commit=identity['commit'], allow_legacy=False)
+    return value
+
+
+@contextmanager
+def _prepare_nvidia(root, profile, release, package, version, identity, *, enabled, supported_nvidia):
+    """Probe before the exclusive app lease; retain locks on old external workers.
+
+    The target probe is itself a modern worker with a shared application lease.
+    Holding startup/exclusive leases across it would prevent it from starting.
+    Legacy main/worker executable guards exclude writers which lack that lease.
+    """
+    from tempo_update_components import (read_runtime_marker, _valid_marker, _verify_retained,
+                                         packaged_descriptor, verify_staged_runtime)
+    from tempo_annotation_store import session_lock
+    runtime = _safe(profile / 'nvidia-runtime')
+    marker = read_runtime_marker(runtime)
+    if marker is None:
+        yield None
+        return
+    if not enabled:
+        raise ValueError('This installation needs matching NVIDIA migration. Keep the old installation, or prepare its matching worker with --prepare-nvidia.')
+    source_path = root / '_internal' / 'assets' / 'nvidia-runtime.json'
+    source = _legacy_nvidia_descriptor(source_path, version, identity, supported_nvidia)
+    if not _valid_marker(marker, source):
+        raise ValueError('Existing NVIDIA selection does not match the reviewed old release. Keep the old installation.')
+    target = packaged_descriptor(release, package)
+    with legacy_writer_guard(runtime / marker['bundle'], hash_executables=True) as locked:
+        with startup_guard(profile), application_lock(profile):
+            pass  # Exclude an active modern app before downloading either pair.
+        from tempo_nvidia_setup import runtime_root, retain_nvidia_archive
+        if _safe(runtime_root()) != runtime:
+            raise ValueError('NVIDIA staging does not belong to this personal profile.')
+        # The published v1.0.1 installer discarded its downloaded ZIP. Obtain
+        # the pinned old archive when absent so every old library is verifiable
+        # and an offline old pair remains available after uninstall.
+        retain_nvidia_archive(source, marker)
+        _verify_retained(runtime, marker, source, locked_files=locked)
+        cached = _transaction(profile) / 'migration.json'
+        receipt = None
+        if cached.exists():
+            previous = _read(cached).get('nvidia')
+            if isinstance(previous, dict):
+                receipt = previous.get('receipt')
+        if receipt is None:
+            from tempo_nvidia_setup import stage_nvidia_runtime
+            receipt = stage_nvidia_runtime(target, target_version=release.version, target_commit=release.commit)
+        with session_lock(runtime / 'install'):
+            # A concurrent installer or a changed cached receipt cannot replace
+            # the captured old/target pair or authorize retirement.
+            _verify_retained(runtime, marker, source, locked_files=locked)
+            verify_staged_runtime(receipt, target, runtime_root=runtime, previous_marker=marker)
+            yield dict(legacy_descriptor_sha256=supported_nvidia[version],
+                       previous_marker=marker, receipt=receipt)
+
+
+@contextmanager
+def _finish_nvidia(folder, record, release, profile, supported_nvidia):
+    from tempo_update_components import (read_runtime_marker, _valid_marker, _verify_retained,
+                                         packaged_descriptor, verify_staged_runtime)
+    from tempo_annotation_store import session_lock
+    runtime = _safe(profile / 'nvidia-runtime')
+    component = record.get('nvidia')
+    if component is None:
+        if read_runtime_marker(runtime) is not None:
+            raise ValueError('NVIDIA selection changed; component migration requires review.')
+        yield lambda: None
+        return
+    if (not isinstance(component, dict) or set(component) != {'legacy_descriptor_sha256', 'previous_marker', 'receipt'}
+            or component['legacy_descriptor_sha256'] != supported_nvidia.get(record['version'])):
+        raise ValueError('Invalid legacy NVIDIA migration record.')
+    source = _legacy_nvidia_descriptor(folder / 'legacy-nvidia-descriptor.json', record['version'],
+                                       record['identity'], supported_nvidia)
+    marker, receipt = component['previous_marker'], component['receipt']
+    if not _valid_marker(marker, source):
+        raise ValueError('Retained NVIDIA selection differs from the reviewed old release.')
+    target = packaged_descriptor(release, folder / 'target.nupkg')
+    with legacy_writer_guard(runtime / marker['bundle'], hash_executables=True) as locked, session_lock(runtime / 'install'):
+        _verify_retained(runtime, marker, source, locked_files=locked)
+        selected = verify_staged_runtime(receipt, target, runtime_root=runtime,
+                                          previous_marker=marker, allow_activated=True)
+        def activate():
+            if read_runtime_marker(runtime) != selected:
+                _atomic_json(runtime / 'active.json', selected)
+        yield activate
 
 
 def completed_migration(profile, legacy_root=None):
@@ -339,7 +441,8 @@ def _relocate_dataset_references(selected, legacy_root, profile, footprint, mode
 
 
 def prepare_legacy_migration(root, profile, installer, release, package, target_root, *,
-                             trusted_keys, registry=None, supported=SUPPORTED_LEGACY):
+                             trusted_keys, registry=None, supported=SUPPORTED_LEGACY,
+                             prepare_nvidia=False, supported_nvidia=SUPPORTED_LEGACY_NVIDIA):
     """Stage verified personal data and offline installers; never retire software."""
     from tempo_update_recovery import _store_copy, _validated_release, _verify_app
     from tempo_update_manifest import verify_zip
@@ -360,10 +463,12 @@ def prepare_legacy_migration(root, profile, installer, release, package, target_
         raise ValueError('Target release differs from its signed envelope.')
     verify_zip(package, release.inventory)
     _verify_app(target / 'current', release)
-    with startup_guard(profile), application_lock(profile), legacy_writer_guard(root, identity['executable_sha256']):
+    _registrations(root, registry)
+    with legacy_writer_guard(root, identity['executable_sha256']), \
+            _prepare_nvidia(root, profile, release, package, version, identity,
+                            enabled=prepare_nvidia, supported_nvidia=supported_nvidia) as nvidia, \
+            startup_guard(profile), application_lock(profile):
         _registrations(root, registry)
-        if (profile / 'nvidia-runtime' / 'active.json').exists():
-            raise ValueError('This installation needs matching NVIDIA migration. Keep the old installation until component migration is available.')
         inventory = inventory_legacy(root)
         if inventory['addons']:
             raise ValueError('Remove the optional package using its verified procedure or defer migration. Its records were retained.')
@@ -374,6 +479,8 @@ def prepare_legacy_migration(root, profile, installer, release, package, target_
         record = dict(format=FORMAT, legacy_root=str(root), target_root=str(target),
                       version=version, identity=identity, stores=stores, selected=None,
                       model_root=str(_model_destination(profile)))
+        if nvidia is not None:
+            record['nvidia'] = nvidia
         if len(json.dumps(record).encode('utf-8')) > MAX_RECORD:
             raise ValueError('Migration inventory exceeds its supported size. Keep the old installation.')
         expected_collaboration = _expected_collaboration(record, target)
@@ -389,6 +496,8 @@ def prepare_legacy_migration(root, profile, installer, release, package, target_
                         (folder / 'target.json').read_bytes() == release.envelope and
                         _hash(folder / 'legacy-installer.exe') == identity['installer_sha256']):
                     _validate_target(folder, trusted_keys, target)
+                    if nvidia is not None:
+                        _legacy_nvidia_descriptor(folder / 'legacy-nvidia-descriptor.json', version, identity, supported_nvidia)
                     _check_destination(profile, previous['selected'])
                     return {'status': 'prepared', 'record': str(folder / 'migration.json'),
                             'next_action': 'Remove the old installation through Windows Settings, then finish migration.'}
@@ -403,6 +512,8 @@ def prepare_legacy_migration(root, profile, installer, release, package, target_
         _atomic_json(folder / 'migration.json', record)
         _store_copy(installer, folder / 'legacy-installer.exe')
         _store_copy(package, folder / 'target.nupkg')
+        if nvidia is not None:
+            _store_copy(root / '_internal' / 'assets' / 'nvidia-runtime.json', folder / 'legacy-nvidia-descriptor.json')
         if (folder / 'target.json').exists() and (folder / 'target.json').read_bytes() != release.envelope:
             raise ValueError('A different target was already prepared.')
         from tempo_annotation_store import atomic_bytes
@@ -449,7 +560,8 @@ def prepare_legacy_migration(root, profile, installer, release, package, target_
                 'next_action': 'Remove the old installation through Windows Settings, then finish migration.'}
 
 
-def finish_legacy_migration(profile, *, trusted_keys, registry=None, supported=SUPPORTED_LEGACY):
+def finish_legacy_migration(profile, *, trusted_keys, registry=None, supported=SUPPORTED_LEGACY,
+                            supported_nvidia=SUPPORTED_LEGACY_NVIDIA):
     """Publish only after legacy retirement; leave snapshots and installers intact."""
     from tempo_update_bootstrap import _preserve_models
     profile = _safe(profile)
@@ -463,16 +575,14 @@ def finish_legacy_migration(profile, *, trusted_keys, registry=None, supported=S
         prepared = _read(folder / 'prepared.json')
         if prepared != dict(format=FORMAT, legacy_root=str(root), record_sha256=_hash(folder / 'migration.json')):
             raise ValueError('Legacy preparation is incomplete or changed. Do not publish its data.')
-        if (profile / 'nvidia-runtime' / 'active.json').exists():
-            raise ValueError('NVIDIA selection changed; component migration requires review.')
         if _hash(folder / 'legacy-installer.exe') != record['identity']['installer_sha256']:
             raise ValueError('Offline legacy installer failed verification.')
-        _validate_target(folder, trusted_keys, target, offline=True)
+        release = _validate_target(folder, trusted_keys, target, offline=True)
         _expected_collaboration(record, target)
         expected_collaboration = record['selected']
         if not isinstance(expected_collaboration, dict) or _footprint(folder / 'selected' / 'datasets') != expected_collaboration:
             raise ValueError('The prepared collaboration copy changed. Original snapshots were retained.')
-        with legacy_writer_guard(root):
+        with legacy_writer_guard(root), _finish_nvidia(folder, record, release, profile, supported_nvidia) as activate_nvidia:
             for label, source in (('flat', root), ('internal', root / '_internal')):
                 if _mutable(folder / label) != record['stores'][label]:
                     raise ValueError('A migration snapshot changed. The original installation backup was retained.')
@@ -491,6 +601,9 @@ def finish_legacy_migration(profile, *, trusted_keys, registry=None, supported=S
                 raise ValueError('The selected model repository changed after preparation. Review both model locations before finishing.')
             for snapshot in snapshots:
                 _preserve_models(snapshot, model_root)
+            # Publish collaboration last. A stopped activation/publication is
+            # pending, blocks desktop startup, and is resumable with both pairs.
+            activate_nvidia()
             result = prepare_packaged_storage(folder / 'selected', profile)
             if result['status'] != 'complete':
                 raise ValueError('Migration publication has a data conflict. Verified snapshots were retained.')

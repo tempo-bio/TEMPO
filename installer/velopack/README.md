@@ -70,7 +70,7 @@ The separate `scripts/package_windows_updates.py` release step binds the resulti
 
 ## Legacy migration candidate
 
-The prepare/finish commands currently support the reviewed Windows v1.0.1 CPU installation. `tempo_legacy_migration.SUPPORTED_LEGACY` binds its executable, embedded provenance, source commit and original installer to exact checksums. The original installer is the [published v1.0.1 artifact](https://github.com/tempo-bio/TEMPO/releases/tag/v1.0.1), not a rebuilt copy. Other versions, orphaned registrations, optional-package receipts and existing NVIDIA selections stop for review. NVIDIA migration and the full real-installer acceptance matrix remain release gates.
+The prepare/finish commands support the reviewed Windows v1.0.1 CPU installation. An explicit NVIDIA migration path is implemented against that installer's exact descriptor bytes; it still needs real Windows/GPU acceptance. `tempo_legacy_migration.SUPPORTED_LEGACY` binds the executable, embedded provenance, source commit and original installer to exact checksums. `SUPPORTED_LEGACY_NVIDIA` separately pins the old descriptor so pending CPU journals keep their existing identity. The original installer is the [published v1.0.1 artifact](https://github.com/tempo-bio/TEMPO/releases/tag/v1.0.1), not a rebuilt copy. Other versions, orphaned registrations, unknown NVIDIA selections and optional-package receipts stop for review.
 
 Install the candidate separately at `%LOCALAPPDATA%\TEMPO.Bio.Desktop`, keeping the old installation closed. Before removing it, use the companion with the target's signed release envelope and full package:
 
@@ -89,3 +89,31 @@ Only after preparation returns `prepared`, remove the **old** installation throu
 Finish requires the old executable and registrations to be gone. It verifies retained snapshots and surviving source files again, preserves repository-specific model selection, and publishes the stable collaboration root last. A pending transaction blocks normal startup until completion, including after an interrupted copy or publication. The commands never run a legacy executable or uninstaller, remove research files, export credentials, or delete the offline copies. Account settings, onboarding state, existing model directories, recordings and external analysis locations retain their existing paths.
 
 The Windows fixture checks that migration refuses an already-running legacy process and prevents another instance from opening the old executable while preparation owns it. This fixture and the isolated data-transaction tests are necessary evidence; they do not replace verification of the actual old Inno installer, target TEMPO payload, shortcuts, NVIDIA components and both uninstallers.
+
+### NVIDIA preparation and finish
+
+For a reviewed v1.0.1 NVIDIA selection, add `--prepare-nvidia` to the same prepare command. This explicitly authorizes the component downloads and target GPU probe. The source marker must match the exact reviewed descriptor; a marker alone cannot authorize a worker or archive. The signed target descriptor must also match the descriptor inside the signed full CPU package.
+
+The published v1.0.1 setup discarded its runtime ZIP. When absent, preparation downloads and retains the checksum-pinned original multipart archive without running or selecting the old worker. This can add **6,233,317,508 bytes** to the target worker download; an already verified retained archive is reused. The old worker's complete installed inventory is compared against that archive. Its executable handles remain guarded throughout preparation, preventing an older worker that lacks the new application lease from starting. On Windows the guard hashes executable bytes through its owned handles, because its exclusive sharing mode prevents a second file open.
+
+The new worker is downloaded, verified and GPU-probed before taking the exclusive application lease used for the data copy. The probe needs its own shared application lease. Preparation retains the old selection and both archives; it records the staged target and keeps the exact old descriptor outside the old uninstaller's scope. A retry revalidates and reuses the prepared target. Missing/corrupt libraries, an unknown descriptor, a failed probe, changed selection or conflicting data prevent retirement preparation.
+
+Finish requires the old registration and executable to be gone. It verifies both complete runtime inventories again and selects only the prepared target, then publishes collaboration storage last. These are separate filesystem writes. An interruption between activation and publication leaves a pending migration that blocks desktop startup; running finish again accepts only the original or exact prepared target selection and completes without deleting either runtime. No automatic downgrade or CPU opt-out is inferred from missing or damaged NVIDIA support.
+
+Ordinary application updates use the presence of an NVIDIA selection rather than successful worker lookup to determine component requirements. They recheck the signed base/target pair before handoff and after application exit. Independent confirmation requires the target worker to be selected and its complete retained inventory intact before retiring the application backup. Unit tests simulate downloads/probes; the Windows fixture checks executable-sharing behavior. These checks do not establish physical GPU compatibility or successful inference after a full-app migration.
+
+### Optional-package assessment and snapshots
+
+The reviewed Stimulation Investigation 1 v0.1.0 overlay requires its v1.0.1 base and removal before upgrade. It remains optional and has no v1.0.2 compatibility approval. Preparation still blocks every installed/partial package tree.
+
+Before following its removal procedure, retain its recovery material outside the old installation:
+
+```powershell
+& '<candidate>/TEMPORepair.exe' --mode snapshot-packages --legacy-root '<registered old install>'
+```
+
+The command copies flat and historical `_internal` receipt/backup trees and the reviewed overlay's current application files into a new `%LOCALAPPDATA%\TEMPO\updates\package-snapshots` directory. It verifies the copies and writes `package-snapshot.json` only on completion. Reruns create separate snapshots. Unknown receipts cannot supply arbitrary paths to copy. Research directories, preferences and firmware are not changed, and no package command is executed.
+
+The result distinguishes `removal_required`, `requires_review` and `base_restored`. The reviewed removal route requires matching receipt identity, original base provenance, expected current hashes and intact original backups. Interrupted install/removal states are accepted only where the published remover supports those exact before/after file hashes. Unknown versions, missing backups, altered files, malformed receipts and historical layouts require review. An empty parent left by the original remover ceases to block migration only when the original executable, provenance and firmware bytes match the reviewed base and the overlay's added files are absent. Other empty directories remain review states. A snapshot preserves evidence; it does not authorize removal.
+
+For `removal_required`, obtain the original published package and verify its archive against the reported `published_archive_sha256` before using its `Remove.cmd`, or defer migration to finish collecting experiment data. Then rerun preparation against the restored reviewed base. Never use receipt-supplied executable paths or copy the old overlay onto v1.0.2. A separate compatible add-on build and real installation/removal acceptance remain required before allowing an overlay through migration.
