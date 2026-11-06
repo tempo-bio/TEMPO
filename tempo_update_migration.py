@@ -87,14 +87,19 @@ def discover_addons(install_root):
 def inventory_legacy(install_root):
     """Locate legacy datasets, local model fallbacks, and add-on evidence."""
     root = _safe(install_root)
-    datasets = _safe(root / 'datasets')
-    models = []
-    for name in _MODEL_NAMES:
-        path = _safe(root / name)
-        if path.is_file():
-            models.append(str(path))
-    return {'datasets': str(datasets) if datasets.is_dir() else None,
-            'models': models, 'addons': discover_addons(root)}
+    layouts = (root, _safe(root / '_internal'))
+    stores, models, addons = [], [], []
+    for layout in layouts:
+        datasets = _safe(layout / 'datasets')
+        if datasets.is_dir():
+            stores.append(str(datasets))
+        for name in _MODEL_NAMES:
+            path = _safe(layout / name)
+            if path.is_file():
+                models.append(str(path))
+        addons.extend(discover_addons(layout))
+    return {'datasets': stores[0] if stores else None, 'dataset_roots': stores,
+            'models': models, 'addons': addons}
 
 
 def migrate_collaboration(legacy_root, destination_root, *, receipt_path=None, cancel=None):

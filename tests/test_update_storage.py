@@ -93,6 +93,14 @@ class StorageTests(unittest.TestCase):
         self.assertFalse(self.pointer.exists())
         self.assertEqual((self.profile/'collaboration/workspaces/b/draft').read_bytes(), b'unrelated')
 
+    def test_historical_internal_layout_is_detected_and_migrated(self):
+        draft = self.put(self.old, '_internal/datasets/workspaces/legacy/draft.json', b'pending work')
+        model = self.put(self.old, '_internal/yolo26n-scout.pt', b'legacy model')
+        result = prepare_packaged_storage(self.bundle, self.profile, [self.old])
+        self.assertEqual(result['status'], 'complete')
+        self.assertIn(str(model), result['inventories'][1]['models'])
+        self.assertEqual((self.profile/'collaboration/workspaces/legacy/draft.json').read_bytes(), draft.read_bytes())
+
 
 if __name__ == '__main__':
     unittest.main()

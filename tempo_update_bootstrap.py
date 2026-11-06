@@ -100,6 +100,10 @@ def bootstrap_packaged_storage(bundle_root, profile_root, *, registry=None,
     missing or unverifiable; unregistered evidence at the default location is
     also blocked. An expert must verify and migrate such installations separately.
     """
+    from tempo_legacy_migration import completed_migration
+    pending = _safe(Path(profile_root) / 'updates' / 'legacy-migration' / 'migration.json')
+    if pending.exists() and not completed_migration(profile_root):
+        raise StorageBootstrapError('Legacy migration is pending. Finish the prepared migration with TEMPORepair before starting TEMPO.')
     registered = find_registered_legacy(registry)
     if registered:
         locations = sorted({item['location'] for item in registered if item['location']})
@@ -117,7 +121,7 @@ def bootstrap_packaged_storage(bundle_root, profile_root, *, registry=None,
     except (OSError, ValueError) as error:
         raise StorageBootstrapError('Could not inspect the older TEMPO location. '
                                     'Resolve the access problem before starting.') from error
-    if evidence:
+    if evidence and not completed_migration(profile_root, legacy):
         raise StorageBootstrapError(
             f'Possible older TEMPO data or installation found at {legacy}. '
             'Its origin and active writers cannot be verified. Use a verified '

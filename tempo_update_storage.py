@@ -104,7 +104,7 @@ def prepare_packaged_storage(bundle_root, profile_root, legacy_roots=(), *, canc
             result.update(status='conflict', conflicts=[{'kind': 'addon_requires_review', **addon}
                                                          for addon in addons])
             return result
-        stores = [Path(item['datasets']) for item in inventories if item['datasets'] is not None]
+        stores = [Path(source) for item in inventories for source in item['dataset_roots']]
         fingerprints = []
         for source in stores:
             fingerprint = _inventory_store(source, cancel)

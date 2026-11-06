@@ -119,6 +119,7 @@ for weight_file in MODEL_FILES.values():
 hidden_imports = [
     'tempo_update_installation',
     'tempo_update_bootstrap',
+    'tempo_legacy_migration',
     'tempo_update_recovery',
     'tempo_update_storage',
     'tempo_update_migration',

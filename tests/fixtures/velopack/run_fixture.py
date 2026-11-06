@@ -154,7 +154,7 @@ def assert_running_app_refused(result, root, *, app_alive):
 
 def run_scenarios(work, setup, packages, repair, releases, keys, outcomes, report):
     package = packages['1.0.2']
-    for scenario in ('normal', 'guarded_handoff', 'consecutive', 'before_old_rename', 'after_old_rename', 'restore_failure', 'abrupt_after_old', 'running_process', 'hook_cleanup', 'wait_timeout'):
+    for scenario in ('normal', 'guarded_handoff', 'consecutive', 'before_old_rename', 'after_old_rename', 'restore_failure', 'abrupt_after_old', 'running_process', 'hook_cleanup', 'legacy_writer_guard', 'wait_timeout'):
         local = work / ('profile-' + scenario)
         local.mkdir()
         root = local / 'TEMPO.Bio.Desktop'
@@ -274,6 +274,40 @@ def run_scenarios(work, setup, packages, repair, releases, keys, outcomes, repor
                 if child_pid.exists() and fixture_process_running(
                         int(child_pid.read_text(encoding='utf-8')), wait_ms=15000):
                     raise AssertionError('Hook helper did not exit after its normal stop request')
+            probe(root, '1.0.1', env)
+        elif scenario == 'legacy_writer_guard':
+            from tempo_legacy_migration import legacy_writer_guard
+            ready, stop = work / 'legacy.ready', work / 'legacy.stop'
+            env.update(TEMPO_FIXTURE_READY=str(ready), TEMPO_FIXTURE_STOP=str(stop))
+            expected = next(item.sha256 for item in releases['1.0.1'].inventory
+                            if item.path == 'lib/app/TEMPO.exe')
+            held = subprocess.Popen([str(root / 'current' / 'TEMPO.exe'), '--hold'], env=env)
+            try:
+                deadline = time.monotonic() + 30
+                while not ready.exists() and held.poll() is None and time.monotonic() < deadline:
+                    time.sleep(.1)
+                if not ready.exists():
+                    raise AssertionError('Legacy writer fixture did not start')
+                try:
+                    with legacy_writer_guard(root / 'current', expected):
+                        raise AssertionError('Migration accepted a running legacy writer')
+                except BlockingIOError:
+                    pass
+                if held.poll() is not None:
+                    raise AssertionError('Migration guard terminated the old application')
+            finally:
+                stop.write_text('exit', encoding='utf-8')
+                held.wait(timeout=15)
+            ready.unlink(); stop.unlink()
+            with legacy_writer_guard(root / 'current', expected):
+                try:
+                    child = subprocess.Popen([str(root / 'current' / 'TEMPO.exe'), '--hold'], env=env)
+                except OSError:
+                    pass  # Windows must deny executable reads while preparation owns the guard.
+                else:
+                    stop.write_text('exit', encoding='utf-8')
+                    child.wait(timeout=15)
+                    raise AssertionError('Old application started during migration preparation')
             probe(root, '1.0.1', env)
         elif scenario == 'before_old_rename':
             apply(root, package, env=env, fault='before_old_rename')

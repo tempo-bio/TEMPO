@@ -15,7 +15,7 @@ cargo build --locked --release -p velopack_bins --bin update --features windows 
 Pop-Location
 ```
 
-The preparation script verifies the commit, clean tree, upstream source hashes and patch digest. The manually dispatched `velopack-adoption` workflow builds distinct production-feature and fixture-fault binaries and exercises disposable installations. Fixture results are evidence, not production certification. Review actual Windows results and the broader acceptance matrix in `docs/WINDOWS_UPDATE_ADOPTION_PLAN.md` before changing the pin to `certified` and recording the production updater SHA-256. Keep the exact production binary and its evidence.
+The preparation script verifies the commit, clean tree, upstream source hashes and patch digest. The `velopack-adoption` workflow builds distinct production-feature and fixture-fault binaries and exercises disposable installations. Fixture results are evidence, not production certification. Review actual Windows results and the broader acceptance matrix in `docs/WINDOWS_UPDATE_ADOPTION_PLAN.md` before changing the pin to `certified` and recording the production updater SHA-256. Keep the exact production binary and its evidence.
 
 The signed package inventory covers every ZIP member. Verification of the installed `current` directory uses the pinned extractor's layout: `Squirrel.exe` and `*_ExecutionStub.exe` remain installation-owner files and are excluded from that directory. Offline repair uses the same layout. The root `Update.exe` is verified separately against the signed `lib/app/Squirrel.exe` checksum before apply; missing or changed application files still fail verification.
 
@@ -44,3 +44,25 @@ dotnet <vpk>/tools/net8.0/any/vpk.dll '[win]' pack --packId TEMPO.Bio.Desktop --
 ```
 
 The separate `scripts/package_windows_updates.py` release step binds the resulting full package SHA-256 and verifies the embedded updater against its release evidence, then creates signed metadata. Its package-level evidence and publication checks follow packaging; native evidence alone does not certify a full package. The command does not publish. Preserve and certify the exact full package and installer, and complete the separate Windows installation, recovery, component and state-preservation gates before considering publication.
+
+## Legacy migration candidate
+
+The prepare/finish commands currently support the reviewed Windows v1.0.1 CPU installation. `tempo_legacy_migration.SUPPORTED_LEGACY` binds its executable, embedded provenance, source commit and original installer to exact checksums. The original installer is the [published v1.0.1 artifact](https://github.com/tempo-bio/TEMPO/releases/tag/v1.0.1), not a rebuilt copy. Other versions, orphaned registrations, optional-package receipts and existing NVIDIA selections stop for review. NVIDIA migration and the full real-installer acceptance matrix remain release gates.
+
+Install the candidate separately at `%LOCALAPPDATA%\TEMPO.Bio.Desktop`, keeping the old installation closed. Before removing it, use the companion with the target's signed release envelope and full package:
+
+```powershell
+& '<candidate>/TEMPORepair.exe' --mode prepare-migration --legacy-root '<registered old install>' --legacy-installer '<original v1.0.1 installer>' --target-manifest '<signed target release.json>' --target-package '<target full.nupkg>'
+```
+
+Preparation verifies the installed target against the signed inventory, excludes legacy writers, and copies both historical flat and `_internal` dataset/model layouts into personal storage. It retains raw snapshots, the verified old installer, and the full target package under `%LOCALAPPDATA%\TEMPO\updates\legacy-migration`. Differing stores, conflicting destination work or source changes require review; no active collaboration pointer changes during preparation. Exact references to verified dataset files are remapped in JSON values and generated YOLO `data.yaml` files. External research paths stay unchanged, and original metadata remains in the raw snapshots. Unsupported absolute identifiers and YAML references stop before uninstall.
+
+Only after preparation returns `prepared`, remove the **old** installation through Windows Settings. Keep TEMPO closed throughout. Repair the candidate installation with its original verified setup executable if old shortcuts were removed, then finish:
+
+```powershell
+& '<candidate>/TEMPORepair.exe' --mode finish-migration
+```
+
+Finish requires the old executable and registrations to be gone. It verifies retained snapshots and surviving source files again, preserves repository-specific model selection, and publishes the stable collaboration root last. A pending transaction blocks normal startup until completion, including after an interrupted copy or publication. The commands never run a legacy executable or uninstaller, remove research files, export credentials, or delete the offline copies. Account settings, onboarding state, existing model directories, recordings and external analysis locations retain their existing paths.
+
+The Windows fixture checks that migration refuses an already-running legacy process and prevents another instance from opening the old executable while preparation owns it. This fixture and the isolated data-transaction tests are necessary evidence; they do not replace verification of the actual old Inno installer, target TEMPO payload, shortcuts, NVIDIA components and both uninstallers.

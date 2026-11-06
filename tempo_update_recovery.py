@@ -422,12 +422,20 @@ def uninstall_application(root, profile, trusted_keys):
 
 
 def _main():
-    parser = argparse.ArgumentParser(description='Repair an already armed TEMPO installation.')
-    parser.add_argument('--mode', default='forward', choices=('apply', 'confirm', 'forward', 'previous', 'uninstall'))
+    parser = argparse.ArgumentParser(description='Repair or migrate a TEMPO installation.')
+    parser.add_argument('--mode', default='forward', choices=('apply', 'confirm', 'forward', 'previous', 'uninstall',
+                                                            'prepare-migration', 'finish-migration'))
     parser.add_argument('--version')
     parser.add_argument('--commit')
+    parser.add_argument('--legacy-root', type=Path)
+    parser.add_argument('--legacy-installer', type=Path)
+    parser.add_argument('--target-manifest', type=Path)
+    parser.add_argument('--target-package', type=Path)
     parser.add_argument('--show-errors', action='store_true', help='show actionable failures when launched by the desktop')
     args = parser.parse_args()
+    if args.mode == 'prepare-migration' and any(getattr(args, name) is None for name in
+            ('legacy_root', 'legacy_installer', 'target_manifest', 'target_package')):
+        parser.error('prepare-migration requires --legacy-root, --legacy-installer, --target-manifest and --target-package')
     if sys.platform != 'win32' or not EMBEDDED_TRUSTED_KEYS:
         raise SystemExit('Repair companion has no certified embedded trust keys.')
     local = Path(os.environ['LOCALAPPDATA'])
@@ -435,7 +443,16 @@ def _main():
     packages = local / 'TEMPO' / 'updates' / 'packages'
     record = local / 'TEMPO' / 'updates' / 'recovery' / 'recovery.json'
     try:
-        if args.mode == 'uninstall':
+        if args.mode == 'prepare-migration':
+            from tempo_legacy_migration import prepare_legacy_migration, _read
+            channel = _read(args.target_manifest).get('signed', {}).get('channel')
+            target_release = _validated_release(args.target_manifest.read_bytes(), EMBEDDED_TRUSTED_KEYS, channel)
+            result = prepare_legacy_migration(args.legacy_root, local / 'TEMPO', args.legacy_installer,
+                target_release, args.target_package, root, trusted_keys=EMBEDDED_TRUSTED_KEYS)
+        elif args.mode == 'finish-migration':
+            from tempo_legacy_migration import finish_legacy_migration
+            result = finish_legacy_migration(local / 'TEMPO', trusted_keys=EMBEDDED_TRUSTED_KEYS)
+        elif args.mode == 'uninstall':
             result = uninstall_application(root, local / 'TEMPO', EMBEDDED_TRUSTED_KEYS)
         elif args.mode == 'apply':
             result = apply_pending(record, EMBEDDED_TRUSTED_KEYS, expected_root=root, packages_dir=packages)
@@ -449,7 +466,10 @@ def _main():
         print(str(error), file=sys.stderr, flush=True)
         if args.show_errors:
             import ctypes
-            if args.mode == 'uninstall':
+            if args.mode in ('prepare-migration', 'finish-migration'):
+                message = str(error) + '\n\nMigration did not finish. Keep the old installation until preparation succeeds. Verified copies were retained for review.'
+                title = 'TEMPO migration needs attention'
+            elif args.mode == 'uninstall':
                 message = str(error) + '\n\nThe uninstaller did not finish. Use Windows Settings to retry or the original installer to repair the installation.'
                 title = 'TEMPO uninstall needs attention'
             else:
@@ -460,7 +480,7 @@ def _main():
                 title = 'TEMPO update needs attention'
             ctypes.windll.user32.MessageBoxW(None, message, title, 0x10)
         raise SystemExit(1) from error
-    print(result)
+    print(json.dumps(result, indent=2) if isinstance(result, dict) else result)
 
 
 def main():

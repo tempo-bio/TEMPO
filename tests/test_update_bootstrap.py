@@ -96,6 +96,15 @@ class BootstrapTests(unittest.TestCase):
         self.assertEqual(data.read_text(), 'legacy')
         self.assertFalse((self.profile / 'config/collaboration-location.json').exists())
 
+    def test_unregistered_internal_legacy_drafts_are_not_mistaken_for_fresh_install(self):
+        data = self.legacy / '_internal/datasets/workspace/draft.json'
+        data.parent.mkdir(parents=True)
+        data.write_text('unsynced legacy draft')
+        with self.assertRaisesRegex(StorageBootstrapError, 'origin and active writers'):
+            self.run_bootstrap()
+        self.assertEqual(data.read_text(), 'unsynced legacy draft')
+        self.assertFalse((self.profile / 'config/collaboration-location.json').exists())
+
     def test_models_are_verified_and_preserved_without_overwriting(self):
         source = self.bundle / 'yolo26n-scout.pt'
         source.write_bytes(b'local model')
