@@ -3,6 +3,7 @@ import ast
 import hashlib
 import json
 from pathlib import Path
+import re
 import subprocess
 import unittest
 
@@ -31,12 +32,25 @@ class ReleasePreflightTests(unittest.TestCase):
 
     def test_release_requires_preflight_before_installing_application_dependencies(self):
         release = (ROOT / '.github/workflows/release-windows.yml').read_text(encoding='utf-8')
-        self.assertIn('uses: ./.github/workflows/windows-preflight.yml', release)
-        source = release.split('\n  validate-source:\n', 1)[1].split('\n  build-nvidia-runtime:\n', 1)[0]
-        self.assertIn('\n    needs: [preflight, velopack-native]\n', source)
-        self.assertIn('Run complete regression and scientific suites', source)
-        self.assertIn('needs: [preflight, validate-source, build-windows, verify-installed, velopack-native, verify-velopack]', release)
-        self.assertIn("$env:PREFLIGHT_RESULT -ne 'success'", release)
+        # Only read job headers and their inline dependencies. Preflight runs
+        # with python -S before any YAML library can be installed.
+        _, *blocks = re.split(r'^  ([\w-]+):\n', release.split('\njobs:\n', 1)[1], flags=re.M)
+        jobs = dict(zip(blocks[::2], blocks[1::2]))
+
+        def dependencies(job):
+            match = re.search(r'^    needs: ([^\n]+)$', jobs[job], flags=re.M)
+            self.assertIsNotNone(match, f'{job} must declare its dependencies')
+            return {name.strip() for name in match[1].strip('[]').split(',')}
+
+        self.assertIn('uses: ./.github/workflows/windows-preflight.yml', jobs['preflight'])
+        self.assertIn('preflight', dependencies('velopack-native'))
+        self.assertTrue({'preflight', 'velopack-native'} <= dependencies('validate-source'))
+        self.assertIn('Run complete regression and scientific suites', jobs['validate-source'])
+        self.assertIn('verify-velopack', dependencies('replay-velopack'))
+        self.assertTrue({'preflight', 'validate-source', 'build-windows', 'verify-installed',
+                         'velopack-native', 'verify-velopack', 'replay-velopack'} <= dependencies('certify'))
+        self.assertIn("$env:PREFLIGHT_RESULT -ne 'success'", jobs['certify'])
+        self.assertIn("$env:REPLAY_RESULT -ne 'success'", jobs['certify'])
         fast = (ROOT / '.github/workflows/windows-preflight.yml').read_text(encoding='utf-8')
         self.assertIn('python -S -m unittest -v tests.test_assistance_launch tests.test_release_preflight', fast)
         self.assertIn('tests.test_nvidia_manifest tests.test_nvidia_runtime_package', fast)
