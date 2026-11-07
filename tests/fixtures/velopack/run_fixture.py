@@ -5,6 +5,7 @@ Reports observed scenarios; it never issues production certification. Windows,
 """
 import argparse
 import base64
+from contextlib import nullcontext
 from datetime import datetime, timezone
 import zipfile
 import hashlib
@@ -53,10 +54,15 @@ def signed_release(package, version, key, keys):
 
 
 
-def run(*args, env=None, expect=0, timeout=180, **options):
-    result = subprocess.run([str(arg) for arg in args], env=env, timeout=timeout,
-                            text=True, encoding='utf-8', errors='replace',
-                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, **options)
+def run(*args, env=None, expect=0, timeout=180, stdout_path=None, **options):
+    # A detached cleanup process may inherit stdout. With a file, waiting for
+    # the uninstaller does not also wait for that process to close a pipe.
+    with (stdout_path.open('wb') if stdout_path else nullcontext(subprocess.PIPE)) as stdout:
+        result = subprocess.run([str(arg) for arg in args], env=env, timeout=timeout,
+                                text=True, encoding='utf-8', errors='replace',
+                                stdout=stdout, stderr=subprocess.STDOUT, **options)
+    if stdout_path:
+        result.stdout = stdout_path.read_text(encoding='utf-8', errors='replace')
     diagnostic_dir = (env or {}).get('TEMPO_FIXTURE_DIAGNOSTIC_DIR')
     if diagnostic_dir and 'Retirement diagnostic' in result.stdout:
         folder = Path(diagnostic_dir)
@@ -319,36 +325,28 @@ def run_scenarios(work, setup, packages, repair, releases, keys, outcomes, repor
             outcomes['health_confirmation'] = True
             outcomes['two_successive_updates'] = True
         elif scenario == 'uninstall_rename_blocked':
-            import ctypes
-            from ctypes import wintypes
             import winreg
-            kernel = ctypes.WinDLL('kernel32', use_last_error=True)
-            kernel.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD,
-                wintypes.LPVOID, wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
-            kernel.CreateFileW.restype = wintypes.HANDLE
-            kernel.CloseHandle.argtypes = [wintypes.HANDLE]
-            kernel.CloseHandle.restype = wintypes.BOOL
-            # Permit reads/writes, but hold the root against deletion/rename.
-            handle = kernel.CreateFileW(str(root), 0x80, 3, None, 3, 0x02000000, None)
-            if handle == wintypes.HANDLE(-1).value:
-                raise ctypes.WinError(ctypes.get_last_error())
-            try:
-                run(root / 'Update.exe', 'uninstall', '--silent', '--rootDir', root, env=env, expect=1)
+            # A metadata-only handle on the root does not reliably prevent a
+            # rename. Hold an existing descendant open for data access.
+            with (root / 'current' / 'fixture-version.txt').open('r+b'):
+                result = run(root / 'Update.exe', 'uninstall', '--silent', '--rootDir', root, env=env, expect=1)
+                if 'Writing uninstall registry key' not in result.stdout:
+                    raise AssertionError('Uninstall failed before the retirement rollback was exercised\n' + result.stdout)
                 recovery._verify_app(root / 'current', releases['1.0.1'])
                 recovery._verify_owner(root, releases['1.0.1'])
                 with winreg.OpenKey(winreg.HKEY_CURRENT_USER,
                         r'Software\Microsoft\Windows\CurrentVersion\Uninstall\TEMPO.RecoveryFixture') as entry:
                     if Path(winreg.QueryValueEx(entry, 'InstallLocation')[0]) != root:
                         raise AssertionError('Failed retirement did not restore uninstall ownership')
-            finally:
-                kernel.CloseHandle(handle)
             probe(root, '1.0.1', env)
         elif scenario == 'uninstall_reinstall':
-            run(root / 'Update.exe', 'uninstall', '--silent', '--rootDir', root, env=env)
+            run(root / 'Update.exe', 'uninstall', '--silent', '--rootDir', root,
+                env=env, stdout_path=work / 'uninstall-reinstall.log')
             if root.exists():
                 raise AssertionError('Uninstall did not retire the reusable installation path')
             retired = list(local.glob('.*.tempo-uninstalled-*'))
-            # Reuse immediately, while the retired directory may still be in use.
+            if not retired:
+                raise AssertionError('Detached cleanup finished before the reinstall could begin')
             run(setup, '--silent', '--installto', root, env=env, timeout=180)
             deadline = time.monotonic() + 30
             while any(p.exists() for p in retired) and time.monotonic() < deadline:
