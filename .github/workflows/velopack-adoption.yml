@@ -2,6 +2,11 @@ name: Experimental Velopack recovery gate
 on:
   workflow_dispatch:
     inputs:
+      operations_only:
+        description: 'Run only the small Windows filesystem experiments'
+        required: false
+        default: false
+        type: boolean
       full_app_source_run_id:
         description: 'Optional completed Windows build run: replay its full-app payload instead of rebuilding native fixtures'
         required: false
@@ -25,8 +30,32 @@ permissions:
   contents: read
   actions: read
 jobs:
-  native-recovery:
+  filesystem-operations:
     if: ${{ inputs.full_app_source_run_id == '' }}
+    runs-on: windows-2022
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Exercise exact Rust filesystem operations
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force evidence | Out-Null
+          rustc --version --verbose | Tee-Object evidence/rustc.txt
+          rustc --edition 2021 tests/fixtures/velopack/windows_fs_probe.rs -o evidence/windows-fs-probe.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & evidence/windows-fs-probe.exe evidence/operations | Tee-Object evidence/operations.jsonl
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Retain filesystem experiment evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: velopack-windows-filesystem-evidence
+          retention-days: 7
+          path: evidence
+          if-no-files-found: error
+  native-recovery:
+    needs: filesystem-operations
+    if: ${{ inputs.full_app_source_run_id == '' && !inputs.operations_only }}
     runs-on: windows-2022
     timeout-minutes: 90
     steps:
