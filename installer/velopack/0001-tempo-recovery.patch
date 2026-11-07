@@ -959,10 +959,10 @@ index 76af834b..705d8715 100644
  
      let mut found = false;
 diff --git a/src/bins/src/windows/self_delete.rs b/src/bins/src/windows/self_delete.rs
-index a247e6d9..c48baded 100644
+index a247e6d9..e5ce5101 100644
 --- a/src/bins/src/windows/self_delete.rs
 +++ b/src/bins/src/windows/self_delete.rs
-@@ -3,16 +3,28 @@ use std::{os::windows::process::CommandExt, path::Path, process::Command as Proc
+@@ -3,16 +3,35 @@ use std::{os::windows::process::CommandExt, path::Path, process::Command as Proc
  
  pub fn register_intent_to_delete_self(delay_seconds: usize, root_dir: &Path) -> Result<()> {
      info!("Scheduling removal of install directory...");
@@ -974,6 +974,13 @@ index a247e6d9..c48baded 100644
 +        "\"%VELOPACK_UNINSTALL_WAIT%\" /C Y /N /D Y /T {} & rmdir /s /q \"%VELOPACK_UNINSTALL_ROOT%\"",
 +        delay_seconds
 +    );
++    #[cfg(feature = "tempo-fixture-faults")]
++    let command = if std::env::var_os("TEMPO_FIXTURE_HOLD_CLEANUP").is_some() {
++        // The test releases stdin after Setup finishes reusing the original path.
++        format!(r#""%SystemRoot%\System32\find.exe" "setup-complete" >nul && ({command})"#)
++    } else {
++        command
++    };
      info!("Running: cmd.exe /C {}", command);
  
      let parent_dir = root_dir.parent().unwrap_or(root_dir);

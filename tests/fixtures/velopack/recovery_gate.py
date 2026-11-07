@@ -7,11 +7,12 @@ REQUIRED = {'normal', 'guarded_handoff', 'before_old_rename', 'after_old_rename'
             'abrupt_after_old', 'running_process', 'hook_cleanup', 'legacy_writer_guard', 'wait_timeout',
             'independent_repair', 'offline_forward', 'offline_previous',
             'health_confirmation', 'two_successive_updates'}
-REQUIRED |= {'uninstall_running_process', 'uninstall_rename_blocked', 'uninstall_reinstall', 'repaired_owner_next_update'}
+REQUIRED |= {'uninstall_running_process', 'uninstall_rename_blocked', 'uninstall_reinstall',
+             'uninstall_cleanup_overlap', 'repaired_owner_next_update'}
 REQUIRED |= {'installation_lock', 'application_lock', 'setup_repair', 'setup_running_process', 'setup_pending_refused', 'damaged_owner'}
 REQUIRED.add('inherited_lock_identity')
 PRODUCTION_REQUIRED = REQUIRED - {'before_old_rename', 'after_old_rename', 'restore_failure', 'abrupt_after_old',
-    'independent_repair', 'offline_previous', 'offline_forward'}
+    'independent_repair', 'offline_previous', 'offline_forward', 'uninstall_cleanup_overlap'}
 
 
 def main(path, *, production=False):

@@ -5,7 +5,6 @@ Reports observed scenarios; it never issues production certification. Windows,
 """
 import argparse
 import base64
-from contextlib import nullcontext
 from datetime import datetime, timezone
 import zipfile
 import hashlib
@@ -54,15 +53,10 @@ def signed_release(package, version, key, keys):
 
 
 
-def run(*args, env=None, expect=0, timeout=180, stdout_path=None, **options):
-    # A detached cleanup process may inherit stdout. With a file, waiting for
-    # the uninstaller does not also wait for that process to close a pipe.
-    with (stdout_path.open('wb') if stdout_path else nullcontext(subprocess.PIPE)) as stdout:
-        result = subprocess.run([str(arg) for arg in args], env=env, timeout=timeout,
-                                text=True, encoding='utf-8', errors='replace',
-                                stdout=stdout, stderr=subprocess.STDOUT, **options)
-    if stdout_path:
-        result.stdout = stdout_path.read_text(encoding='utf-8', errors='replace')
+def run(*args, env=None, expect=0, timeout=180, **options):
+    result = subprocess.run([str(arg) for arg in args], env=env, timeout=timeout,
+                            text=True, encoding='utf-8', errors='replace',
+                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, **options)
     diagnostic_dir = (env or {}).get('TEMPO_FIXTURE_DIAGNOSTIC_DIR')
     if diagnostic_dir and 'Retirement diagnostic' in result.stdout:
         folder = Path(diagnostic_dir)
@@ -110,6 +104,40 @@ def probe(root, expected, env):
     result = run(root / 'current' / 'TEMPO.exe', '--probe', env=env)
     if expected not in result.stdout.splitlines():
         raise AssertionError(f'Wrong installed version: {result.stdout!r}')
+
+
+def reinstall_after_retirement(work, setup, root, env, *, hold_cleanup):
+    retired_pattern = '.TEMPO.RecoveryFixture.tempo-uninstalled-*'
+    uninstall_env = dict(env, TEMPO_FIXTURE_HOLD_CLEANUP='1') if hold_cleanup else env
+    log_path = work / 'uninstall-reinstall.log'
+    # Wait for Update.exe itself. Detached cleanup inherits its standard streams.
+    with log_path.open('wb') as log:
+        with subprocess.Popen([str(root / 'Update.exe'), 'uninstall', '--silent', '--rootDir', str(root)],
+                              env=uninstall_env, stdin=subprocess.PIPE if hold_cleanup else None,
+                              stdout=log, stderr=subprocess.STDOUT) as uninstall:
+            try:
+                exit_code = uninstall.wait(timeout=180)
+            except subprocess.TimeoutExpired:
+                uninstall.kill()
+                raise
+            if exit_code:
+                raise RuntimeError(f'Uninstall exited {exit_code}:\n{log_path.read_text(encoding="utf-8", errors="replace")}')
+            if root.exists():
+                raise AssertionError('Uninstall did not retire the reusable installation path')
+            retired = one(retired_pattern, root.parent) if hold_cleanup else None
+            run(setup, '--silent', '--installto', root, env=env, timeout=180)
+            if retired is not None:
+                if not retired.is_dir():
+                    raise AssertionError('Retired installation disappeared while Setup ran')
+                uninstall.stdin.write(b'setup-complete\r\n')
+                uninstall.stdin.close()
+
+    deadline = time.monotonic() + 30
+    while list(root.parent.glob(retired_pattern)):
+        if time.monotonic() >= deadline:
+            raise AssertionError('Retired installation cleanup did not complete\n' +
+                                 log_path.read_text(encoding='utf-8', errors='replace'))
+        time.sleep(.1)
 
 
 def apply(root, package, *, env, fault=None, abort=None, wait_pid=None, expect_failure=False, inspect_exit=False):
@@ -340,22 +368,12 @@ def run_scenarios(work, setup, packages, repair, releases, keys, outcomes, repor
                         raise AssertionError('Failed retirement did not restore uninstall ownership')
             probe(root, '1.0.1', env)
         elif scenario == 'uninstall_reinstall':
-            run(root / 'Update.exe', 'uninstall', '--silent', '--rootDir', root,
-                env=env, stdout_path=work / 'uninstall-reinstall.log')
-            if root.exists():
-                raise AssertionError('Uninstall did not retire the reusable installation path')
-            retired = list(local.glob('.*.tempo-uninstalled-*'))
-            if not retired:
-                raise AssertionError('Detached cleanup finished before the reinstall could begin')
-            run(setup, '--silent', '--installto', root, env=env, timeout=180)
-            deadline = time.monotonic() + 30
-            while any(p.exists() for p in retired) and time.monotonic() < deadline:
-                time.sleep(.1)
-            if any(p.exists() for p in retired):
-                raise AssertionError('Retired installation cleanup did not complete')
+            reinstall_after_retirement(work, setup, root, env, hold_cleanup=not production)
             recovery._verify_app(root / 'current', releases['1.0.1'])
             recovery._verify_owner(root, releases['1.0.1'])
             probe(root, '1.0.1', env)
+            if not production:
+                outcomes['uninstall_cleanup_overlap'] = True
         elif scenario in ('running_process', 'setup_running_process', 'uninstall_running_process', 'wait_timeout'):
             ready = work / (scenario + '.ready')
             env['TEMPO_FIXTURE_READY'] = str(ready)

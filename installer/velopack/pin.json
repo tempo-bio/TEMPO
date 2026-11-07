@@ -2,7 +2,7 @@
   "schema_version": 1,
   "upstream_version": "1.2.161",
   "upstream_commit": "92d6a1c91716729d449034df5c50307dcce39493",
-  "patch_sha256": "e3a4ecc43414c39853d15a4f73f53250c5cb960c4a7b5cecca4ee6fef760b694",
+  "patch_sha256": "527806cab5adb9b752209ac109921954e447226958d9f344cae085ab85004026",
   "certification_status": "unverified",
   "required_checks": [
     "real_windows_lifecycle_fixture",

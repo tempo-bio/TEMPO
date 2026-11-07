@@ -8,7 +8,7 @@ from pathlib import Path
 import subprocess
 
 COMMIT = '92d6a1c91716729d449034df5c50307dcce39493'
-PATCH_SHA256 = 'e3a4ecc43414c39853d15a4f73f53250c5cb960c4a7b5cecca4ee6fef760b694'
+PATCH_SHA256 = '527806cab5adb9b752209ac109921954e447226958d9f344cae085ab85004026'
 SOURCE_SHA256 = {
     'src/bins/Cargo.toml': '4d4f0967fa7249de83a0424c4b4fd0590adf891840b58a1bb1d8560922805f68',
     'src/bins/src/commands/apply.rs': 'f12aa15322c2ff4b42f251a78bc234c193168df8d692afc27d0a66276712ab37',
