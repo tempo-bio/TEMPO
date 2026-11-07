@@ -7,6 +7,7 @@ from contextlib import contextmanager
 import os
 from pathlib import Path
 import threading
+import subprocess
 
 _guard = threading.Lock()
 _locks = {}
@@ -49,7 +50,7 @@ def _file_lock(path, *, shared=False):
                 fcntl.lockf(stream, (fcntl.LOCK_SH if shared else fcntl.LOCK_EX) | fcntl.LOCK_NB)
             except OSError as exc:
                 raise BlockingIOError('Another application owns the update lock.') from exc
-        yield
+        yield handle if handle is not None else stream.fileno()
     finally:
         if handle is not None:
             kernel.CloseHandle(handle)
@@ -66,14 +67,55 @@ def update_lock(packages_dir):
 
 
 @contextmanager
+def installation_lock(installation_root):
+    """Share the native operation lease outside the replaceable installation.
+
+    Native apply/start/uninstall and explicit repair use the same canonical
+    sibling filename and exclusive handle. Never unlink this stable lock file.
+    """
+    from tempo_update_migration import _safe
+    root = _safe(installation_root).resolve()
+    if not root.name or root.parent == root:
+        raise ValueError('Invalid installation root.')
+    with _file_lock(root.with_name('.' + root.name + '.tempo-owner.lock')) as handle:
+        yield handle
+
+
+@contextmanager
 def application_lock(profile_root, *, shared=False):
     """Hold shared while an application/worker runs, exclusive during replacement.
 
     Callers keep the context alive for the entire process lifetime. This is
     separate from the package lock, which preparation needs while TEMPO runs.
     """
-    with _file_lock(Path(profile_root) / 'updates' / '.application-lock', shared=shared):
-        yield
+    with _file_lock(Path(profile_root) / 'updates' / '.application-lock', shared=shared) as handle:
+        yield handle
+
+
+@contextmanager
+def native_lock_handoff(*, installation, application):
+    """Inherit only these held Windows leases; neither parent lock is released.
+
+    The native child verifies the inherited file identities and clears these
+    environment values before invoking hooks or starting another process.
+    """
+    if os.name != 'nt':
+        yield {}
+        return
+    handles = [installation, application]
+    startup = subprocess.STARTUPINFO()
+    startup.lpAttributeList = {'handle_list': handles}
+    environment = dict(os.environ, TEMPO_INSTALLATION_LOCK_HANDLE=str(installation),
+                       TEMPO_APPLICATION_LOCK_HANDLE=str(application))
+    previous = []
+    try:
+        for handle in handles:
+            previous.append((handle, os.get_handle_inheritable(handle)))
+            os.set_handle_inheritable(handle, True)
+        yield dict(startupinfo=startup, close_fds=True, env=environment)
+    finally:
+        for handle, inheritable in previous:
+            os.set_handle_inheritable(handle, inheritable)
 
 
 @contextmanager

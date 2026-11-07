@@ -11,11 +11,11 @@ On an isolated Windows builder, obtain a clean checkout of the pinned source, th
 ```powershell
 python scripts/prepare_velopack_updater.py <velopack-checkout>
 Push-Location <velopack-checkout>
-cargo build --locked --release -p velopack_bins --bin update --features windows --target x86_64-pc-windows-msvc
+cargo build --locked --release -p velopack_bins --bin update --bin setup --features windows --target x86_64-pc-windows-msvc
 Pop-Location
 ```
 
-The preparation script verifies the commit, clean tree, upstream source hashes and patch digest. The `velopack-adoption` workflow builds distinct production-feature and fixture-fault binaries and exercises disposable installations. Fixture results are evidence, not production certification. Review actual Windows results and the broader acceptance matrix in `docs/WINDOWS_UPDATE_ADOPTION_PLAN.md` before changing the pin to `certified` and recording the production updater SHA-256. Keep the exact production binary and its evidence.
+The preparation script verifies the commit, clean tree, upstream source hashes and patch digest. The `velopack-adoption` workflow builds both setup and updater with production features, then separately builds the fault-injection pair. It exercises the actual production pair as well as the fault fixtures on disposable installations. Fixture results are evidence, not production certification. Review actual Windows results and the broader acceptance matrix in `docs/WINDOWS_UPDATE_ADOPTION_PLAN.md` before changing the pin to `certified` and recording the production updater SHA-256. Keep the exact production binary and its evidence.
 
 The signed package inventory covers every ZIP member. Verification of the installed `current` directory uses the pinned extractor's layout: `Squirrel.exe` and `*_ExecutionStub.exe` remain installation-owner files and are excluded from that directory. Offline repair uses the same layout. The root `Update.exe` is verified separately against the signed `lib/app/Squirrel.exe` checksum before apply; missing or changed application files still fail verification.
 
@@ -27,7 +27,7 @@ The workflow retains three immutable `1.0.2-velopack.1` through `.3` packaging r
 
 The independent test companion embeds a fresh public test key. Its private key exists only in builder memory, is never exported, and cannot sign a user release. The full application retains the tracked disabled configuration and empty trust store. These artifacts must not be published or used to replace a collaborator's installation.
 
-On a separate Windows runner with no checkout, Python setup, .NET setup or application dependency installation, the workflow runs:
+The initial full-app matrix and its sequential replay use separate fresh Windows runners with the same immutable installers/packages. Neither runner checks out source, sets up Python/.NET, or installs application dependencies. Both run:
 
 ```powershell
 ./payload/verify_velopack_install.ps1 -Mode matrix -Payload payload -Evidence evidence
@@ -48,7 +48,11 @@ To repeat the full-app matrix after a verification-script correction, dispatch `
 
 The patched uninstaller schedules detached cleanup only for its uniquely retired directory. It uses the Windows system shell with AutoRun and delayed expansion disabled; directory names pass through environment values rather than becoming command text. The native fixture starts a fresh install immediately, waits for retirement cleanup to finish, and verifies that the replacement's owner and complete app inventory remain intact. Existing verification helpers also refuse reuse while an older updater's literal-path cleanup command is pending. Concurrent installers and physical hardware shutdown remain separate acceptance gates.
 
-During uninstall, the package-lock handle denies other readers/writers while permitting delete/rename sharing for directory retirement. Ordinary package-lock behavior is unchanged. Windows preflight exercises a running owner and that held lock together, verifies another writer is denied before and after the rename, and checks that cleanup leaves the replacement intact. Full dependency installation and runtime builds wait for native recovery acceptance, so a native failure stops the expensive downstream jobs.
+Setup/repair, apply and uninstall acquire the per-user desktop/worker lease before a stable sibling installation lock. Destructive companion operations and migration use the same order; preparation and confirmation take the installation/package locks while TEMPO may remain open. Startup package maintenance runs under the application, installation and package locks. The installation lock stays outside the replaceable tree and is never unlinked. Native start uses that lock to protect process creation and refuses automatic Squirrel migration; TEMPO's reviewed Inno migration remains a separate companion operation. Setup refuses active work and pending native recovery rather than force-stopping applications or discarding their retained backup.
+
+The companion keeps its application and installation handles through verification, native execution and readback. Windows passes only those handles through an explicit inheritance list. Native code checks their volume/file identities and writer exclusion, consumes the environment values and clears inheritance before invoking hooks. Only the package lock is released for the native owner to reacquire. Uninstall closes its internal package handle before the single directory rename, while retaining both outside leases. Cleanup names only the uniquely retired directory.
+
+The small `windows_fs_probe.rs` fixture exercises Rust's actual directory rename with internal sharing modes, current-directory handles, a running owner, outside-lock exclusion and immediate reuse. PowerShell `Move-Item` is unsuitable as proof of a single rename because its provider can fall back to per-file moves. Dispatch with `operations_only=true` to run these experiments without installing application dependencies. They establish filesystem behavior on that runner, not full-app or power-loss acceptance. Full dependency installation and runtime builds wait for native recovery acceptance.
 
 For a live directory-retirement failure, dispatch `velopack-adoption.yml` with `uninstall_diagnostics=true`. Only the fixture-feature binary can invoke the checksum-pinned [Microsoft Handle utility](https://learn.microsoft.com/en-us/sysinternals/downloads/handle); the workflow also requires its valid Microsoft signature. It captures current-directory and open-handle snapshots before metadata changes, after shortcut handling, and at a failed rename while the uninstaller is still alive. It requests listings only and does not use Handle's handle-closing options. These runs change timing, are marked diagnostic-only, and produce no candidate for full-app packaging; the acceptance gate rejects their reports. Normal validation leaves this instrumentation inactive.
 
@@ -70,7 +74,7 @@ python scripts/configure_windows_updates.py --public-keys <public-keys.json> --n
 
 The command checks the certified pin, patch and tool bytes, key file, source revision and required evidence before writing the enabled configuration into `_internal/assets` and copying `TEMPORepair.exe` to the application folder. Keep the resulting folder and exact evidence together. If using `TEMPO_UPDATE_CONFIG` in `tempo.spec`, set it to that `tempo-updates.json` and set `TEMPO_UPDATE_PUBLIC_KEYS`, `TEMPO_UPDATE_NATIVE_UPDATER`, `TEMPO_UPDATE_REPAIR`, `TEMPO_UPDATE_CERTIFICATION`, and `TEMPO_UPDATE_SOURCE_COMMIT` to the same inputs. The spec validates them before building; run the command with `--bundle` afterward to stage and verify the companion. The default build needs none of these variables and remains disabled.
 
-Use the hash-verified pinned VPK 1.2.161 packager with its Windows x64 vendor updater replaced by the **same certified production updater**, then pack the staged folder. For example, with the VPK nupkg extracted at `<vpk>` and its `vendor/update_x64.exe` already replaced and verified:
+Use the hash-verified pinned VPK 1.2.161 packager with its Windows x64 vendor updater and setup replaced by the **same reviewed production pair**, then pack the staged folder. For example, with the VPK nupkg extracted at `<vpk>` and its `vendor/update_x64.exe` and `vendor/setup_x64.exe` already replaced and verified:
 
 ```powershell
 dotnet <vpk>/tools/net8.0/any/vpk.dll '[win]' pack --packId TEMPO.Bio.Desktop --packTitle TEMPO --packVersion <version> --packDir <dist>/TEMPO --mainExe TEMPO.exe --runtime win-x64 --outputDir <candidate-releases> --noPortable --skip-updates --yes

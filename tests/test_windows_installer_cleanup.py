@@ -60,56 +60,28 @@ catch {
 if (-not $refused -or (Get-Content $file -Raw).Trim() -ne 'must remain') { throw 'Incomplete uninstall was accepted or changed' }
 ''')
 
-    def test_running_owner_and_exclusive_writer_lock_allow_retirement_and_block_another_writer(self):
+    def test_exact_directory_rename_refuses_open_descendant_then_succeeds(self):
         self.run_shell(r'''
 $target=$env:TEMPO_CLEANUP_TEST_ROOT
 $retired=$target + '.retired'
-New-Item -ItemType Directory $target | Out-Null
-$owner=Join-Path $target 'Update.exe'
-Copy-Item "$env:SystemRoot\System32\cmd.exe" $owner
-$packages=Join-Path $target 'packages'
-New-Item -ItemType Directory $packages | Out-Null
-$lockPath=Join-Path $packages '.velopack_lock'
+New-Item -ItemType Directory (Join-Path $target 'packages') -Force | Out-Null
+$lockPath=Join-Path $target 'packages\.velopack_lock'
 $heldLock=[IO.File]::Open($lockPath,[IO.FileMode]::OpenOrCreate,[IO.FileAccess]::ReadWrite,[IO.FileShare]::Delete)
-$running=Start-Process -FilePath $owner -ArgumentList '/D /C choice /C Y /N /D Y /T 3 >nul' -WorkingDirectory (Split-Path $target) -PassThru
-$null=$running.Handle
 try {
-    if ($running.WaitForExit(0)) { throw 'Fixture owner did not remain running' }
     $blocked=$false
-    try {
-        $other=[IO.File]::Open($lockPath,[IO.FileMode]::Open,[IO.FileAccess]::ReadWrite,([IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete))
-        $other.Dispose()
-    } catch {
+    try { [IO.Directory]::Move($target,$retired) }
+    catch {
         $cause=$_.Exception
         while ($cause.InnerException) { $cause=$cause.InnerException }
-        if ($cause -isnot [IO.IOException]) { throw }
+        if ($cause.HResult -ne -2147024891) { throw }
         $blocked=$true
     }
-    if (-not $blocked) { throw 'A second writer acquired the retirement lock' }
-    Move-Item -LiteralPath $target -Destination $retired
-    if (-not (Test-Path -LiteralPath (Join-Path $retired 'packages\.velopack_lock') -PathType Leaf)) { throw 'Retired lock file is missing' }
-    $blocked=$false
-    try {
-        $other=[IO.File]::Open((Join-Path $retired 'packages\.velopack_lock'),[IO.FileMode]::Open,[IO.FileAccess]::ReadWrite,([IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete))
-        $other.Dispose()
-    } catch {
-        $cause=$_.Exception
-        while ($cause.InnerException) { $cause=$cause.InnerException }
-        if ($cause -isnot [IO.IOException]) { throw }
-        $blocked=$true
+    if (-not $blocked -or -not (Test-Path $target) -or (Test-Path $retired)) {
+        throw 'Atomic rename did not fail intact while a descendant was open'
     }
-    if (-not $blocked) { throw 'Renaming the directory released the writer lock' }
-    New-Item -ItemType Directory $target | Out-Null
-    Set-Content (Join-Path $target 'replacement.txt') 'keep replacement'
-    if (-not $running.WaitForExit(10000)) { throw 'Retired owner did not exit' }
-    $heldLock.Dispose()
-    Remove-Item -LiteralPath $retired -Recurse
-    if (-not (Test-Path (Join-Path $target 'replacement.txt'))) { throw 'Retired cleanup affected the replacement' }
-} finally {
-    $heldLock.Dispose()
-    if (-not $running.WaitForExit(5000)) { $running.Kill($true); $running.WaitForExit() }
-    $running.Dispose()
-}
+} finally { $heldLock.Dispose() }
+[IO.Directory]::Move($target,$retired)
+if ((Test-Path $target) -or -not (Test-Path $retired)) { throw 'Atomic rename failed after closing the descendant' }
 ''')
 
     def test_fixture_initialization_failure_retains_a_structured_report(self):

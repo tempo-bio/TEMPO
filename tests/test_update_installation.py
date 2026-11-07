@@ -13,7 +13,7 @@ class InstallationTests(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
-        self.root = Path(temporary.name) / 'custom location'
+        self.root = (Path(temporary.name) / 'custom location').resolve()
         self.current = self.root / 'current'
         self.current.mkdir(parents=True)
         self.executable = self.current / 'TEMPO.exe'
@@ -68,6 +68,37 @@ class InstallationTests(unittest.TestCase):
         with patch.object(installation, 'detect_installation', return_value=installation.Installation('inno')), \
              patch.dict(sys.modules, {'velopack': None}):
             self.assertFalse(installation.initialize_velopack(['TEMPO.exe', '--veloapp-uninstall', '1.0.2']))
+
+    def test_normal_startup_defers_sdk_cleanup_until_all_leases_are_held(self):
+        from tempo_update_lock import application_lock, installation_lock, update_lock
+        profile = self.root / 'profile'
+        app = Mock()
+        app.set_auto_apply_on_startup.return_value = app
+        app.set_args.return_value = app
+        observed = []
+        def cleanup():
+            for lease in (application_lock(profile), installation_lock(self.root), update_lock(self.root / 'packages')):
+                with self.assertRaises(BlockingIOError):
+                    with lease:
+                        pass
+            observed.append('guarded')
+        app.run.side_effect = cleanup
+        previous = installation._application_lease
+        try:
+            with patch.object(installation, 'detect_installation', return_value=installation.Installation('velopack', self.root)), \
+                 patch.dict(sys.modules, {'velopack': SimpleNamespace(App=Mock(return_value=app))}), \
+                 patch('tempo_config.get_config_dir', return_value=profile / 'config'), \
+                 patch('tempo_config.get_base_dir', return_value=self.current), \
+                 patch('tempo_update_bootstrap.bootstrap_packaged_storage'), \
+                 patch.object(installation.atexit, 'register'):
+                self.assertFalse(installation.initialize_velopack(['TEMPO.exe']))
+                app.run.assert_not_called()
+                installation.prepare_packaged_startup(['TEMPO.exe'])
+            self.assertEqual(observed, ['guarded'])
+        finally:
+            if installation._application_lease is not previous:
+                installation._application_lease.__exit__(None, None, None)
+            installation._application_lease = previous
 
     def test_packager_probe_runs_sdk_before_an_installed_layout_exists(self):
         app = Mock()

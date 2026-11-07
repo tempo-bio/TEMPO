@@ -103,7 +103,7 @@ def signed_fixture(package, inventory, version, commit, sequence, key):
     return release
 
 
-def build(bundle, vpk_archive, updater, native_evidence, output, commit):
+def build(bundle, vpk_archive, updater, native_evidence, output, commit, *, setup):
     if sys.platform != 'win32':
         raise ValueError('Full-app acceptance candidates must be built on Windows.')
     if not re.fullmatch('[0-9a-f]{40}', commit):
@@ -116,12 +116,15 @@ def build(bundle, vpk_archive, updater, native_evidence, output, commit):
     if _digest(vpk_archive) != VPK_SHA256:
         raise ValueError('Packager checksum mismatch.')
     updater_hash = _digest(updater)
+    setup_hash = _digest(setup)
     evidence = json.loads(Path(native_evidence).read_bytes())
     pin = json.loads((ROOT / 'installer/velopack/pin.json').read_bytes())
     if (evidence.get('source_commit') != commit or evidence.get('updater_sha256') != updater_hash
+            or evidence.get('setup_sha256') != setup_hash
             or evidence.get('upstream_commit') != pin['upstream_commit']
             or evidence.get('patch_sha256') != pin['patch_sha256']
             or evidence.get('fixture_passed') is not True
+            or evidence.get('production_passed') is not True
             or _digest(ROOT / 'installer/velopack/0001-tempo-recovery.patch') != pin['patch_sha256']):
         raise ValueError('Native candidate identity/evidence does not match this source revision.')
     source_inventory = folder_inventory(bundle)
@@ -129,6 +132,7 @@ def build(bundle, vpk_archive, updater, native_evidence, output, commit):
     contract = dict(schema_version=1, purpose='isolated-full-app-acceptance', release_certified=False,
                     source_commit=commit, package_id=PACKAGE_ID, title=TITLE,
                     same_source_packaging_revisions=True, updater_sha256=updater_hash,
+                    setup_sha256=setup_hash,
                     packager_sha256=VPK_SHA256, native_evidence=evidence, revisions=[])
     contract['legacy_source'] = dict(SUPPORTED_LEGACY['1.0.1'], version='1.0.1',
         url='https://github.com/tempo-bio/TEMPO/releases/download/v1.0.1/TEMPO_Setup_v1.0.1.exe')
@@ -150,6 +154,7 @@ def build(bundle, vpk_archive, updater, native_evidence, output, commit):
         with zipfile.ZipFile(vpk_archive) as archive:
             archive.extractall(vpk)  # Exact hash-pinned upstream archive only.
         shutil.copyfile(updater, vpk / 'vendor/update_x64.exe')
+        shutil.copyfile(setup, vpk / 'vendor/setup_x64.exe')
         repair = build_repair(keys_path, updater, output, work / 'repair')
         contract['repair'] = file_record(repair)
         command = ['dotnet', str(vpk / 'tools/net8.0/any/vpk.dll')]
@@ -208,11 +213,11 @@ def build(bundle, vpk_archive, updater, native_evidence, output, commit):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    for name in ('bundle', 'vpk-archive', 'updater', 'native-evidence', 'output'):
+    for name in ('bundle', 'vpk-archive', 'updater', 'setup', 'native-evidence', 'output'):
         parser.add_argument('--' + name, type=Path, required=True)
     parser.add_argument('--commit', required=True)
     args = parser.parse_args()
-    build(args.bundle, args.vpk_archive, args.updater, args.native_evidence, args.output, args.commit)
+    build(args.bundle, args.vpk_archive, args.updater, args.native_evidence, args.output, args.commit, setup=args.setup)
     print('Full-app candidate prepared. No release certified, signed for users, or published.')
 
 

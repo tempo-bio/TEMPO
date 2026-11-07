@@ -9,15 +9,16 @@ import unittest
 from contextlib import contextmanager
 from unittest.mock import patch
 
-from tempo_update_lock import application_lock, update_lock
+from tempo_update_lock import application_lock, update_lock, installation_lock
 
 
 _CHILD = r'''
 import sys, time
 from pathlib import Path
-from tempo_update_lock import application_lock, update_lock
+from tempo_update_lock import application_lock, update_lock, installation_lock
 root, kind, ready, release = map(Path, sys.argv[1:])
-lock = update_lock(root) if str(kind) == 'update' else application_lock(root, shared=str(kind) == 'shared')
+lock = (installation_lock(root / 'installation') if str(kind) == 'installation' else
+        update_lock(root) if str(kind) == 'update' else application_lock(root, shared=str(kind) == 'shared'))
 try:
     with lock:
         ready.write_text('held')
@@ -104,6 +105,20 @@ class UpdateLockTests(unittest.TestCase):
         with application_lock(self.root):
             pass
 
+    def test_installation_lease_survives_retirement_and_path_reuse(self):
+        root = self.root / 'installation'
+        root.mkdir()
+        process = self.child('installation')
+        root.rename(self.root / 'retired')
+        root.mkdir()
+        with self.assertRaises(BlockingIOError):
+            with installation_lock(root):
+                pass
+        self.stop(process)
+        with installation_lock(root):
+            pass
+        self.assertTrue((self.root / '.installation.tempo-owner.lock').is_file())
+
     def test_exclusive_application_lock_blocks_shared_and_exclusive(self):
         process = self.child('exclusive')
         for shared in (True, False):
@@ -168,6 +183,7 @@ except BlockingIOError:
                  patch('tempo_config.get_config_dir', return_value=self.root/'config'), \
                  patch('tempo_config.get_base_dir', return_value=self.root/'bundle'), \
                  patch('tempo_update_bootstrap.bootstrap_packaged_storage') as bootstrap, \
+                 patch.object(installation, '_maintain_velopack_packages'), \
                  patch('tempo_update_lock.application_lock', side_effect=observed_lock), \
                  patch.object(installation.atexit, 'register'):
                 installation.prepare_packaged_startup(['TEMPO.exe'])

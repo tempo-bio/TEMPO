@@ -14,7 +14,7 @@ import shutil
 import uuid
 
 from tempo_model_catalog import INSTALLABLE_MODEL_FILES
-from tempo_update_lock import application_lock, startup_guard
+from tempo_update_lock import application_lock, startup_guard, installation_lock
 from tempo_update_migration import _atomic_json, _hash, _safe, migrate_collaboration, inventory_legacy
 from tempo_update_storage import _inventory_store, _read_pointer, prepare_packaged_storage
 
@@ -467,7 +467,8 @@ def prepare_legacy_migration(root, profile, installer, release, package, target_
     with legacy_writer_guard(root, identity['executable_sha256']), \
             _prepare_nvidia(root, profile, release, package, version, identity,
                             enabled=prepare_nvidia, supported_nvidia=supported_nvidia) as nvidia, \
-            startup_guard(profile), application_lock(profile):
+            startup_guard(profile), application_lock(profile), installation_lock(target):
+        _verify_app(target / 'current', release)
         _registrations(root, registry)
         inventory = inventory_legacy(root)
         if inventory['addons']:
@@ -565,7 +566,7 @@ def finish_legacy_migration(profile, *, trusted_keys, registry=None, supported=S
     """Publish only after legacy retirement; leave snapshots and installers intact."""
     from tempo_update_bootstrap import _preserve_models
     profile = _safe(profile)
-    with startup_guard(profile), application_lock(profile):
+    with startup_guard(profile), application_lock(profile), installation_lock(profile.parent / 'TEMPO.Bio.Desktop'):
         folder, record, root, target = _record(profile, supported)
         _registrations(root, registry, retired=True)
         if (root / 'TEMPO.exe').exists():

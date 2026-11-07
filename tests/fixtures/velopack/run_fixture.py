@@ -53,10 +53,10 @@ def signed_release(package, version, key, keys):
 
 
 
-def run(*args, env=None, expect=0, timeout=180):
+def run(*args, env=None, expect=0, timeout=180, **options):
     result = subprocess.run([str(arg) for arg in args], env=env, timeout=timeout,
                             text=True, encoding='utf-8', errors='replace',
-                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, **options)
     diagnostic_dir = (env or {}).get('TEMPO_FIXTURE_DIAGNOSTIC_DIR')
     if diagnostic_dir and 'Retirement diagnostic' in result.stdout:
         folder = Path(diagnostic_dir)
@@ -74,7 +74,8 @@ def one(pattern, directory):
     return found[0]
 
 
-def build_fixture(work, vpk, updater):
+def build_fixture(work, vpk, updater, native_setup):
+    shutil.copyfile(native_setup, vpk / 'vendor' / 'setup_x64.exe')
     vendor = vpk / 'vendor' / 'update_x64.exe'
     shutil.copyfile(updater, vendor)
     if hashlib.sha256(vendor.read_bytes()).digest() != hashlib.sha256(updater.read_bytes()).digest():
@@ -158,9 +159,15 @@ def assert_running_app_refused(result, root, *, app_alive):
         raise AssertionError('Refused update began replacing the installed application')
 
 
-def run_scenarios(work, setup, packages, repair, releases, keys, outcomes, report):
+def run_scenarios(work, setup, packages, repair, releases, keys, outcomes, report, *, production=False):
     package = packages['1.0.2']
-    for scenario in ('normal', 'guarded_handoff', 'consecutive', 'before_old_rename', 'after_old_rename', 'restore_failure', 'abrupt_after_old', 'running_process', 'uninstall_running_process', 'uninstall_rename_blocked', 'uninstall_reinstall', 'hook_cleanup', 'legacy_writer_guard', 'wait_timeout'):
+    scenarios = ['normal', 'installation_lock', 'application_lock', 'inherited_lock_identity', 'setup_repair', 'guarded_handoff',
+        'consecutive', 'damaged_owner', 'running_process', 'setup_running_process', 'setup_pending_refused',
+        'uninstall_running_process', 'uninstall_rename_blocked', 'uninstall_reinstall', 'hook_cleanup',
+        'legacy_writer_guard', 'wait_timeout']
+    if not production:
+        scenarios += ['before_old_rename', 'after_old_rename', 'restore_failure', 'abrupt_after_old']
+    for scenario in scenarios:
         suffix = ' é %TEMPO_UNINSTALL_LITERAL%! &' if scenario == 'uninstall_reinstall' else ''
         local = work / ('profile-' + scenario + suffix)
         local.mkdir()
@@ -187,6 +194,68 @@ def run_scenarios(work, setup, packages, repair, releases, keys, outcomes, repor
             probe(root, '1.0.2', env)
             assert (root / 'tempo-previous' / 'TEMPO.exe').is_file()
             assert (root / 'tempo-update-pending.txt').is_file()
+        elif scenario == 'installation_lock':
+            with recovery.installation_lock(root):
+                # Canonical paths must interoperate across Python and Rust,
+                # including case/short-name aliases used by Windows runners.
+                alias = str(root).swapcase()
+                run(setup, '--silent', '--installto', alias, env=env, expect=1)
+                for command in ('apply', 'uninstall', 'start'):
+                    args = [root / 'Update.exe', command, '--silent', '--rootDir', alias]
+                    if command == 'apply':
+                        args += ['--norestart', '--package', package]
+                    run(*args, env=env, expect=1)
+                recovery._verify_app(root / 'current', releases['1.0.1'])
+                recovery._verify_owner(root, releases['1.0.1'])
+            apply(root, package, env=env)
+            probe(root, '1.0.2', env)
+        elif scenario == 'application_lock':
+            with recovery.application_lock(local / 'TEMPO', shared=True):
+                for command in ('apply', 'uninstall'):
+                    args = [root / 'Update.exe', command, '--silent', '--rootDir', root]
+                    if command == 'apply':
+                        args += ['--norestart', '--package', package]
+                    run(*args, env=env, expect=1)
+                run(setup, '--silent', '--installto', root, env=env, expect=1)
+                recovery._verify_app(root / 'current', releases['1.0.1'])
+                recovery._verify_owner(root, releases['1.0.1'])
+        elif scenario == 'inherited_lock_identity':
+            with recovery.application_lock(local / 'TEMPO') as application_handle, \
+                    recovery.installation_lock(local / 'another-installation') as wrong_handle, \
+                    recovery.native_lock_handoff(installation=wrong_handle, application=application_handle) as options:
+                options['env'].update(env)
+                run(root / 'Update.exe', 'apply', '--silent', '--norestart', '--rootDir', root,
+                    '--package', package, expect=1, **options)
+                run(setup, '--silent', '--installto', root, expect=1, **options)
+            for variable in ('TEMPO_INSTALLATION_LOCK_HANDLE', 'TEMPO_APPLICATION_LOCK_HANDLE'):
+                run(root / 'Update.exe', 'uninstall', '--silent', '--rootDir', root,
+                    env=dict(env, **{variable: '0'}), expect=1)
+            recovery._verify_app(root / 'current', releases['1.0.1'])
+            recovery._verify_owner(root, releases['1.0.1'])
+        elif scenario == 'setup_repair':
+            run(setup, '--silent', '--installto', root, env=env)
+            recovery._verify_app(root / 'current', releases['1.0.1'])
+            recovery._verify_owner(root, releases['1.0.1'])
+            probe(root, '1.0.1', env)
+        elif scenario == 'setup_pending_refused':
+            apply(root, package, env=env)
+            run(setup, '--silent', '--installto', root, env=env, expect=1)
+            recovery._verify_app(root / 'current', releases['1.0.2'])
+            recovery._verify_app(root / 'tempo-previous', releases['1.0.1'])
+        elif scenario == 'damaged_owner':
+            arm('1.0.1', '1.0.2')
+            (root / 'current').rename(root / 'tempo-previous')
+            (root / 'Update.exe').unlink()
+            (root / 'tempo-update-pending.txt').write_text('damaged marker', encoding='utf-8')
+            repair_mode('forward')
+            recovery._verify_app(root / 'current', releases['1.0.2'])
+            recovery._verify_owner(root, releases['1.0.2'])
+            probe(root, '1.0.2', env)
+            run(repair, '--mode', 'confirm', '--version', '1.0.2', '--commit', 'b' * 40, env=env)
+            arm('1.0.2', '1.0.3')
+            apply(root, packages['1.0.3'], env=env)
+            probe(root, '1.0.3', env)
+            outcomes['repaired_owner_next_update'] = True
         elif scenario == 'guarded_handoff':
             ready, stop, launched = (work / 'handoff.ready', work / 'handoff.stop', work / 'handoff.launched')
             env.update(TEMPO_FIXTURE_READY=str(ready), TEMPO_FIXTURE_STOP=str(stop),
@@ -289,7 +358,7 @@ def run_scenarios(work, setup, packages, repair, releases, keys, outcomes, repor
             recovery._verify_app(root / 'current', releases['1.0.1'])
             recovery._verify_owner(root, releases['1.0.1'])
             probe(root, '1.0.1', env)
-        elif scenario in ('running_process', 'uninstall_running_process', 'wait_timeout'):
+        elif scenario in ('running_process', 'setup_running_process', 'uninstall_running_process', 'wait_timeout'):
             ready = work / (scenario + '.ready')
             env['TEMPO_FIXTURE_READY'] = str(ready)
             env['TEMPO_FIXTURE_STOP'] = str(work / (scenario + '.stop'))
@@ -300,7 +369,9 @@ def run_scenarios(work, setup, packages, repair, releases, keys, outcomes, repor
                     time.sleep(0.1)
                 if not ready.is_file():
                     raise RuntimeError('Fixture app failed to signal readiness')
-                if scenario == 'uninstall_running_process':
+                if scenario == 'setup_running_process':
+                    result = run(setup, '--silent', '--installto', root, env=env, expect=None)
+                elif scenario == 'uninstall_running_process':
                     result = run(root / 'Update.exe', 'uninstall', '--silent', '--rootDir', root, env=env, expect=None)
                 else:
                     result = apply(root, package, env=env,
@@ -397,7 +468,8 @@ def run_scenarios(work, setup, packages, repair, releases, keys, outcomes, repor
         run(root / 'Update.exe', 'uninstall', '--silent', '--rootDir', root, env=env)
         outcomes[scenario] = True
         report()
-    outcomes['independent_repair'] = outcomes['restore_failure'] and outcomes['abrupt_after_old']
+    if not production:
+        outcomes['independent_repair'] = outcomes['restore_failure'] and outcomes['abrupt_after_old']
     report()
 
 
@@ -405,6 +477,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--vpk-root', type=Path, required=True)
     parser.add_argument('--fixture-updater', type=Path, required=True)
+    parser.add_argument('--fixture-setup', type=Path, required=True)
+    parser.add_argument('--production', action='store_true')
     parser.add_argument('--report', type=Path, required=True)
     args = parser.parse_args()
     if sys.platform != 'win32':
@@ -414,13 +488,16 @@ def main():
     def report(error=None):
         args.report.write_text(json.dumps({'scenarios': outcomes, 'certified': False,
                                            'diagnostic_only': bool(os.environ.get('TEMPO_FIXTURE_HANDLE_TOOL')),
+                                           'production': args.production,
+                                           'updater_sha256': hashlib.sha256(args.fixture_updater.read_bytes()).hexdigest(),
+                                           'setup_sha256': hashlib.sha256(args.fixture_setup.read_bytes()).hexdigest(),
                                            'error': error}, indent=2), encoding='utf-8')
     report()
     try:
         with tempfile.TemporaryDirectory(prefix='tempo-velopack-fixture-') as tmp:
             work = Path(tmp)
             try:
-                setup, packages = build_fixture(work, args.vpk_root.resolve(), args.fixture_updater.resolve())
+                setup, packages = build_fixture(work, args.vpk_root.resolve(), args.fixture_updater.resolve(), args.fixture_setup.resolve())
                 key = Ed25519PrivateKey.generate()
                 raw = key.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
                 keys = {'fixture': raw}
@@ -430,7 +507,7 @@ def main():
                     '--native-updater', args.fixture_updater.resolve(), '--dist', work / 'repair-dist', '--work', work / 'repair-build', timeout=300)
                 repair = work / 'repair-dist' / 'TEMPORepair.exe'
                 releases = {v: signed_release(p, v, key, keys) for v, p in packages.items()}
-                run_scenarios(work, setup, packages, repair, releases, keys, outcomes, report)
+                run_scenarios(work, setup, packages, repair, releases, keys, outcomes, report, production=args.production)
             finally:
                 logs = list(work.glob('profile-*/TEMPO/updates/recovery/native-apply.log'))
                 if logs:

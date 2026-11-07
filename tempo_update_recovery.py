@@ -21,7 +21,8 @@ import uuid
 import zipfile
 from datetime import datetime, timezone
 
-from tempo_update_lock import application_lock, startup_guard, update_lock
+from tempo_update_lock import (application_lock, startup_guard, update_lock,
+                               installation_lock, native_lock_handoff)
 from tempo_update_manifest import (FileRecord, load_verified_manifest, verify_directory,
                                    verify_zip, validate_path)
 from tempo_update_migration import _safe
@@ -219,7 +220,7 @@ def arm_recovery(root, external_recovery_dir, base_release, base_package, target
         raise ValueError('Incompatible recovery release pair.')
     _application_inventory(base); _application_inventory(target)
     _owner_record(base); _owner_record(target)
-    with update_lock(packages):
+    with installation_lock(root), update_lock(packages):
         _verify_app(root / 'current', base)
         _verify_owner(root, base)
         for release, package in ((base, base_package), (target, target_package)):
@@ -324,7 +325,7 @@ def recover(record_path, trusted_keys, *, mode, expected_root, packages_dir):
     if mode not in ('forward', 'previous'):
         raise ValueError('Recovery mode must be forward or previous.')
     path, record, root, external, packages = _read_record(record_path, expected_root, packages_dir)
-    with update_lock(packages):
+    with installation_lock(root), update_lock(packages):
         path, record, root, external, packages = _read_record(path, expected_root, packages_dir)
         (base, base_package), (target, target_package) = _load_pair(external, record, trusted_keys)
         if mode == 'previous' and _schema(base) != _schema(target):
@@ -382,7 +383,7 @@ def confirm(record_path, trusted_keys, *, running_version, running_commit, expec
     concurrent installation changes. Quarantined recovery data is never deleted.
     """
     path, record, root, external, packages = _read_record(record_path, expected_root, packages_dir)
-    with update_lock(packages):
+    with installation_lock(root), update_lock(packages):
         path, record, root, external, packages = _read_record(path, expected_root, packages_dir)
         (base, _), (target, package) = _load_pair(external, record, trusted_keys)
         if (running_version, running_commit) != (target.version, target.commit):
@@ -436,13 +437,13 @@ def _wait_for_application(profile):
         while True:
             lease = application_lock(profile)
             try:
-                lease.__enter__()
+                handle = lease.__enter__()
                 break
             except BlockingIOError:
                 if time.monotonic() >= deadline:
                     raise TimeoutError('TEMPO or a worker is still running. Finish its work before updating.')
                 time.sleep(.1)
-    return lease
+    return lease, handle
 
 
 def apply_pending(record_path, trusted_keys, *, expected_root, packages_dir):
@@ -454,68 +455,75 @@ def apply_pending(record_path, trusted_keys, *, expected_root, packages_dir):
     path, record, root, external, packages = _read_record(record_path, expected_root, packages_dir)
     if record['state'] != 'armed':
         raise ValueError('This transaction requires explicit repair rather than another apply.')
-    lease = _wait_for_application(packages.parent.parent)
+    lease, application_handle = _wait_for_application(packages.parent.parent)
     try:
-        with update_lock(packages):
-            _, record, root, external, packages = _read_record(path, expected_root, packages_dir)
-            if record['state'] != 'armed':
-                raise ValueError('Update transaction changed while waiting for application exit.')
-            (base, _), (target, package) = _load_pair(external, record, trusted_keys)
-            _validated_release(target.envelope, trusted_keys, target.channel)
-            _verify_app(root / 'current', base)
-            from tempo_update_components import verify_component_transition
-            receipt = None
-            if record['nvidia_marker'] is not None:
-                receipt_path = _safe(packages.parent / 'prepared-nvidia.json', missing_ok=False)
-                if receipt_path.stat().st_size > 65536:
-                    raise ValueError('Invalid staged NVIDIA receipt.')
-                receipt = json.loads(receipt_path.read_bytes())
-            verify_component_transition(base, target, package, receipt,
-                runtime_root=packages.parent.parent / 'nvidia-runtime', expected_marker=record['nvidia_marker'])
-            updater = _safe(root / 'Update.exe', missing_ok=False)
-            hashes = [item.sha256 for item in base.inventory if item.path == _PREFIX + 'Squirrel.exe']
-            if len(hashes) != 1 or _digest(updater) != hashes[0]:
-                raise ValueError('Native updater does not match the signed installed release.')
-            record['state'] = 'installing'; _json_write(path, record)
-        # Native apply acquires the same package lock. Keep the application
-        # lease, but release the package lock before starting its owner.
-        with open(external / 'native-apply.log', 'ab') as log:
-            result = subprocess.run([str(updater), 'apply', '--norestart',
-                '--package', str(package), '--rootDir', str(root), '--packageDir', str(packages)],
-                stdout=log, stderr=log, check=False)
-        with update_lock(packages):
-            if result.returncode:
-                record['state'] = 'recovery_required'; _json_write(path, record)
-                raise RuntimeError('Installation did not finish. Run TEMPORepair to repair forward or choose the compatible previous version.')
-            _verify_app(root / 'current', target)
-            _verify_owner(root, target)
-            record['state'] = 'awaiting_confirmation'; _json_write(path, record)
+        with installation_lock(root) as installation_handle:
+            with update_lock(packages):
+                _, record, root, external, packages = _read_record(path, expected_root, packages_dir)
+                if record['state'] != 'armed':
+                    raise ValueError('Update transaction changed while waiting for application exit.')
+                (base, _), (target, package) = _load_pair(external, record, trusted_keys)
+                _validated_release(target.envelope, trusted_keys, target.channel)
+                _verify_app(root / 'current', base)
+                from tempo_update_components import verify_component_transition
+                receipt = None
+                if record['nvidia_marker'] is not None:
+                    receipt_path = _safe(packages.parent / 'prepared-nvidia.json', missing_ok=False)
+                    if receipt_path.stat().st_size > 65536:
+                        raise ValueError('Invalid staged NVIDIA receipt.')
+                    receipt = json.loads(receipt_path.read_bytes())
+                verify_component_transition(base, target, package, receipt,
+                    runtime_root=packages.parent.parent / 'nvidia-runtime', expected_marker=record['nvidia_marker'])
+                updater = _safe(root / 'Update.exe', missing_ok=False)
+                hashes = [item.sha256 for item in base.inventory if item.path == _PREFIX + 'Squirrel.exe']
+                if len(hashes) != 1 or _digest(updater) != hashes[0]:
+                    raise ValueError('Native updater does not match the signed installed release.')
+                record['state'] = 'installing'; _json_write(path, record)
+            # Release only the package lock. Inherit the held outer/application
+            # handles so verification, replacement and readback have no unlock gap.
+            with native_lock_handoff(installation=installation_handle, application=application_handle) as options, \
+                      open(external / 'native-apply.log', 'ab') as log:
+                result = subprocess.run([str(updater), 'apply', '--norestart',
+                    '--package', str(package), '--rootDir', str(root), '--packageDir', str(packages)],
+                    stdout=log, stderr=log, check=False, **options)
+            with update_lock(packages):
+                if result.returncode:
+                    record['state'] = 'recovery_required'; _json_write(path, record)
+                    raise RuntimeError('Installation did not finish. Run TEMPORepair to repair forward or choose the compatible previous version.')
+                _verify_app(root / 'current', target)
+                _verify_owner(root, target)
+                record['state'] = 'awaiting_confirmation'; _json_write(path, record)
+            lease.__exit__(None, None, None)
+            lease = None
+            # Keep the installation locked through creation of the verified target.
+            subprocess.Popen([str(root / 'current' / 'TEMPO.exe')], cwd=str(root / 'current'), close_fds=True)
     finally:
-        lease.__exit__(None, None, None)
-    # Start only the verified target after releasing the application lease.
-    subprocess.Popen([str(root / 'current' / 'TEMPO.exe')], cwd=str(root / 'current'), close_fds=True)
+        if lease is not None:
+            lease.__exit__(None, None, None)
     return 'awaiting_confirmation'
 
 
 def uninstall_application(root, profile, trusted_keys):
     """Launch the installation owner only after every TEMPO lease is released."""
-    lease = _wait_for_application(profile)
+    lease, application_handle = _wait_for_application(profile)
     try:
         from tempo_update_service import read_configuration
-        configuration = read_configuration(_safe(Path(root) / 'current' / '_internal', missing_ok=False))
-        import base64
-        if configuration is None or {
-                key: base64.b64decode(value, validate=True)
-                for key, value in configuration['trusted_keys'].items()} != trusted_keys:
-            raise ValueError('Uninstall trust configuration changed. Use the original installer to repair it.')
-        updater = _safe(Path(root) / 'Update.exe', missing_ok=False)
-        if (not EMBEDDED_UPDATER_SHA256 or _digest(updater) != EMBEDDED_UPDATER_SHA256
-                or configuration['updater_sha256'] != EMBEDDED_UPDATER_SHA256):
-            raise ValueError('The installation owner failed its certified checksum.')
-        result = subprocess.run([str(updater), 'uninstall', '--rootDir', str(root)], check=False)
-        if result.returncode:
-            raise RuntimeError('The uninstaller did not finish. User data was retained; retry from Windows settings.')
-        return 'uninstalled'
+        with installation_lock(root) as installation_handle:
+            configuration = read_configuration(_safe(Path(root) / 'current' / '_internal', missing_ok=False))
+            import base64
+            if configuration is None or {
+                    key: base64.b64decode(value, validate=True)
+                    for key, value in configuration['trusted_keys'].items()} != trusted_keys:
+                raise ValueError('Uninstall trust configuration changed. Use the original installer to repair it.')
+            updater = _safe(Path(root) / 'Update.exe', missing_ok=False)
+            if (not EMBEDDED_UPDATER_SHA256 or _digest(updater) != EMBEDDED_UPDATER_SHA256
+                    or configuration['updater_sha256'] != EMBEDDED_UPDATER_SHA256):
+                raise ValueError('The installation owner failed its certified checksum.')
+            with native_lock_handoff(installation=installation_handle, application=application_handle) as options:
+                result = subprocess.run([str(updater), 'uninstall', '--rootDir', str(root)], check=False, **options)
+            if result.returncode:
+                raise RuntimeError('The uninstaller did not finish. User data was retained; retry from Windows settings.')
+            return 'uninstalled'
     finally:
         lease.__exit__(None, None, None)
 

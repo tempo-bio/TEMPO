@@ -109,20 +109,28 @@ jobs:
           Add-Content $env:GITHUB_ENV "TEMPO_FIXTURE_DIAGNOSTIC_DIR=$(Join-Path $pwd 'fixture-native-logs')"
       - name: Verify legacy data transactions and Windows lease behavior
         working-directory: tempo
-        run: python -m unittest -q tests.test_legacy_migration tests.test_update_bootstrap tests.test_update_storage tests.test_update_migration tests.test_update_lock tests.test_update_components tests.test_update_coordinator tests.test_update_addons tests.test_nvidia_setup tests.test_windows_update_release tests.test_package_windows_updates tests.test_update_configuration tests.test_windows_installer_cleanup
+        run: python -m unittest -q tests.test_legacy_migration tests.test_update_bootstrap tests.test_update_storage tests.test_update_migration tests.test_update_lock tests.test_update_components tests.test_update_coordinator tests.test_update_addons tests.test_nvidia_setup tests.test_windows_update_release tests.test_package_windows_updates tests.test_update_configuration tests.test_windows_installer_cleanup tests.test_update_recovery tests.test_update_installation tests.test_velopack_candidate
       - name: Build production-feature candidate
         working-directory: velopack
-        run: cargo build --locked --release -p velopack_bins --bin update --features windows --target x86_64-pc-windows-msvc --target-dir ../production-target
+        run: cargo build --locked --release -p velopack_bins --bin update --bin setup --features windows --target x86_64-pc-windows-msvc --target-dir ../production-target
       - name: Build isolated fault-injection candidate
         working-directory: velopack
-        run: cargo build --locked --release -p velopack_bins --bin update --features windows,tempo-fixture-faults --target x86_64-pc-windows-msvc --target-dir ../fixture-target
+        run: cargo build --locked --release -p velopack_bins --bin update --bin setup --features windows,tempo-fixture-faults --target x86_64-pc-windows-msvc --target-dir ../fixture-target
       - name: Run isolated native fixture
         env:
           PYTHONPATH: tempo
-        run: python tempo/tests/fixtures/velopack/run_fixture.py --vpk-root vpk --fixture-updater fixture-target/x86_64-pc-windows-msvc/release/update.exe --report fixture-results.json
+        run: python tempo/tests/fixtures/velopack/run_fixture.py --vpk-root vpk --fixture-updater fixture-target/x86_64-pc-windows-msvc/release/update.exe --fixture-setup fixture-target/x86_64-pc-windows-msvc/release/setup.exe --report fixture-results.json
       - name: Require complete native recovery evidence
         if: ${{ !inputs.uninstall_diagnostics }}
         run: python tempo/tests/fixtures/velopack/recovery_gate.py fixture-results.json
+      - name: Exercise the exact production setup and updater
+        if: ${{ !inputs.uninstall_diagnostics }}
+        env:
+          PYTHONPATH: tempo
+        run: python tempo/tests/fixtures/velopack/run_fixture.py --production --vpk-root vpk --fixture-updater production-target/x86_64-pc-windows-msvc/release/update.exe --fixture-setup production-target/x86_64-pc-windows-msvc/release/setup.exe --report production-results.json
+      - name: Require production lifecycle evidence
+        if: ${{ !inputs.uninstall_diagnostics }}
+        run: python tempo/tests/fixtures/velopack/recovery_gate.py production-results.json --production
       - name: Bind production-feature bytes to this native candidate run
         if: ${{ !inputs.uninstall_diagnostics }}
         run: |
@@ -131,10 +139,15 @@ jobs:
           from pathlib import Path
           pin = json.loads(Path('tempo/installer/velopack/pin.json').read_bytes())
           updater = Path('production-target/x86_64-pc-windows-msvc/release/update.exe')
+          setup = Path('production-target/x86_64-pc-windows-msvc/release/setup.exe')
+          observed = json.loads(Path('production-results.json').read_bytes())
+          if observed['updater_sha256'] != hashlib.sha256(updater.read_bytes()).hexdigest() or observed['setup_sha256'] != hashlib.sha256(setup.read_bytes()).hexdigest():
+              raise SystemExit('Production helper identities differ from the exercised binaries')
           identity = dict(schema_version=1, source_commit=os.environ['GITHUB_SHA'],
               upstream_commit=pin['upstream_commit'], patch_sha256=pin['patch_sha256'],
               updater_sha256=hashlib.sha256(updater.read_bytes()).hexdigest(),
-              fixture_passed=True, certification_status='unverified',
+              setup_sha256=hashlib.sha256(setup.read_bytes()).hexdigest(),
+              fixture_passed=True, production_passed=True, certification_status='unverified',
               workflow_run_id=os.environ['GITHUB_RUN_ID'])
           Path('native-candidate.json').write_text(json.dumps(identity, indent=2) + '\n')
           '@
@@ -147,6 +160,7 @@ jobs:
           path: |
             native-candidate.json
             production-target/x86_64-pc-windows-msvc/release/update.exe
+            production-target/x86_64-pc-windows-msvc/release/setup.exe
             tempo/installer/velopack/pin.json
             tempo/installer/velopack/0001-tempo-recovery.patch
             tempo/installer/velopack/LICENSE
@@ -158,6 +172,7 @@ jobs:
           name: velopack-native-candidate-evidence
           path: |
             fixture-results.json
+            production-results.json
             fixture-native-logs/
             handle-signature.json
             production-target/x86_64-pc-windows-msvc/release/update.exe

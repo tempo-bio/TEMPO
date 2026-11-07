@@ -37,25 +37,30 @@ index cf259743..f14cd19d 100644
                  }
              }
 diff --git a/src/bins/src/commands/apply_windows_impl.rs b/src/bins/src/commands/apply_windows_impl.rs
-index 2effdf5c..56236482 100644
+index 2effdf5c..eb5a424c 100644
 --- a/src/bins/src/commands/apply_windows_impl.rs
 +++ b/src/bins/src/commands/apply_windows_impl.rs
-@@ -1,6 +1,6 @@
+@@ -1,7 +1,7 @@
  use crate::{dialogs, shared, windows};
  use anyhow::{bail, Context, Result};
 -use std::{ffi::OsString, fs, path::PathBuf, time::Duration};
-+use std::{ffi::OsString, fs, io::Write, path::PathBuf, time::Duration};
- use velopack::{bundle::load_bundle_from_file, constants, locator::VelopackLocator, process};
+-use velopack::{bundle::load_bundle_from_file, constants, locator::VelopackLocator, process};
++use std::{fs, io::Write, path::PathBuf};
++use velopack::{bundle::load_bundle_from_file, constants, locator::VelopackLocator};
  
  // fn ropycopy<P1: AsRef<Path>, P2: AsRef<Path>>(source: &P1, dest: &P2) -> Result<()> {
-@@ -33,6 +33,20 @@ use velopack::{bundle::load_bundle_from_file, constants, locator::VelopackLocato
+ //     let source = source.as_ref();
+@@ -33,6 +33,25 @@ use velopack::{bundle::load_bundle_from_file, constants, locator::VelopackLocato
  //     Ok(())
  // }
  
 +// The environment is read only by an explicitly feature-gated fixture build.
 +#[cfg(feature = "tempo-fixture-faults")]
 +fn fixture_fault(point: &str) -> Result<()> {
-+    if std::env::var("TEMPO_FIXTURE_FAULT").map(|v| v.split(',').any(|p| p == point)).unwrap_or(false) {
++    if std::env::var("TEMPO_FIXTURE_FAULT")
++        .map(|v| v.split(',').any(|p| p == point))
++        .unwrap_or(false)
++    {
 +        bail!("Injected fixture fault at {}", point);
 +    }
 +    if std::env::var("TEMPO_FIXTURE_ABORT").ok().as_deref() == Some(point) {
@@ -64,13 +69,92 @@ index 2effdf5c..56236482 100644
 +    Ok(())
 +}
 +#[cfg(not(feature = "tempo-fixture-faults"))]
-+fn fixture_fault(_point: &str) -> Result<()> { Ok(()) }
++fn fixture_fault(_point: &str) -> Result<()> {
++    Ok(())
++}
 +
  fn remove_temp_dir_timed(path: &PathBuf) {
      if !path.exists() {
          return;
-@@ -112,6 +126,9 @@ pub fn apply_package_impl(old_locator: &VelopackLocator, package: &PathBuf, hook
-     // which would also try to acquire the lock — causing a deadlock.
+@@ -48,70 +67,31 @@ pub fn apply_package_impl(old_locator: &VelopackLocator, package: &PathBuf, hook
+     let root_path = old_locator.get_root_dir();
+ 
+     let mut bundle = load_bundle_from_file(package).map_err(|e| {
+-        warn!("Deleting package {:?} to prevent update loop: {}", package, e);
+-        let _ = fs::remove_file(package);
++        warn!("Refusing unreadable package {:?}: {}", package, e);
+         e
+     })?;
+     let new_app_manifest = bundle.read_manifest().map_err(|e| {
+-        warn!("Deleting package {:?} to prevent update loop: {}", package, e);
+-        let _ = fs::remove_file(package);
++        warn!("Refusing unreadable package {:?}: {}", package, e);
+         e
+     })?;
+-    let new_locator = old_locator.clone_self_with_new_manifest(&new_app_manifest);
+-
++    // TEMPO supports per-user installations. Never elevate while inheriting a
++    // parent's leases: ShellExecute does not transfer the explicit handle list.
++    let _application = shared::application_lock()?;
++    let _installation = shared::installation_lock(&root_path)?;
+     if !windows::is_directory_writable(&root_path) {
+-        if process::is_current_process_elevated() {
+-            bail!("The root directory is not writable & process is already admin. The update cannot continue.");
+-        } else {
+-            info!("Re-launching as administrator to update in {:?}", root_path);
+-
+-            let packages_dir = old_locator.get_packages_dir();
+-            let args: Vec<OsString> = vec![
+-                "apply".into(),
+-                "--norestart".into(),
+-                "--package".into(),
+-                package.into(),
+-                "--rootDir".into(),
+-                root_path.into(),
+-                "--packageDir".into(),
+-                packages_dir.into(),
+-            ];
+-            let exe_path = std::env::current_exe()?;
+-            let work_dir: Option<String> = None; // same as this process
+-                                                 // NB: show_window must be true for dialogs to be shown
+-                                                 // https://learn.microsoft.com/en-us/windows/win32/api/commctrl/nf-commctrl-taskdialogindirect#remarks
+-            let process_handle = process::run_process_as_admin(&exe_path, args, work_dir, true)?;
+-
+-            info!(
+-                "Waiting (up to 10 minutes) for elevated process (pid: {}) to exit...",
+-                process_handle.pid()
+-            );
+-            let result = process::wait_for_process_to_exit(process_handle, Some(Duration::from_secs(10 * 60)))?;
+-
+-            match result {
+-                process::WaitResult::WaitTimeout => {
+-                    bail!("Elevated process has not exited within 10 minutes. (TIMEOUT)");
+-                }
+-                process::WaitResult::ExitCode(code) => {
+-                    if code != 0 {
+-                        bail!("Elevated process has exited with ERROR: {}.", code);
+-                    } else {
+-                        info!("Elevated process has run successfully.");
+-                    }
+-                }
+-                process::WaitResult::NoWaitRequired => {
+-                    info!("Elevated process has not required waiting.");
+-                }
+-            }
+-            return Ok(new_locator);
+-        }
++        bail!("Per-user installation is not writable; repair its permissions before updating.");
+     }
+-
+-    // Acquire exclusive lock AFTER the self-elevation check. If we acquired it before,
+-    // the non-elevated parent would hold the lock while waiting for the elevated child,
+-    // which would also try to acquire the lock — causing a deadlock.
++    let locked_locator = velopack::locator::auto_locate_app_manifest(velopack::locator::LocationContext::FromSpecifiedRootDir(
++        root_path.clone(),
++        Some(old_locator.get_packages_dir()),
++    ))?;
++    let old_locator = &locked_locator;
++    let new_locator = old_locator.clone_self_with_new_manifest(&new_app_manifest);
      let _mutex = old_locator.try_get_exclusive_lock()?;
  
 +    // Reject active applications before hooks can affect the running package.
@@ -79,7 +163,7 @@ index 2effdf5c..56236482 100644
      let old_version = old_locator.get_manifest_version();
      let new_version = new_locator.get_manifest_version();
  
-@@ -128,7 +145,12 @@ pub fn apply_package_impl(old_locator: &VelopackLocator, package: &PathBuf, hook
+@@ -128,7 +108,12 @@ pub fn apply_package_impl(old_locator: &VelopackLocator, package: &PathBuf, hook
  
      let current_dir = old_locator.get_current_bin_dir();
      let temp_path_new = old_locator.get_temp_dir_rand16();
@@ -93,7 +177,17 @@ index 2effdf5c..56236482 100644
  
      // open a dialog showing progress...
      let reporter = dialogs::progress::show_apply_progress(&new_locator.get_manifest_title(), &new_locator.get_manifest_version_full_string());
-@@ -155,12 +177,18 @@ pub fn apply_package_impl(old_locator: &VelopackLocator, package: &PathBuf, hook
+@@ -141,8 +126,7 @@ pub fn apply_package_impl(old_locator: &VelopackLocator, package: &PathBuf, hook
+                 reporter.set_progress(p);
+             })
+             .map_err(|e| {
+-                warn!("Deleting package {:?} to prevent update loop: {}", package, e);
+-                let _ = fs::remove_file(package);
++                warn!("Refusing unreadable package {:?}: {}", package, e);
+                 e
+             })?;
+ 
+@@ -155,12 +139,18 @@ pub fn apply_package_impl(old_locator: &VelopackLocator, package: &PathBuf, hook
              info!("Skipping --veloapp-obsolete hook.");
          }
  
@@ -116,7 +210,7 @@ index 2effdf5c..56236482 100644
  
          // let mut requires_robocopy = false;
          // if let Err(e) = fs::rename(&current_dir, &temp_path_old) {
-@@ -172,9 +200,22 @@ pub fn apply_package_impl(old_locator: &VelopackLocator, package: &PathBuf, hook
+@@ -172,9 +162,27 @@ pub fn apply_package_impl(old_locator: &VelopackLocator, package: &PathBuf, hook
          // fifth, we try to replace the current dir with temp_path_new
          // if this fails we will yolo a rollback...
          info!("Replacing current dir with {:?}", temp_path_new);
@@ -136,13 +230,18 @@ index 2effdf5c..56236482 100644
 +            })();
 +            match restore {
 +                Ok(()) => return Err(error).context("Replacement failed; previous application restored. Confirmation or repair is required."),
-+                Err(restore_error) => bail!("Replacement failed: {}. Restore failed: {}. Previous application remains at {:?}; repair is required.", error, restore_error, temp_path_old),
++                Err(restore_error) => bail!(
++                    "Replacement failed: {}. Restore failed: {}. Previous application remains at {:?}; repair is required.",
++                    error,
++                    restore_error,
++                    temp_path_old
++                ),
 +            }
 +        }
  
          // if !requires_robocopy {
          //     // if we didn't need robocopy for the backup, we don't need it for the deploy hopefully
-@@ -204,6 +245,7 @@ pub fn apply_package_impl(old_locator: &VelopackLocator, package: &PathBuf, hook
+@@ -204,6 +212,7 @@ pub fn apply_package_impl(old_locator: &VelopackLocator, package: &PathBuf, hook
          //     }
          // }
  
@@ -150,7 +249,7 @@ index 2effdf5c..56236482 100644
          // from this point on, we're past the point of no return and should not bail
          // sixth, we write the uninstall entry
          if !old_locator.get_is_portable() {
-@@ -226,7 +268,6 @@ pub fn apply_package_impl(old_locator: &VelopackLocator, package: &PathBuf, hook
+@@ -226,7 +235,6 @@ pub fn apply_package_impl(old_locator: &VelopackLocator, package: &PathBuf, hook
          // because windows may try to use the "Distributed Link Tracking and Object Identifiers (DLT) service"
          // to update the shortcut to point at the temp/renamed location
          remove_temp_dir_timed(&temp_path_new);
@@ -158,13 +257,125 @@ index 2effdf5c..56236482 100644
  
          if !old_locator.get_is_portable() {
              crate::windows::create_or_update_manifest_lnks(&new_locator, Some(old_locator));
-@@ -274,7 +315,6 @@ pub fn apply_package_impl(old_locator: &VelopackLocator, package: &PathBuf, hook
+@@ -274,7 +282,6 @@ pub fn apply_package_impl(old_locator: &VelopackLocator, package: &PathBuf, hook
  
      reporter.close();
      remove_temp_dir_timed(&temp_path_new);
 -    remove_temp_dir_timed(&temp_path_old);
      action?;
      Ok(new_locator)
+ }
+diff --git a/src/bins/src/commands/install.rs b/src/bins/src/commands/install.rs
+index f242e5cf..214e59fc 100644
+--- a/src/bins/src/commands/install.rs
++++ b/src/bins/src/commands/install.rs
+@@ -42,6 +42,10 @@ pub fn install(pkg: &mut BundleZip, install_to: Option<&PathBuf>, start_args: Op
+         (Path::new(&appdata).join(&app.id), true)
+     };
+ 
++    let _application = shared::application_lock()?;
++    let _installation = shared::installation_lock(&root_path)?;
++    shared::ensure_package_stopped(&root_path)?;
++
+     // path needs to exist for future operations (disk space etc)
+     if !root_path.exists() {
+         shared::retry_io(|| fs::create_dir_all(&root_path))?;
+@@ -89,6 +93,9 @@ pub fn install(pkg: &mut BundleZip, install_to: Option<&PathBuf>, start_args: Op
+         .into());
+     }
+ 
++    if root_path.join("tempo-previous").exists() || root_path.join("tempo-update-pending.txt").exists() {
++        anyhow::bail!("An update requires confirmation or independent TEMPORepair before setup can replace it.");
++    }
+     let mut root_path_renamed: Option<PathBuf> = None;
+     // does the target directory exist and have files? (eg. already installed)
+     if !shared::is_dir_empty(&root_path) {
+@@ -103,10 +110,7 @@ pub fn install(pkg: &mut BundleZip, install_to: Option<&PathBuf>, start_args: Op
+         }
+         info!("User chose to overwrite existing installation.");
+ 
+-        shared::force_stop_package(&root_path).map_err(|z| SetupError::StopApplicationFailed {
+-            app_title: app.title.clone(),
+-            error: z.to_string(),
+-        })?;
++        shared::ensure_package_stopped(&root_path)?;
+ 
+         let renamed = root_path.with_extension(shared::random_string(16));
+         info!("Renaming existing directory to '{:?}' to allow rollback...", renamed);
+@@ -124,7 +128,7 @@ pub fn install(pkg: &mut BundleZip, install_to: Option<&PathBuf>, start_args: Op
+     info!("Acquiring lock...");
+     let paths = create_config_from_root_dir(&root_path);
+     let locator = VelopackLocator::new_with_manifest(paths, app);
+-    let _mutex = locator.try_get_exclusive_lock()?;
++    let mutex = locator.try_get_exclusive_lock()?;
+ 
+     let tx = if dialogs::get_silent() {
+         info!("Will not show splash because silent mode is on.");
+@@ -144,8 +148,10 @@ pub fn install(pkg: &mut BundleZip, install_to: Option<&PathBuf>, start_args: Op
+         )
+     };
+ 
+-    let install_result = install_impl(pkg, &locator, &tx, start_args, channel_override);
++    let install_result = install_impl(pkg, &locator, &tx, channel_override);
+     let _ = tx.send(windows::splash::MSG_CLOSE);
++    // No open descendant handles during whole-root rollback. Outside leases remain held.
++    drop(mutex);
+ 
+     if install_result.is_ok() {
+         info!("Installation completed successfully!");
+@@ -157,13 +163,19 @@ pub fn install(pkg: &mut BundleZip, install_to: Option<&PathBuf>, start_args: Op
+         error!("Installation failed!");
+         if let Some(renamed) = root_path_renamed {
+             info!("Rolling back installation...");
+-            let _ = shared::force_stop_package(&root_path);
++            shared::ensure_package_stopped(&root_path)?;
+             let _ = shared::retry_io(|| remove_dir_all::remove_dir_all(&root_path));
+             let _ = shared::retry_io(|| fs::rename(&renamed, &root_path));
+         }
+         install_result?;
+     }
+ 
++    // Keep the installation identity protected until process creation finishes,
++    // but release the lifetime lease before the child initializes it.
++    drop(_application);
++    if !dialogs::get_silent() {
++        shared::start_package(&locator, start_args, Some(constants::HOOK_ENV_FIRSTRUN))?;
++    }
+     Ok(())
+ }
+ 
+@@ -186,13 +198,7 @@ mod tests {
+     }
+ }
+ 
+-fn install_impl(
+-    pkg: &mut BundleZip,
+-    locator: &VelopackLocator,
+-    tx: &std::sync::mpsc::Sender<i16>,
+-    start_args: Option<Vec<OsString>>,
+-    channel_override: Option<&str>,
+-) -> Result<()> {
++fn install_impl(pkg: &mut BundleZip, locator: &VelopackLocator, tx: &std::sync::mpsc::Sender<i16>, channel_override: Option<&str>) -> Result<()> {
+     info!("Starting installation!");
+ 
+     // all application paths
+@@ -243,16 +249,11 @@ fn install_impl(
+ 
+     info!("Starting process install hook");
+     if !windows::run_hook(locator, constants::HOOK_CLI_INSTALL, 30) {
+-        dialogs::show_install_hook_warning(&locator.get_manifest_title());
++        anyhow::bail!("Install hook did not settle; setup cannot complete.");
+     }
+ 
+     let _ = tx.send(100);
+     windows::registry::write_uninstall_entry(locator)?;
+ 
+-    if !dialogs::get_silent() {
+-        info!("Starting app...");
+-        shared::start_package(locator, start_args, Some(constants::HOOK_ENV_FIRSTRUN))?;
+-    }
+-
+     Ok(())
  }
 diff --git a/src/bins/src/commands/start.rs b/src/bins/src/commands/start.rs
 index 645936f4..277ca453 100644
@@ -179,17 +390,222 @@ index 645936f4..277ca453 100644
  
      #[cfg(target_os = "windows")]
      super::start_windows_impl::start_impl(context, exe_name, exe_args, legacy_args)?;
+diff --git a/src/bins/src/commands/start_windows_impl.rs b/src/bins/src/commands/start_windows_impl.rs
+index ffb21eca..79d2439d 100644
+--- a/src/bins/src/commands/start_windows_impl.rs
++++ b/src/bins/src/commands/start_windows_impl.rs
+@@ -1,82 +1,10 @@
+-use crate::{
+-    dialogs,
+-    shared::{self, OperationWait},
+-    windows as win,
+-};
+-use anyhow::{anyhow, bail, Result};
+-use std::{
+-    ffi::{OsStr, OsString},
+-    os::windows::process::CommandExt,
+-};
+-use std::{fs, path::Path, path::PathBuf, process::Command as Process};
+-use velopack::locator::{self, LocationContext, VelopackLocator};
+-use velopack::{bundle::Manifest, constants};
++use crate::shared;
++use anyhow::{bail, Result};
++use std::process::Command as Process;
++use std::{ffi::OsString, os::windows::process::CommandExt};
++use velopack::locator::{self, LocationContext};
+ use windows::Win32::UI::WindowsAndMessaging::AllowSetForegroundWindow;
+ 
+-enum LocatorResult {
+-    Normal(VelopackLocator),
+-    Legacy(PathBuf, Manifest),
+-}
+-
+-impl LocatorResult {
+-    pub fn get_root_dir(&self) -> PathBuf {
+-        match self {
+-            LocatorResult::Normal(locator) => locator.get_root_dir(),
+-            LocatorResult::Legacy(path, _) => path.clone(),
+-        }
+-    }
+-    pub fn get_manifest(&self) -> Manifest {
+-        match self {
+-            LocatorResult::Normal(locator) => locator.get_manifest(),
+-            LocatorResult::Legacy(_, manifest) => manifest.clone(),
+-        }
+-    }
+-
+-    pub fn get_current_dir(&self) -> PathBuf {
+-        match self {
+-            LocatorResult::Normal(locator) => locator.get_current_bin_dir(),
+-            LocatorResult::Legacy(path, _) => path.join("current"),
+-        }
+-    }
+-
+-    pub fn get_exe_to_start<P: AsRef<OsStr>>(&self, name: Option<P>) -> Result<PathBuf> {
+-        let current_dir = self.get_current_dir();
+-        if let Some(name) = name {
+-            Ok(Path::new(&current_dir).join(name.as_ref()))
+-        } else {
+-            match self {
+-                LocatorResult::Normal(locator) => Ok(locator.get_main_exe_path()),
+-                LocatorResult::Legacy(_, manifest) => {
+-                    if manifest.main_exe.is_empty() {
+-                        bail!("No main exe specified in manifest and exe name argument was not provided.");
+-                    } else {
+-                        Ok(Path::new(&current_dir).join(&manifest.main_exe))
+-                    }
+-                }
+-            }
+-        }
+-    }
+-}
+-
+-fn legacy_locator(context: LocationContext) -> Result<LocatorResult> {
+-    let locator = locator::auto_locate_app_manifest(context);
+-    match locator {
+-        Ok(locator) => Ok(LocatorResult::Normal(locator)),
+-        Err(e) => {
+-            warn!("Failed to locate app manifest ({}), trying legacy package resolution...", e);
+-            let my_exe = std::env::current_exe()?;
+-            let parent_dir = my_exe.parent().expect("Unable to determine parent directory");
+-            let packages_dir = parent_dir.join("packages");
+-            if let Some((path, manifest)) = locator::find_latest_full_package(&packages_dir) {
+-                info!("Found full package to read: {:?}", path);
+-                Ok(LocatorResult::Legacy(parent_dir.to_path_buf(), manifest))
+-            } else {
+-                bail!("Unable to locate app manifest or full package in {:?}.", packages_dir);
+-            }
+-        }
+-    }
+-}
+-
+ pub fn start_impl(
+     context: LocationContext,
+     exe_name: Option<&OsString>,
+@@ -84,95 +12,28 @@ pub fn start_impl(
+     legacy_args: Option<&OsString>,
+ ) -> Result<()> {
+     if legacy_args.is_some() && exe_args.is_some() {
+-        anyhow::bail!("Cannot use both legacy args and new args format at the same time.");
+-    }
+-
+-    let locator = legacy_locator(context)?;
+-    let root_dir = locator.get_root_dir();
+-    let manifest = locator.get_manifest();
+-    if shared::has_app_prefixed_folder(&root_dir) {
+-        match try_legacy_migration(&root_dir, &manifest) {
+-            Ok(new_locator) => {
+-                shared::start_package(&new_locator, exe_args, Some(constants::HOOK_ENV_RESTART))?;
+-                Ok(())
+-            }
+-            Err(e) => {
+-                warn!("Failed to migrate legacy app ({}).", e);
+-                dialogs::show_start_corrupt_error(&manifest.title);
+-                Err(e)
+-            }
+-        }
+-    } else {
+-        start_regular(locator, exe_name, exe_args, legacy_args)?;
+-        Ok(())
+-    }
+-}
+-
+-fn start_regular(locator: LocatorResult, exe_name: Option<&OsString>, exe_args: Option<Vec<OsString>>, legacy_args: Option<&OsString>) -> Result<()> {
+-    // we can't just run the normal start_package command, because legacy squirrel might provide
+-    // an "exe name" to restart which no longer exists in the package
+-    let exe_to_execute = locator.get_exe_to_start(exe_name)?;
+-    if !exe_to_execute.exists() {
+-        bail!("Unable to find executable to start: '{:?}'", exe_to_execute);
+-    }
+-
+-    let current = locator.get_current_dir();
+-    info!("About to launch: '{:?}' in dir '{:?}'", exe_to_execute, current);
+-
+-    let mut cmd = Process::new(&exe_to_execute);
+-    cmd.current_dir(&current);
+-
++        bail!("Cannot use both legacy args and new args format at the same time.");
++    }
++    let before = locator::auto_locate_app_manifest(context)?;
++    let root = before.get_root_dir();
++    let _installation = shared::installation_lock(&root)?;
++    if shared::has_app_prefixed_folder(&root) {
++        bail!("Automatic Squirrel migration is unsupported. Use TEMPO's reviewed migration procedure.");
++    }
++    let locator = locator::auto_locate_app_manifest(LocationContext::FromSpecifiedRootDir(root, None))?;
++    let current = locator.get_current_bin_dir();
++    let executable = exe_name.map(|name| current.join(name)).unwrap_or_else(|| locator.get_main_exe_path());
++    if !executable.is_file() {
++        bail!("Unable to find executable to start: {:?}", executable);
++    }
++    let mut command = Process::new(executable);
++    command.current_dir(current);
+     if let Some(args) = exe_args {
+-        cmd.args(args);
++        command.args(args);
+     } else if let Some(args) = legacy_args {
+-        cmd.raw_arg(args);
++        command.raw_arg(args);
+     }
+-
+-    let cmd = cmd.spawn()?;
+-    let _ = unsafe { AllowSetForegroundWindow(cmd.id()) };
++    let child = command.spawn()?;
++    let _ = unsafe { AllowSetForegroundWindow(child.id()) };
+     Ok(())
+ }
+-
+-fn try_legacy_migration(root_dir: &PathBuf, manifest: &Manifest) -> Result<VelopackLocator> {
+-    info!("This is a legacy app. Will try and upgrade it now.");
+-
+-    // if started by legacy Squirrel, the working dir of Update.exe may be inside the app-* folder,
+-    // meaning we can not clean up properly.
+-    std::env::set_current_dir(root_dir)?;
+-    let path_config = locator::create_config_from_root_dir(root_dir);
+-    let package = locator::find_latest_full_package(&path_config.PackagesDir).ok_or_else(|| anyhow!("Unable to find latest full package."))?;
+-
+-    warn!("This application is installed in a folder prefixed with 'app-'. Attempting to migrate...");
+-    let _ = shared::force_stop_package(root_dir);
+-
+-    // reset current manifest shortcuts, so when the new manifest is being read
+-    // new shortcuts will be force-created
+-    let mut modified_manifest = manifest.clone();
+-    modified_manifest.shortcut_locations = String::new();
+-    let locator = VelopackLocator::new_with_manifest(path_config, modified_manifest);
+-
+-    // Acquire lock for the rename and shortcut operations, but drop it before calling apply(),
+-    // because apply() will acquire the same exclusive lock internally.
+-    {
+-        let _mutex = locator.try_get_exclusive_lock()?;
+-
+-        if !locator.get_current_bin_dir().exists() {
+-            info!("Renaming latest app-* folder to current.");
+-            if let Some((latest_app_dir, _latest_ver)) = shared::get_latest_app_version_folder(root_dir)? {
+-                fs::rename(latest_app_dir, locator.get_current_bin_dir())?;
+-            }
+-        }
+-
+-        info!("Removing old shortcuts...");
+-        win::remove_all_shortcuts_for_root_dir(root_dir);
+-    }
+-
+-    info!("Applying latest full package...");
+-    let buf = Path::new(&package.0).to_path_buf();
+-    let new_locator = super::apply(&locator, false, OperationWait::NoWait, Some(&buf), None, super::HookRunMode::PostOnly)?;
+-
+-    info!("Removing old app-* folders...");
+-    shared::delete_app_prefixed_folders(root_dir);
+-    let _ = remove_dir_all::remove_dir_all(root_dir.join("staging"));
+-    Ok(new_locator)
+-}
 diff --git a/src/bins/src/commands/uninstall.rs b/src/bins/src/commands/uninstall.rs
-index 8689daf5..984a176f 100644
+index 8689daf5..3cc6667e 100644
 --- a/src/bins/src/commands/uninstall.rs
 +++ b/src/bins/src/commands/uninstall.rs
-@@ -1,7 +1,58 @@
- use crate::{dialogs, shared, windows};
+@@ -2,6 +2,55 @@ use crate::{dialogs, shared, windows};
  use velopack::{constants, locator::VelopackLocator};
  
-+use ::windows::Win32::Storage::FileSystem::FILE_SHARE_DELETE;
  use anyhow::{bail, Result};
-+use std::os::windows::fs::OpenOptionsExt;
 +use std::{env, fs};
 +
 +// Diagnostic execution is compiled only into the disposable fixture binary.
@@ -242,21 +658,20 @@ index 8689daf5..984a176f 100644
  
  pub fn uninstall(locator: &VelopackLocator, delete_self: bool) -> Result<()> {
      info!("Command: Uninstall");
-@@ -12,22 +63,67 @@ pub fn uninstall(locator: &VelopackLocator, delete_self: bool) -> Result<()> {
+@@ -12,41 +61,78 @@ pub fn uninstall(locator: &VelopackLocator, delete_self: bool) -> Result<()> {
  
      let root_path = locator.get_root_dir();
      let app_title = locator.get_manifest_title();
-+    // Keep read/write access exclusive, while allowing the containing directory
-+    // to be renamed. The normal zero-sharing package lock prevents retirement.
-+    let packages = locator.get_packages_dir();
-+    fs::create_dir_all(&packages)?;
-+    let _mutex = fs::OpenOptions::new()
-+        .read(true)
-+        .write(true)
-+        .create(true)
-+        .truncate(false)
-+        .share_mode(FILE_SHARE_DELETE.0)
-+        .open(packages.join(".velopack_lock"))?;
++    // The stable outer lock stays held across retirement. Release the legacy
++    // inner lock only after preparation, before renaming its containing tree.
++    let _application = shared::application_lock()?;
++    let _installation = shared::installation_lock(&root_path)?;
++    let locked_locator = velopack::locator::auto_locate_app_manifest(velopack::locator::LocationContext::FromSpecifiedRootDir(
++        root_path.clone(),
++        Some(locator.get_packages_dir()),
++    ))?;
++    let locator = &locked_locator;
++    let package_lock = locator.try_get_exclusive_lock()?;
 +
 +    // Refuse active work before any hook, shortcut or registration changes.
 +    shared::ensure_package_stopped(&root_path)?;
@@ -270,12 +685,19 @@ index 8689daf5..984a176f 100644
 -
      // run uninstall hook
 -    windows::run_hook(locator, constants::HOOK_CLI_UNINSTALL, 60);
+-
+-    // remove all shortcuts pointing to the app
+-    windows::remove_all_shortcuts_for_root_dir(&root_path);
+-
+-    info!("Removing directory '{:?}'", root_path);
+-    let _ = remove_dir_all::remove_dir_contents(&root_path);
 +    if !windows::run_hook(locator, constants::HOOK_CLI_UNINSTALL, 60) {
 +        bail!("Uninstall hook did not settle; installation retained.");
 +    }
 +    shared::ensure_package_stopped(&root_path)?;
  
--    // remove all shortcuts pointing to the app
+-    let temp_dir = std::env::temp_dir();
+-    let temp_dir = temp_dir.join(format!("velopack_{}", locator.get_manifest_id()));
 +    // A delayed recursive delete must never name the reusable installation path.
 +    // Move out of our own working directory before retiring that directory.
 +    let retirement = if delete_self {
@@ -290,13 +712,22 @@ index 8689daf5..984a176f 100644
 +        None
 +    };
 +    diagnostic_handles("before_metadata", &root_path, false);
-+
+ 
+-    info!("Removing directory '{:?}'", temp_dir);
 +    // Finish all writes to the reusable identity before exposing that path to a
 +    // new installer. Nothing below the retirement rename touches its metadata.
 +    windows::registry::remove_uninstall_entry(locator)?;
-     windows::remove_all_shortcuts_for_root_dir(&root_path);
++    windows::remove_all_shortcuts_for_root_dir(&root_path);
++    // Shared temporary locations also belong to the reusable identity. Finish
++    // their cleanup before exposing the original installation path for reuse.
++    let temp_dir = std::env::temp_dir().join(format!("velopack_{}", locator.get_manifest_id()));
+     let _ = remove_dir_all::remove_dir_all(&temp_dir);
++    drop(package_lock);
 +    diagnostic_handles("after_shortcuts", &root_path, false);
-+
+ 
+-    if let Err(e) = windows::registry::remove_uninstall_entry(locator) {
+-        error!("Unable to remove uninstall registry entry ({}).", e);
+-    }
 +    let removal_path = if let Some(retired) = retirement {
 +        if let Err(error) = shared::retry_io(|| fs::rename(&root_path, &retired)) {
 +            diagnostic_handles("rename_failed", &root_path, true);
@@ -309,22 +740,10 @@ index 8689daf5..984a176f 100644
 +    } else {
 +        root_path.clone()
 +    };
- 
--    info!("Removing directory '{:?}'", root_path);
--    let _ = remove_dir_all::remove_dir_contents(&root_path);
++
 +    info!("Removing directory '{:?}'", removal_path);
 +    let _ = remove_dir_all::remove_dir_contents(&removal_path);
  
-     let temp_dir = std::env::temp_dir();
-     let temp_dir = temp_dir.join(format!("velopack_{}", locator.get_manifest_id()));
-@@ -35,18 +131,12 @@ pub fn uninstall(locator: &VelopackLocator, delete_self: bool) -> Result<()> {
-     info!("Removing directory '{:?}'", temp_dir);
-     let _ = remove_dir_all::remove_dir_all(&temp_dir);
- 
--    if let Err(e) = windows::registry::remove_uninstall_entry(locator) {
--        error!("Unable to remove uninstall registry entry ({}).", e);
--    }
--
      info!("Finished successfully.");
      reporter.close();
      dialogs::show_uninstall_complete(&app_title);
@@ -370,29 +789,140 @@ index e832f965..eb96f1be 100644
  }
  
 diff --git a/src/bins/src/shared/util_windows.rs b/src/bins/src/shared/util_windows.rs
-index 76af834b..a1b67a4a 100644
+index 76af834b..705d8715 100644
 --- a/src/bins/src/shared/util_windows.rs
 +++ b/src/bins/src/shared/util_windows.rs
-@@ -32,7 +32,7 @@ fn get_pids() -> Result<Vec<u32>> {
+@@ -1,6 +1,7 @@
+ use anyhow::{bail, Result};
+ use regex::Regex;
+ use semver::Version;
++use std::os::windows::fs::OpenOptionsExt;
+ use std::{
+     collections::HashMap,
+     ffi::OsString,
+@@ -8,6 +9,95 @@ use std::{
+     path::{Path, PathBuf},
+ };
+ use velopack::{locator::VelopackLocator, process, wide_strings::wide_to_os_string};
++
++/// Refuse linked/reparse storage, matching the companion's path policy.
++fn safe_path(path: &Path) -> Result<PathBuf> {
++    use std::os::windows::fs::MetadataExt;
++    let path = std::path::absolute(path)?;
++    for part in path.ancestors() {
++        match fs::symlink_metadata(part) {
++            Ok(m) if m.file_attributes() & 0x400 != 0 => bail!("Link/reparse point in operation storage: {:?}", part),
++            Ok(_) => (),
++            Err(e) if e.kind() == std::io::ErrorKind::NotFound => (),
++            Err(e) => return Err(e.into()),
++        }
++    }
++    Ok(path)
++}
++
++fn exclusive_operation_lock(path: &Path, inherited_name: &str) -> Result<fs::File> {
++    use std::os::windows::io::{AsRawHandle, FromRawHandle};
++    use windows::Win32::{
++        Foundation::{SetHandleInformation, HANDLE, HANDLE_FLAGS, HANDLE_FLAG_INHERIT},
++        Storage::FileSystem::{GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION},
++    };
++    let path = safe_path(path)?;
++    fs::create_dir_all(path.parent().ok_or_else(|| anyhow::anyhow!("Invalid lock path"))?)?;
++    if let Some(value) = std::env::var_os(inherited_name) {
++        // Consume once; hooks, restart children and cleanup must not inherit it.
++        std::env::remove_var(inherited_name);
++        let raw: usize = value.to_str().ok_or_else(|| anyhow::anyhow!("Invalid inherited lease"))?.parse()?;
++        if raw == 0 || raw == usize::MAX {
++            bail!("Invalid inherited lease");
++        }
++        let file = unsafe { fs::File::from_raw_handle(raw as *mut std::ffi::c_void) };
++        unsafe {
++            SetHandleInformation(HANDLE(file.as_raw_handle()), HANDLE_FLAG_INHERIT.0, HANDLE_FLAGS(0))?;
++        }
++        // Attribute-only open is compatible with an exclusive read/write lease.
++        let expected = fs::OpenOptions::new().access_mode(0).share_mode(7).open(&path)?;
++        let identity = |file: &fs::File| -> Result<(u32, u32, u32)> {
++            let mut info = BY_HANDLE_FILE_INFORMATION::default();
++            unsafe {
++                GetFileInformationByHandle(HANDLE(file.as_raw_handle()), &mut info)?;
++            }
++            Ok((info.dwVolumeSerialNumber, info.nFileIndexHigh, info.nFileIndexLow))
++        };
++        if identity(&file)? != identity(&expected)? {
++            bail!("Inherited lease belongs to another installation");
++        }
++        // It must actually exclude a competing writer, not just identify a file.
++        match fs::OpenOptions::new().read(true).write(true).share_mode(7).open(&path) {
++            Err(e) if e.raw_os_error() == Some(32) => (),
++            _ => bail!("Inherited lease is not exclusive"),
++        }
++        Ok(file)
++    } else {
++        Ok(fs::OpenOptions::new()
++            .read(true)
++            .write(true)
++            .create(true)
++            .truncate(false)
++            .share_mode(0)
++            .open(&path)?)
++    }
++}
++
++/// Acquire after the application lease, before any installation inspection/write.
++/// The pathname survives removal and is never unlinked.
++pub fn installation_lock(root: &Path) -> Result<fs::File> {
++    let root = safe_path(root)?;
++    let root = if root.exists() {
++        fs::canonicalize(root)?
++    } else {
++        let parent = root.parent().ok_or_else(|| anyhow::anyhow!("Invalid installation root"))?;
++        fs::create_dir_all(parent)?;
++        fs::canonicalize(parent)?.join(root.file_name().ok_or_else(|| anyhow::anyhow!("Invalid installation root"))?)
++    };
++    let mut filename = OsString::from(".");
++    filename.push(root.file_name().ok_or_else(|| anyhow::anyhow!("Invalid installation root"))?);
++    filename.push(".tempo-owner.lock");
++    exclusive_operation_lock(&root.parent().unwrap().join(filename), "TEMPO_INSTALLATION_LOCK_HANDLE")
++}
++
++/// Same per-user desktop/worker lifetime lease as tempo_update_lock.py.
++pub fn application_lock() -> Result<fs::File> {
++    let local = std::env::var_os("LOCALAPPDATA").ok_or_else(|| anyhow::anyhow!("LOCALAPPDATA is unavailable"))?;
++    exclusive_operation_lock(
++        &Path::new(&local).join("TEMPO/updates/.application-lock"),
++        "TEMPO_APPLICATION_LOCK_HANDLE",
++    )
++}
+ use windows::{
+     core::PWSTR,
+     Win32::{
+@@ -32,7 +122,10 @@ fn get_pids() -> Result<Vec<u32>> {
      Ok(pids.to_vec())
  }
  
 -unsafe fn get_processes_running_in_directory<P: AsRef<Path>>(dir: P) -> Result<Vec<(u32, PathBuf, process::SafeProcessHandle)>> {
-+unsafe fn get_processes_running_in_directory<P: AsRef<Path>>(dir: P, terminate_access: bool) -> Result<Vec<(u32, PathBuf, process::SafeProcessHandle)>> {
++unsafe fn get_processes_running_in_directory<P: AsRef<Path>>(
++    dir: P,
++    terminate_access: bool,
++) -> Result<Vec<(u32, PathBuf, process::SafeProcessHandle)>> {
      let dir = dir.as_ref();
      let mut oup = Vec::new();
  
-@@ -44,7 +44,8 @@ unsafe fn get_processes_running_in_directory<P: AsRef<Path>>(dir: P) -> Result<V
+@@ -44,7 +137,12 @@ unsafe fn get_processes_running_in_directory<P: AsRef<Path>>(dir: P) -> Result<V
      let total_pids = pids.len();
  
      for pid in pids {
 -        let process = process::open_process(PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_TERMINATE, false, pid);
-+        let access = if terminate_access { PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_TERMINATE } else { PROCESS_QUERY_LIMITED_INFORMATION };
++        let access = if terminate_access {
++            PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_TERMINATE
++        } else {
++            PROCESS_QUERY_LIMITED_INFORMATION
++        };
 +        let process = process::open_process(access, false, pid);
          if process.is_err() {
              continue;
          }
-@@ -78,6 +79,17 @@ unsafe fn get_processes_running_in_directory<P: AsRef<Path>>(dir: P) -> Result<V
+@@ -78,6 +176,17 @@ unsafe fn get_processes_running_in_directory<P: AsRef<Path>>(dir: P) -> Result<V
      Ok(oup)
  }
  
@@ -410,7 +940,7 @@ index 76af834b..a1b67a4a 100644
  pub fn force_stop_package<P: AsRef<Path>>(root_dir: P) -> Result<()> {
      let root_dir = root_dir.as_ref();
      super::retry_io(|| _force_stop_package(root_dir))?;
-@@ -87,7 +99,7 @@ pub fn force_stop_package<P: AsRef<Path>>(root_dir: P) -> Result<()> {
+@@ -87,7 +196,7 @@ pub fn force_stop_package<P: AsRef<Path>>(root_dir: P) -> Result<()> {
  fn _force_stop_package<P: AsRef<Path>>(root_dir: P) -> Result<()> {
      let dir = root_dir.as_ref();
      info!("Checking for running processes in: {}", dir.display());
@@ -419,7 +949,7 @@ index 76af834b..a1b67a4a 100644
      let my_pid = std::process::id();
      for (pid, path, handle) in processes.iter() {
          if *pid == my_pid {
-@@ -205,7 +217,7 @@ fn test_get_running_processes_finds_cargo() {
+@@ -205,7 +314,7 @@ fn test_get_running_processes_finds_cargo() {
      let path = Path::new(&profile);
      let rustup = path.join(".rustup");
  

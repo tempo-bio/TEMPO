@@ -63,6 +63,11 @@ def initialize_velopack(argv=None):
     """
     args = list(sys.argv if argv is None else argv)[1:]
     lifecycle = bool(args and args[0].lower() in _LIFECYCLE)
+    # Normal startup maintenance runs under the application/installation leases
+    # in prepare_packaged_startup. Disabling auto-apply alone does not disable
+    # the SDK's old-package cleanup.
+    if not lifecycle:
+        return False
     # VPK probes the executable before it has a current/sq.version layout.
     probe = lifecycle and getattr(sys, 'frozen', False) and sys.platform == 'win32'
     if (detect_installation().kind != 'velopack' and not probe) or (args and args[0] in _WORKERS):
@@ -74,6 +79,13 @@ def initialize_velopack(argv=None):
     app.run()
     # Normally the SDK exits internally; also stop startup in its debug mode.
     return lifecycle
+
+
+def _maintain_velopack_packages(installation, args):
+    from tempo_update_lock import installation_lock, update_lock
+    import velopack
+    with installation_lock(installation.root), update_lock(installation.root / 'packages'):
+        velopack.App().set_auto_apply_on_startup(False).set_args(args).run()
 
 
 def prepare_packaged_startup(argv=None):
@@ -97,6 +109,7 @@ def prepare_packaged_startup(argv=None):
         if not worker:
             from tempo_update_bootstrap import bootstrap_packaged_storage
             with application_lock(profile):
+                _maintain_velopack_packages(installation, args)
                 bootstrap_packaged_storage(get_base_dir(), profile)
         _application_lease = application_lock(profile, shared=True)
         _application_lease.__enter__()

@@ -128,11 +128,14 @@ class VelopackCandidateTests(unittest.TestCase):
         archive = self.root / 'vpk.nupkg'
         with zipfile.ZipFile(archive, 'w') as output:
             output.writestr('vendor/update_x64.exe', b'vendor updater')
+        setup = self.root / 'setup.exe'
+        setup.write_bytes(b'reviewed setup helper')
         pin = json.loads((project / 'installer/velopack/pin.json').read_bytes())
         evidence = self.root / 'native-candidate.json'
         evidence.write_text(json.dumps(dict(source_commit='a'*40, updater_sha256=self.updater_hash,
-            upstream_commit=pin['upstream_commit'], patch_sha256=pin['patch_sha256'], fixture_passed=True)))
-        options = dict(bundle=self.bundle, vpk_archive=archive, updater=self.root / 'Update.exe',
+            upstream_commit=pin['upstream_commit'], patch_sha256=pin['patch_sha256'], fixture_passed=True,
+            production_passed=True, setup_sha256=_digest(setup))))
+        options = dict(setup=setup, bundle=self.bundle, vpk_archive=archive, updater=self.root / 'Update.exe',
                        native_evidence=evidence, output=self.root / 'candidate', commit='a'*40)
         return project, options
 
@@ -212,6 +215,20 @@ class VelopackCandidateTests(unittest.TestCase):
                 candidate.build(**options)
         companion.assert_not_called()
         self.assertFalse((options['output'] / 'candidate-contract.json').exists())
+
+    def test_builder_rejects_unexercised_or_changed_setup(self):
+        project, options = self.prepare_builder()
+        evidence_path = options['native_evidence']
+        original = json.loads(evidence_path.read_bytes())
+        for field, value in (('production_passed', False), ('setup_sha256', '0'*64)):
+            evidence_path.write_text(json.dumps(dict(original, **{field: value})))
+            with self.subTest(field=field), patch.object(candidate.sys, 'platform', 'win32'), \
+                 patch.object(candidate, 'ROOT', project), \
+                 patch.object(candidate, 'VPK_SHA256', _digest(options['vpk_archive'])), \
+                 patch.dict(candidate.os.environ, {}, clear=True):
+                with self.assertRaisesRegex(ValueError, 'identity/evidence'):
+                    candidate.build(**options)
+                self.assertFalse(options['output'].exists())
 
 
 if __name__ == '__main__':

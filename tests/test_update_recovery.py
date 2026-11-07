@@ -4,6 +4,8 @@ import hashlib
 import json
 from pathlib import Path
 import tempfile
+import sys
+import subprocess
 import unittest
 from unittest.mock import MagicMock, patch
 from types import SimpleNamespace
@@ -385,6 +387,42 @@ class RecoveryTests(unittest.TestCase):
                                            cwd=str(self.current), close_fds=True)
         self.assertEqual(json.loads(path.read_text())['state'], 'awaiting_confirmation')
 
+    def test_parent_owns_installation_and_application_through_native_readback(self):
+        path = self.prepare_apply()
+        launcher = subprocess.Popen
+        def assert_owned():
+            process = launcher([sys.executable, '-c', '''
+import sys
+from tempo_update_lock import application_lock, installation_lock
+for lease in (installation_lock(sys.argv[1]), application_lock(sys.argv[2])):
+    try:
+        with lease:
+            raise RuntimeError('competing writer acquired a transaction lease')
+    except BlockingIOError:
+        pass
+''', str(self.install), str(self.packages.parent.parent)], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            try:
+                _, error = process.communicate(timeout=10)
+                self.assertEqual(process.returncode, 0, error)
+            finally:
+                if process.poll() is None:
+                    process.kill()
+                    process.communicate(timeout=5)
+        def native_apply(*args, **kwargs):
+            assert_owned()
+            # The native child must acquire this package lock itself.
+            with recovery.update_lock(self.packages):
+                (self.current / 'TEMPO.exe').write_bytes(b'target')
+            return SimpleNamespace(returncode=0)
+        verify = recovery._verify_owner
+        def readback(*args):
+            assert_owned()
+            return verify(*args)
+        with patch.object(recovery.subprocess, 'run', side_effect=native_apply), \
+             patch.object(recovery.subprocess, 'Popen'), \
+             patch.object(recovery, '_verify_owner', side_effect=readback):
+            self.assertEqual(self.apply(path), 'awaiting_confirmation')
+
     def test_confirmed_transaction_archived_before_next_arm(self):
         path = self.prepare_apply()
         def native_apply(*args, **kwargs):
@@ -457,7 +495,8 @@ class RecoveryTests(unittest.TestCase):
              patch.object(recovery.subprocess, 'run', return_value=SimpleNamespace(returncode=1)) as run:
             with self.assertRaises(RuntimeError):
                 recovery.uninstall_application(self.install, profile, self.keys)
-            run.assert_called_once_with([str(updater), 'uninstall', '--rootDir', str(self.install)], check=False)
+            self.assertEqual(run.call_args.args, ([str(updater), 'uninstall', '--rootDir', str(self.install)],))
+            self.assertIs(run.call_args.kwargs['check'], False)
         self.assertEqual(research.read_bytes(), b'research data')
 
     def test_uninstall_launches_verified_native_owner(self):
@@ -466,7 +505,8 @@ class RecoveryTests(unittest.TestCase):
              patch.object(recovery.subprocess, 'run', return_value=SimpleNamespace(returncode=0)) as run:
             self.assertEqual(recovery.uninstall_application(self.install, self.root / 'profile', self.keys),
                              'uninstalled')
-            run.assert_called_once_with([str(updater), 'uninstall', '--rootDir', str(self.install)], check=False)
+            self.assertEqual(run.call_args.args, ([str(updater), 'uninstall', '--rootDir', str(self.install)],))
+            self.assertIs(run.call_args.kwargs['check'], False)
 
     def test_unexpected_root_rejected(self):
         path = self.arm()

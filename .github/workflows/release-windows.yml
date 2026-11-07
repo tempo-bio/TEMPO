@@ -358,7 +358,7 @@ jobs:
           $ProgressPreference = 'SilentlyContinue'
           $packager = Join-Path $env:RUNNER_TEMP 'tempo-vpk.1.2.161.nupkg'
           Invoke-WebRequest 'https://github.com/velopack/velopack/releases/download/1.2.161/vpk.1.2.161.nupkg' -OutFile $packager
-          & .\.venv_build\Scripts\python.exe -m scripts.build_velopack_candidate --bundle dist/TEMPO --vpk-archive $packager --updater native-candidate/production-target/x86_64-pc-windows-msvc/release/update.exe --native-evidence native-candidate/native-candidate.json --output Output/velopack-candidate --commit "$env:GITHUB_SHA"
+          & .\.venv_build\Scripts\python.exe -m scripts.build_velopack_candidate --bundle dist/TEMPO --vpk-archive $packager --updater native-candidate/production-target/x86_64-pc-windows-msvc/release/update.exe --setup native-candidate/production-target/x86_64-pc-windows-msvc/release/setup.exe --native-evidence native-candidate/native-candidate.json --output Output/velopack-candidate --commit "$env:GITHUB_SHA"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Transfer exact full application candidates
         id: velopack_payload
@@ -481,9 +481,51 @@ jobs:
             evidence/**/*.log
           if-no-files-found: error
 
+  replay-velopack:
+    name: Replay exact TEMPO Velopack candidates on another fresh Windows runner
+    needs: verify-velopack
+    runs-on: windows-2025
+    timeout-minutes: 100
+    steps:
+      # No source checkout, Python setup, .NET setup, or application dependencies.
+      - name: Download exact full application candidates
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: Windows_velopack_candidate_payload
+          path: payload
+      - name: Exercise installed full application and independent recovery
+        id: matrix
+        run: ./payload/verify_velopack_install.ps1 -Mode matrix -Payload payload -Evidence evidence
+      - name: Exercise published legacy CPU installer migration and component refusal
+        id: migration
+        if: ${{ !cancelled() && steps.matrix.outcome == 'success' }}
+        run: ./payload/verify_velopack_install.ps1 -Mode migration -Payload payload -Evidence evidence
+      - name: Uninstall candidate and check retained state
+        id: uninstall
+        if: ${{ !cancelled() && steps.matrix.outcome != 'skipped' }}
+        run: ./payload/verify_velopack_install.ps1 -Mode uninstall -Payload payload -Evidence evidence
+      - name: Require complete evidence for the exact candidate artifacts
+        if: ${{ !cancelled() }}
+        run: ./payload/verify_velopack_install.ps1 -Mode gate -Payload payload -Evidence evidence
+      - name: Retain full application candidate evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: Windows_velopack_candidate_replay_evidence
+          retention-days: 7
+          path: |
+            payload/candidate-contract.json
+            evidence/*-result.json
+            evidence/*-verification.json
+            evidence/*-verification-probes/**/*.json
+            evidence/*-shell-folders.json
+            evidence/preserved-state.json
+            evidence/**/*.log
+          if-no-files-found: error
+
   certify:
     name: Certify every required Windows gate
-    needs: [preflight, validate-source, build-windows, verify-installed, velopack-native, verify-velopack]
+    needs: [preflight, validate-source, build-windows, verify-installed, velopack-native, verify-velopack, replay-velopack]
     if: ${{ always() }}
     runs-on: windows-2025
     steps:
@@ -495,6 +537,7 @@ jobs:
           INSTALL_RESULT: ${{ needs.verify-installed.result }}
           NATIVE_RESULT: ${{ needs.velopack-native.result }}
           VELOPACK_RESULT: ${{ needs.verify-velopack.result }}
+          REPLAY_RESULT: ${{ needs.replay-velopack.result }}
         run: |
-          if ($env:PREFLIGHT_RESULT -ne 'success' -or $env:SOURCE_RESULT -ne 'success' -or $env:BUILD_RESULT -ne 'success' -or $env:INSTALL_RESULT -ne 'success' -or $env:NATIVE_RESULT -ne 'success' -or $env:VELOPACK_RESULT -ne 'success') { throw 'Windows build acceptance failed or required checks were skipped' }
+          if ($env:PREFLIGHT_RESULT -ne 'success' -or $env:SOURCE_RESULT -ne 'success' -or $env:BUILD_RESULT -ne 'success' -or $env:INSTALL_RESULT -ne 'success' -or $env:NATIVE_RESULT -ne 'success' -or $env:VELOPACK_RESULT -ne 'success' -or $env:REPLAY_RESULT -ne 'success') { throw 'Windows build acceptance failed or required checks were skipped' }
           "Windows build checks passed for: $env:GITHUB_SHA. Velopack remains an unpublished, disabled candidate; this does not certify native adoption or rollout." >> $env:GITHUB_STEP_SUMMARY

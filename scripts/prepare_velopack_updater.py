@@ -8,18 +8,21 @@ from pathlib import Path
 import subprocess
 
 COMMIT = '92d6a1c91716729d449034df5c50307dcce39493'
-PATCH_SHA256 = 'bfcd8c92a86bd5c6e59fa1bfc54e134c1864128c4b58612c9f9b81295791ab76'
+PATCH_SHA256 = 'e3a4ecc43414c39853d15a4f73f53250c5cb960c4a7b5cecca4ee6fef760b694'
 SOURCE_SHA256 = {
-    'src/bins/src/commands/uninstall.rs': '9d26594bfd9320798f59d3c43544e4d0bef6f4e6da5b9830bf1b1c167fd865e8',
-    'src/bins/src/windows/self_delete.rs': '21641cc6dfd87328685b3667da4f613a53ce31f438a72a5c01c9050ca7217d56',
     'src/bins/Cargo.toml': '4d4f0967fa7249de83a0424c4b4fd0590adf891840b58a1bb1d8560922805f68',
     'src/bins/src/commands/apply.rs': 'f12aa15322c2ff4b42f251a78bc234c193168df8d692afc27d0a66276712ab37',
-    'src/bins/src/commands/start.rs': '5dc71710a5a070bc8ed2133e8c73ae1667f428291b9a8d854d8fba72960a8966',
     'src/bins/src/commands/apply_windows_impl.rs': 'd3db6cfa465053f24245d41ab9532a002091829b2d051eb9942bc64147450d4d',
+    'src/bins/src/commands/install.rs': '6334153f7908de2343206cb6afae3835e89cd8390dc06aa78cc21220bfcd2e32',
+    'src/bins/src/commands/start.rs': '5dc71710a5a070bc8ed2133e8c73ae1667f428291b9a8d854d8fba72960a8966',
+    'src/bins/src/commands/start_windows_impl.rs': '581de7b32816c8a61c1c9280134cdeea92ee2923533f0e05fd0374d09a830041',
+    'src/bins/src/commands/uninstall.rs': '9d26594bfd9320798f59d3c43544e4d0bef6f4e6da5b9830bf1b1c167fd865e8',
     'src/bins/src/shared/util_common.rs': '4610125beb18c8766bc009afa2f92c6dc05914d14120d42b9de18fdf9499a5e5',
     'src/bins/src/shared/util_windows.rs': '6e7603aa4c059341903b673fef39ef51bfc7bde4138cb8b15605993e4bfd81ef',
+    'src/bins/src/windows/self_delete.rs': '21641cc6dfd87328685b3667da4f613a53ce31f438a72a5c01c9050ca7217d56',
     'src/bins/src/windows/util.rs': '2a049c423bae091f670c3748ce340af8f026f82b83bf785e7820cb40117c5ee9',
 }
+
 PATCH = Path(__file__).resolve().parents[1] / 'installer/velopack/0001-tempo-recovery.patch'
 
 
