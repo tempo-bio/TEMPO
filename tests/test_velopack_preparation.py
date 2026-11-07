@@ -9,6 +9,15 @@ from scripts import prepare_velopack_updater as preparation
 
 
 class PrepareUpdaterTests(unittest.TestCase):
+    def test_handle_diagnostic_run_cannot_satisfy_native_acceptance(self):
+        from tests.fixtures.velopack import recovery_gate
+        with tempfile.TemporaryDirectory() as directory:
+            report = Path(directory) / 'fixture-results.json'
+            report.write_text(json.dumps(dict(diagnostic_only=True, error=None,
+                scenarios={name: True for name in recovery_gate.REQUIRED})))
+            with self.assertRaisesRegex(SystemExit, 'cannot satisfy native acceptance'):
+                recovery_gate.main(report)
+
     def test_repository_patch_and_source_list_match_pinned_contract(self):
         pin = json.loads((preparation.PATCH.parent / 'pin.json').read_text())
         digest = hashlib.sha256(preparation.PATCH.read_bytes()).hexdigest()

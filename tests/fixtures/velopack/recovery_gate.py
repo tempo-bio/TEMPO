@@ -12,6 +12,8 @@ REQUIRED |= {'uninstall_running_process', 'uninstall_rename_blocked', 'uninstall
 
 def main(path):
     report = json.loads(Path(path).read_text(encoding='utf-8'))
+    if report.get('diagnostic_only'):
+        raise SystemExit('Handle diagnostics change timing and cannot satisfy native acceptance.')
     if report.get('error'):
         raise SystemExit('Windows recovery fixture reported an error.')
     scenarios = report.get('scenarios', {})

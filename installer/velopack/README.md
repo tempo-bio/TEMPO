@@ -50,6 +50,8 @@ The patched uninstaller schedules detached cleanup only for its uniquely retired
 
 During uninstall, the package-lock handle denies other readers/writers while permitting delete/rename sharing for directory retirement. Ordinary package-lock behavior is unchanged. Windows preflight exercises a running owner and that held lock together, verifies another writer is denied before and after the rename, and checks that cleanup leaves the replacement intact. Full dependency installation and runtime builds wait for native recovery acceptance, so a native failure stops the expensive downstream jobs.
 
+For a live directory-retirement failure, dispatch `velopack-adoption.yml` with `uninstall_diagnostics=true`. Only the fixture-feature binary can invoke the checksum-pinned [Microsoft Handle utility](https://learn.microsoft.com/en-us/sysinternals/downloads/handle); the workflow also requires its valid Microsoft signature. It captures current-directory and open-handle snapshots before metadata changes, after shortcut handling, and at a failed rename while the uninstaller is still alive. It requests listings only and does not use Handle's handle-closing options. These runs change timing, are marked diagnostic-only, and produce no candidate for full-app packaging; the acceptance gate rejects their reports. Normal validation leaves this instrumentation inactive.
+
 ## Prepare a candidate bundle
 
 Use an isolated release environment at the exact source revision being certified. Generate a JSON object mapping key IDs to base64-encoded raw Ed25519 **public** keys; never put a private signing key in this file. Build the companion with those same keys:

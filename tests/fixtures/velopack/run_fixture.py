@@ -55,7 +55,13 @@ def signed_release(package, version, key, keys):
 
 def run(*args, env=None, expect=0, timeout=180):
     result = subprocess.run([str(arg) for arg in args], env=env, timeout=timeout,
-                            text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+                            text=True, encoding='utf-8', errors='replace',
+                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    diagnostic_dir = (env or {}).get('TEMPO_FIXTURE_DIAGNOSTIC_DIR')
+    if diagnostic_dir and 'Retirement diagnostic' in result.stdout:
+        folder = Path(diagnostic_dir)
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / f'uninstall-handles-{time.time_ns()}.log').write_text(result.stdout, encoding='utf-8')
     if expect is not None and (result.returncode == 0) != (expect == 0):
         raise RuntimeError(f'Unexpected exit {result.returncode}: {args}\n{result.stdout}')
     return result
@@ -407,6 +413,7 @@ def main():
     args.report.parent.mkdir(parents=True, exist_ok=True)
     def report(error=None):
         args.report.write_text(json.dumps({'scenarios': outcomes, 'certified': False,
+                                           'diagnostic_only': bool(os.environ.get('TEMPO_FIXTURE_HANDLE_TOOL')),
                                            'error': error}, indent=2), encoding='utf-8')
     report()
     try:

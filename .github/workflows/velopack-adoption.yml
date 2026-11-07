@@ -7,7 +7,17 @@ on:
         required: false
         default: ''
         type: string
+      uninstall_diagnostics:
+        description: 'Read-only handle snapshots from the live fixture uninstaller; not acceptance evidence'
+        required: false
+        default: false
+        type: boolean
   workflow_call:
+    inputs:
+      uninstall_diagnostics:
+        required: false
+        default: false
+        type: boolean
   push:
     branches:
       - v1.0.2-dev
@@ -52,6 +62,22 @@ jobs:
           Expand-Archive vpk.zip -DestinationPath vpk
       - name: Prepare pinned source
         run: python tempo/scripts/prepare_velopack_updater.py velopack
+      - name: Prepare read-only Windows handle diagnostics
+        if: ${{ inputs.uninstall_diagnostics }}
+        shell: pwsh
+        run: |
+          $ProgressPreference='SilentlyContinue'
+          Invoke-WebRequest 'https://download.sysinternals.com/files/Handle.zip' -OutFile handle.zip
+          if ((Get-FileHash handle.zip -Algorithm SHA256).Hash.ToLowerInvariant() -ne '279aaf8eccb6f79147f4dcc6ba091fb895c4cb8b199a0dd186a4c76bc519d2cd') { throw 'Diagnostic archive hash mismatch' }
+          Expand-Archive handle.zip -DestinationPath handle
+          $nativeHandleTool=(Resolve-Path handle/handle64.exe).Path
+          if ((Get-FileHash $nativeHandleTool -Algorithm SHA256).Hash.ToLowerInvariant() -ne '24bafcc570cc9bbb6b6e6652a57a519e0464e3996891aaba6f55299cce20b04f') { throw 'Diagnostic executable hash mismatch' }
+          $signature=Get-AuthenticodeSignature -LiteralPath $nativeHandleTool
+          if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notmatch '(?:^|,\s*)O=Microsoft Corporation(?:,|$)') { throw 'Diagnostic publisher verification failed' }
+          @{sha256=(Get-FileHash $nativeHandleTool -Algorithm SHA256).Hash;status=$signature.Status.ToString();subject=$signature.SignerCertificate.Subject;thumbprint=$signature.SignerCertificate.Thumbprint} |
+            ConvertTo-Json | Set-Content handle-signature.json -Encoding utf8NoBOM
+          Add-Content $env:GITHUB_ENV "TEMPO_FIXTURE_HANDLE_TOOL=$nativeHandleTool"
+          Add-Content $env:GITHUB_ENV "TEMPO_FIXTURE_DIAGNOSTIC_DIR=$(Join-Path $pwd 'fixture-native-logs')"
       - name: Verify legacy data transactions and Windows lease behavior
         working-directory: tempo
         run: python -m unittest -q tests.test_legacy_migration tests.test_update_bootstrap tests.test_update_storage tests.test_update_migration tests.test_update_lock tests.test_update_components tests.test_update_coordinator tests.test_update_addons tests.test_nvidia_setup tests.test_windows_update_release tests.test_package_windows_updates tests.test_update_configuration tests.test_windows_installer_cleanup
@@ -66,8 +92,10 @@ jobs:
           PYTHONPATH: tempo
         run: python tempo/tests/fixtures/velopack/run_fixture.py --vpk-root vpk --fixture-updater fixture-target/x86_64-pc-windows-msvc/release/update.exe --report fixture-results.json
       - name: Require complete native recovery evidence
+        if: ${{ !inputs.uninstall_diagnostics }}
         run: python tempo/tests/fixtures/velopack/recovery_gate.py fixture-results.json
       - name: Bind production-feature bytes to this native candidate run
+        if: ${{ !inputs.uninstall_diagnostics }}
         run: |
           python -c @'
           import hashlib, json, os
@@ -82,6 +110,7 @@ jobs:
           Path('native-candidate.json').write_text(json.dumps(identity, indent=2) + '\n')
           '@
       - name: Transfer native candidate for full application packaging
+        if: ${{ !inputs.uninstall_diagnostics }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: velopack-production-feature-candidate
@@ -101,6 +130,7 @@ jobs:
           path: |
             fixture-results.json
             fixture-native-logs/
+            handle-signature.json
             production-target/x86_64-pc-windows-msvc/release/update.exe
           if-no-files-found: warn
 

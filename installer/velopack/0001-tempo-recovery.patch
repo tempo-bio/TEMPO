@@ -180,10 +180,10 @@ index 645936f4..277ca453 100644
      #[cfg(target_os = "windows")]
      super::start_windows_impl::start_impl(context, exe_name, exe_args, legacy_args)?;
 diff --git a/src/bins/src/commands/uninstall.rs b/src/bins/src/commands/uninstall.rs
-index 8689daf5..34432573 100644
+index 8689daf5..984a176f 100644
 --- a/src/bins/src/commands/uninstall.rs
 +++ b/src/bins/src/commands/uninstall.rs
-@@ -1,7 +1,10 @@
+@@ -1,7 +1,58 @@
  use crate::{dialogs, shared, windows};
  use velopack::{constants, locator::VelopackLocator};
  
@@ -191,10 +191,58 @@ index 8689daf5..34432573 100644
  use anyhow::{bail, Result};
 +use std::os::windows::fs::OpenOptionsExt;
 +use std::{env, fs};
++
++// Diagnostic execution is compiled only into the disposable fixture binary.
++#[cfg(feature = "tempo-fixture-faults")]
++fn diagnostic_handles(phase: &str, root: &std::path::Path, include_other_processes: bool) {
++    if let Some(tool) = env::var_os("TEMPO_FIXTURE_HANDLE_TOOL") {
++        use std::os::windows::fs::MetadataExt;
++        info!(
++            "Retirement diagnostic {}: exe={:?}, root_attributes={:?}",
++            phase,
++            env::current_exe(),
++            fs::metadata(root).map(|metadata| metadata.file_attributes())
++        );
++        info!(
++            "Retirement diagnostic {}: pid={}, cwd={:?}, root={:?}",
++            phase,
++            std::process::id(),
++            env::current_dir(),
++            root
++        );
++        let mut command = std::process::Command::new(&tool);
++        command.args(["-accepteula", "-a", "-g", "-p", &std::process::id().to_string()]);
++        match command.output() {
++            Ok(output) => info!(
++                "Retirement diagnostic {} self handles: status={:?}\n{}\n{}",
++                phase,
++                output.status.code(),
++                String::from_utf8_lossy(&output.stdout),
++                String::from_utf8_lossy(&output.stderr)
++            ),
++            Err(error) => warn!("Retirement diagnostic failed: {}", error),
++        }
++        if include_other_processes {
++            if let Some(name) = root.file_name() {
++                match std::process::Command::new(&tool).args(["-accepteula", "-a", "-g"]).arg(name).output() {
++                    Ok(output) => info!(
++                        "Retirement diagnostic matching handles: status={:?}\n{}\n{}",
++                        output.status.code(),
++                        String::from_utf8_lossy(&output.stdout),
++                        String::from_utf8_lossy(&output.stderr)
++                    ),
++                    Err(error) => warn!("Retirement diagnostic failed: {}", error),
++                }
++            }
++        }
++    }
++}
++#[cfg(not(feature = "tempo-fixture-faults"))]
++fn diagnostic_handles(_phase: &str, _root: &std::path::Path, _include_other_processes: bool) {}
  
  pub fn uninstall(locator: &VelopackLocator, delete_self: bool) -> Result<()> {
      info!("Command: Uninstall");
-@@ -12,22 +15,64 @@ pub fn uninstall(locator: &VelopackLocator, delete_self: bool) -> Result<()> {
+@@ -12,22 +63,67 @@ pub fn uninstall(locator: &VelopackLocator, delete_self: bool) -> Result<()> {
  
      let root_path = locator.get_root_dir();
      let app_title = locator.get_manifest_title();
@@ -226,7 +274,8 @@ index 8689daf5..34432573 100644
 +        bail!("Uninstall hook did not settle; installation retained.");
 +    }
 +    shared::ensure_package_stopped(&root_path)?;
-+
+ 
+-    // remove all shortcuts pointing to the app
 +    // A delayed recursive delete must never name the reusable installation path.
 +    // Move out of our own working directory before retiring that directory.
 +    let retirement = if delete_self {
@@ -240,17 +289,17 @@ index 8689daf5..34432573 100644
 +    } else {
 +        None
 +    };
- 
--    // remove all shortcuts pointing to the app
++    diagnostic_handles("before_metadata", &root_path, false);
++
 +    // Finish all writes to the reusable identity before exposing that path to a
 +    // new installer. Nothing below the retirement rename touches its metadata.
 +    windows::registry::remove_uninstall_entry(locator)?;
      windows::remove_all_shortcuts_for_root_dir(&root_path);
- 
--    info!("Removing directory '{:?}'", root_path);
--    let _ = remove_dir_all::remove_dir_contents(&root_path);
++    diagnostic_handles("after_shortcuts", &root_path, false);
++
 +    let removal_path = if let Some(retired) = retirement {
 +        if let Err(error) = shared::retry_io(|| fs::rename(&root_path, &retired)) {
++            diagnostic_handles("rename_failed", &root_path, true);
 +            windows::registry::write_uninstall_entry(locator)?;
 +            windows::create_or_update_manifest_lnks(locator, None);
 +            return Err(error.into());
@@ -260,13 +309,15 @@ index 8689daf5..34432573 100644
 +    } else {
 +        root_path.clone()
 +    };
-+
+ 
+-    info!("Removing directory '{:?}'", root_path);
+-    let _ = remove_dir_all::remove_dir_contents(&root_path);
 +    info!("Removing directory '{:?}'", removal_path);
 +    let _ = remove_dir_all::remove_dir_contents(&removal_path);
  
      let temp_dir = std::env::temp_dir();
      let temp_dir = temp_dir.join(format!("velopack_{}", locator.get_manifest_id()));
-@@ -35,18 +80,12 @@ pub fn uninstall(locator: &VelopackLocator, delete_self: bool) -> Result<()> {
+@@ -35,18 +131,12 @@ pub fn uninstall(locator: &VelopackLocator, delete_self: bool) -> Result<()> {
      info!("Removing directory '{:?}'", temp_dir);
      let _ = remove_dir_all::remove_dir_all(&temp_dir);
  
