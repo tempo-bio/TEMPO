@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: 'Future release tag for the optional NVIDIA runtime download (for example v1.0.1)'
+        description: 'Exact application release tag (for example v1.0.2)'
         required: true
         type: string
 
@@ -314,10 +314,13 @@ jobs:
         if: ${{ !cancelled() && steps.portable.outcome == 'success' && steps.inno.outcome == 'success' }}
         timeout-minutes: 16
         run: |
-          & .\.venv_build\Scripts\python.exe -m scripts.windows_release_checks run --log Output/inno-setup.log --timeout 900 -- iscc installer/tempo_setup.iss
+          $version = (Get-Content Output/verification-contract.json -Raw | ConvertFrom-Json).version
+          & .\.venv_build\Scripts\python.exe -m scripts.windows_release_checks run --log Output/inno-setup.log --timeout 900 -- iscc "/DMyAppVersion=$version" installer/tempo_setup.iss
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          $hash = (Get-FileHash Output/TEMPO_Setup_v1.0.1.exe -Algorithm SHA256).Hash.ToLower()
-          "$hash  TEMPO_Setup_v1.0.1.exe" | Set-Content Output/SHA256SUMS.txt -Encoding utf8NoBOM
+          $filename = "TEMPO_Setup_v$($version).exe"
+          $hash = (Get-FileHash -LiteralPath "Output/$filename" -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  $filename" | Set-Content Output/SHA256SUMS.txt -Encoding utf8NoBOM
+          "filename=$filename" >> $env:GITHUB_OUTPUT
           Copy-Item scripts/verify_windows_install.ps1,scripts/windows_installer_helpers.ps1 Output
       - name: Transfer installer even if an independent diagnostic failed
         id: payload
@@ -328,7 +331,7 @@ jobs:
           retention-days: 3
           compression-level: 0
           path: |
-            Output/TEMPO_Setup_v1.0.1.exe
+            Output/${{ steps.installer.outputs.filename }}
             Output/SHA256SUMS.txt
             Output/verification-contract.json
             Output/build-provenance.json
@@ -370,13 +373,26 @@ jobs:
           compression-level: 0
           path: Output/velopack-candidate/*
           if-no-files-found: error
+      - name: Retain verified CPU bundle for release assembly
+        id: release_bundle
+        if: ${{ !cancelled() && steps.velopack_payload.outcome == 'success' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: Windows_release_bundle
+          retention-days: 7
+          include-hidden-files: true
+          path: |
+            dist/TEMPO/
+            Output/portable-verification.json
+            Output/verification-contract.json
+          if-no-files-found: error
       - name: Aggregate required build gates
         id: build_gates
         if: ${{ always() }}
         env:
           GATE_OUTCOMES: ${{ toJSON(steps) }}
         run: |
-          & .\.venv_build\Scripts\python.exe -m scripts.windows_gates --output Output/build-gates.json runtime repository_checks notebook notebook_artifact installer_tests presentation source prebuild_evidence portable payload_privacy dependency_sources portable_check bundle_evidence inno installer payload velopack velopack_payload
+          & .\.venv_build\Scripts\python.exe -m scripts.windows_gates --output Output/build-gates.json runtime repository_checks notebook notebook_artifact installer_tests presentation source prebuild_evidence portable payload_privacy dependency_sources portable_check bundle_evidence inno installer payload velopack velopack_payload release_bundle
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Retain all build evidence
         if: ${{ always() }}

@@ -29,7 +29,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey,
 
 from scripts.build_update_repair import read_keys
 from scripts.configure_windows_updates import candidate
-from scripts.package_windows_updates import PIN, _canonical, _certified, _digest, _read_json
+from scripts.package_windows_updates import PIN, _canonical, _certified, _digest, _read_json, reviewed_native_pin
 from tempo_nvidia_manifest import JoinedFiles
 from tempo_update_manifest import (ARCHITECTURE, PACKAGE_ID, inventory_digest,
     load_verified_manifest, validate_path, verify_asset, verify_zip, _version)
@@ -462,6 +462,7 @@ def main():
     for name in ('manifest', 'index', 'package-dir', 'artifacts', 'public-keys', 'signing-key', 'output', 'dependency-cache', 'native-repository'):
         create.add_argument('--' + name, required=True, type=Path)
     create.add_argument('--key-id', required=True)
+    create.add_argument('--native-pin', type=Path)
     create.add_argument('--channel', choices=('stable', 'prerelease'), default='stable')
     create.add_argument('--previous-index', type=Path)
     create.add_argument('--base-package-dir', type=Path)
@@ -476,6 +477,7 @@ def main():
     mode = args.pop('mode')
     if mode == 'prepare':
         args['artifacts'] = _read_json(args['artifacts'])
+        args['pin_path'] = reviewed_native_pin(args.pop('native_pin'))
         result = prepare(**args)
     elif mode == 'verify':
         expected = args.pop('catalog_sha256')

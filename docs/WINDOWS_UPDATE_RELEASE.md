@@ -32,6 +32,24 @@ The `checks` map requires each of these names to be true, with retained raw evid
 
 Each name has an `evidence` entry containing the raw report's `sha256`, and a corresponding `report_<name>` artifact input. The record also includes `version`, `source_commit`, `artifact_sha256` with the four identities above, and `code_signing` with a reviewed `mode` (`authenticode` or `unsigned-approved`) and `decision_reference`. Writing assertions does not establish that the tests occurred. The candidate contract's `release_certified: false`, same-source replacements, simulated damage and mocked GPU checks cannot substitute for these gates.
 
+## Assemble and smoke-test the stable-channel installer
+
+Run **Build & Package Windows Release** on the intended release commit with the application version as the release tag, including its leading `v`. Retrieve `Windows_release_bundle`, `Windows_velopack_candidate_payload`, `velopack-production-feature-candidate`, and `Windows_NVIDIA_runtime` from that successful run. Use the original `candidate-contract.json` to check the exported CPU folder, setup helper, and updater. Keep the reviewed native certification and repair companion with the matching public trust file.
+
+After reviewing the native evidence, copy the source pin to a separate release pin and record the approved `updater_sha256` and `certification_status: certified`. The release pin retains the exact upstream revision, patch, and required checks from the tested commit. Use the same reviewed file for assembly, package signing, and release-set preparation so certification can follow the build without altering its source commit.
+
+```powershell
+python -m scripts.build_velopack_release --bundle <bundle>/dist/TEMPO --build-contract <candidate>/candidate-contract.json --verification <bundle>/Output/verification-contract.json --runtime-report <bundle>/Output/portable-verification.json --vpk-archive <pinned-vpk.nupkg> --native-updater <update.exe> --setup <setup.exe> --public-keys <public-keys.json> --repair-executable <TEMPORepair.exe> --certification <native-evidence.json> --native-pin <reviewed-pin.json> --output <new-release-directory>
+```
+
+Copy the resulting folder to a clean disposable Windows VM. Verify the exact installation and retained user state using the included script:
+
+```powershell
+pwsh -File <release>/verify_velopack_install.ps1 -Mode release-smoke -Payload <release> -Evidence <evidence> -SourceCommit <full-build-commit>
+```
+
+Review the report and preserve the exact installer and full package. Follow the [package-signing procedure](../installer/velopack/README.md#prepare-a-candidate-bundle) to bind the verified package hash and create signed stable metadata, passing the same `--native-pin`. Stage those same binaries for prerelease testing after approval, with the stable index withheld. Complete the broader acceptance checks before promoting the existing versioned release.
+
 ## Prepare an immutable release set
 
 Create an artifact-input JSON object mapping these roles to absolute file paths:
@@ -53,7 +71,7 @@ Keep the exact full package and deltas from `scripts.package_windows_updates` in
 Use a checkout containing the matching TEMPO commit and an upstream Velopack checkout containing the pinned commit. The tool uses `git archive` at those exact commits, excluding untracked local files. It retains the native patch and pin alongside the upstream source so the native implementation can be reconstructed.
 
 ```powershell
-python -m scripts.windows_update_release prepare --manifest <signed-release.json> --index <tempo-update-index.json> --package-dir <package-directory> --artifacts <artifact-inputs.json> --public-keys <reviewed-public-keys.json> --signing-key <private-key.pem> --key-id <reviewed-key-id> --dependency-cache <verified-source-cache> --native-repository <velopack-checkout> --output <new-release-set-directory>
+python -m scripts.windows_update_release prepare --manifest <signed-release.json> --index <tempo-update-index.json> --package-dir <package-directory> --artifacts <artifact-inputs.json> --public-keys <reviewed-public-keys.json> --signing-key <private-key.pem> --key-id <reviewed-key-id> --dependency-cache <verified-source-cache> --native-repository <velopack-checkout> --native-pin <reviewed-pin.json> --output <new-release-set-directory>
 ```
 
 Add `--channel prerelease` for the prerelease feed. Supply `--previous-index <previous-index.json>` for follow-on releases, including full-only releases; add `--base-package-dir <base-directory>` when advertising deltas. The tool rejects a reused/lower version or sequence relative to that authenticated index. Choose a sequence greater than every previously published sequence for the channel and retain that publication record outside build-job storage.

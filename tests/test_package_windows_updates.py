@@ -10,7 +10,7 @@ import zipfile
 
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-from scripts.package_windows_updates import REQUIRED_CHECKS, inventory_package, package
+from scripts.package_windows_updates import REQUIRED_CHECKS, inventory_package, package, reviewed_native_pin
 from tempo_update_manifest import inventory_digest, load_verified_manifest
 
 
@@ -68,6 +68,19 @@ class PackageWindowsUpdatesTests(unittest.TestCase):
             package(**self.args)
         self.assertEqual((root/'full.nupkg').read_bytes(), b'other')
 
+    def test_release_review_can_certify_but_cannot_replace_the_source_pin(self):
+        reviewed = json.loads(self.pin.read_bytes())
+        source = self.root / 'source-pin.json'
+        original = dict(reviewed, certification_status='unverified')
+        original.pop('updater_sha256')
+        source.write_text(json.dumps(original))
+        with patch('scripts.package_windows_updates.PIN', source):
+            self.assertEqual(reviewed_native_pin(self.pin), self.pin)
+            for field in ('upstream_commit', 'patch_sha256', 'required_checks'):
+                with self.subTest(field=field):
+                    self.pin.write_text(json.dumps({**reviewed, field: None}))
+                    with self.assertRaisesRegex(ValueError, 'pinned source or required checks'):
+                        reviewed_native_pin(self.pin)
     def test_release_notes_are_signed(self):
         notes = self.root/'notes.txt'
         notes.write_text('Release details', encoding='utf-8')

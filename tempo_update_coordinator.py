@@ -8,7 +8,10 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+from zipfile import BadZipFile
+from zlib import error as DecompressionError
 
+from tempo_update_manifest import verify_zip
 from tempo_update_service import UpdateService, read_configuration, _safe_directory
 
 
@@ -40,25 +43,34 @@ class PackagedUpdateCoordinator:
         self.plan = None
         self.base_release = None
         self.base_package = None
+        self.recovery_download_size = 0
         self.nvidia_receipt = None
         self.component_required = False
         self.component_download_size = 0
         self.repair_executable = None
         self._handoff_error = None
-        self._full_fallback = False
 
     def check(self, *, cancel=None):
-        self._full_fallback = False
         self.nvidia_receipt = None
+        self.recovery_download_size = 0
         releases = self.service.check(cancel=cancel)
         self.base_release = next((r for r in releases if
                                   (r.version, r.commit) == (self.version, self.commit)), None)
         self.base_package = None
         if self.base_release:
-            candidates = (self.service.root / 'packages' / self.base_release.full.name,
+            candidates = (self.service.recovery_package_path(self.base_release),
+                          self.service.root / 'packages' / self.base_release.full.name,
                           self.installation.root / 'packages' / self.base_release.full.name,
-                          self.service.root / 'recovery' / 'target.nupkg')
-            self.base_package = next((p for p in candidates if p.is_file()), None)
+                          self.service.root / 'recovery' / 'target.nupkg',
+                          self.service.root / 'recovery' / 'base.nupkg',
+                          self.service.root / 'legacy-migration' / 'target.nupkg')
+            for path in candidates:
+                try:
+                    verify_zip(_safe_directory(path), self.base_release.inventory)
+                except (OSError, ValueError, BadZipFile, EOFError, RuntimeError, DecompressionError):
+                    continue
+                self.base_package = path
+                break
         try:
             self.plan = self.service.plan(installed_version=self.version,
                 installed_commit=self.commit, base_release=self.base_release,
@@ -68,6 +80,11 @@ class PackagedUpdateCoordinator:
             if str(exc) != 'Automatic downgrade or reinstall is not permitted.':
                 raise
             self.plan = None
+        if self.plan is not None:
+            if self.base_release is None:
+                raise ValueError('The update feed is missing the installed version. Use the verified installer or repair instructions.')
+            if self.base_package is None:
+                self.recovery_download_size = self.base_release.full.size
         from tempo_update_components import read_runtime_marker
         self.component_required = self.plan is not None and read_runtime_marker(self.profile / 'nvidia-runtime') is not None
         self.component_download_size = 0
@@ -81,8 +98,8 @@ class PackagedUpdateCoordinator:
     def use_full_download(self):
         """Issue a fresh authenticated full plan after explicit fallback acceptance."""
         self.plan = self.service.plan(installed_version=self.version,
-            installed_commit=self.commit, base_release=None, base_package=None)
-        self._full_fallback = True
+            installed_commit=self.commit, base_release=self.base_release,
+            base_package=self.base_package, force_full=True)
         return self.plan
 
     def download(self, *, cancel=None, progress=lambda received, total: None):
@@ -90,8 +107,7 @@ class PackagedUpdateCoordinator:
             raise ValueError('Check for an available update first.')
         configuration = self.configuration
         return self.service.prepare(self.plan,
-            base_release=None if self._full_fallback else self.base_release,
-            base_package=None if self._full_fallback else self.base_package,
+            base_release=self.base_release, base_package=self.base_package,
             patcher=self.installation.uninstaller,
             patcher_sha256=configuration.get('updater_sha256'), cancel=cancel,
             progress=progress)
@@ -153,7 +169,10 @@ class PackagedUpdateCoordinator:
         addons += discover_addons(self.installation.root)
         if addons:
             raise ValueError('An optional package modifies this installation. Remove it using its verified removal procedure or defer the update.')
-        if self.base_release is None or self.base_package is None:
+        base_package = self.base_package
+        if self.recovery_download_size:
+            base_package = self.service.recovery_package_path(self.base_release)
+        if self.base_release is None or base_package is None:
             raise ValueError('A verified offline recovery package is required before installation. Repair this installation before updating.')
         target, package = self.service.verified_prepared()
         from tempo_update_components import read_runtime_marker, verify_component_transition
@@ -169,7 +188,7 @@ class PackagedUpdateCoordinator:
         self._verify_native_tools()
         from tempo_update_recovery import arm_recovery
         self.recovery_record = arm_recovery(self.installation.root,
-            self.service.root / 'recovery', self.base_release, self.base_package,
+            self.service.root / 'recovery', self.base_release, base_package,
             target, package, trusted_keys=self.service.keys,
             packages_dir=self.service.root / 'packages', expected_root=expected_root,
             nvidia_marker=marker)

@@ -9,14 +9,17 @@ from __future__ import annotations
 import base64
 from datetime import datetime, timezone
 import hashlib
+from http.client import HTTPException
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import tempfile
 import time
 import urllib.request
 import zipfile
+from urllib.error import HTTPError
 from urllib.parse import urlsplit
 
 from tempo_annotation_store import atomic_bytes
@@ -178,6 +181,11 @@ class UpdateService:
                 self.releases, self.envelopes = tuple(releases), envelopes
                 self._state('available', channel=self.channel)
                 return self.releases
+            except HTTPError as error:
+                self._state('failed')
+                if error.code == 404:
+                    raise ValueError('The update feed is unavailable. Check again later.') from error
+                raise
             except UpdateCancelled:
                 self._state('cancelled')
                 raise
@@ -193,7 +201,7 @@ class UpdateService:
             raise ValueError('Release differs from its signed envelope.')
         return checked
 
-    def _plan_locked(self, *, installed_version, installed_commit, base_release, base_package):
+    def _plan_locked(self, *, installed_version, installed_commit, base_release, base_package, force_full):
         verified, identity = False, '0' * 64
         releases = tuple(self._authenticate(r) for r in self.releases)
         if not releases:
@@ -204,10 +212,11 @@ class UpdateService:
                 or newest.sequence != watermark['sequence']
                 or hashlib.sha256(newest.signed_payload).hexdigest() != watermark.get('sha256')):
             raise ValueError('Authenticated releases do not match the trusted sequence.')
-        if base_release is not None and base_package is not None:
+        if base_release is not None:
             base_release = self._authenticate(base_release)
             if (base_release.version, base_release.commit) != (installed_version, installed_commit):
                 raise ValueError('The saved base does not match the installed application.')
+        if base_release is not None and base_package is not None and not force_full:
             try:
                 verify_zip(_safe_directory(base_package), base_release.inventory)
                 verified = True
@@ -221,17 +230,20 @@ class UpdateService:
             raise ValueError('Newest release sequence does not match version ordering.')
         return result
 
-    def plan(self, *, installed_version, installed_commit, base_release=None, base_package=None):
+    def plan(self, *, installed_version, installed_commit, base_release=None, base_package=None, force_full=False):
         with update_lock(self.root / 'packages'):
             self._issued = None
             result = self._plan_locked(installed_version=installed_version, installed_commit=installed_commit,
-                                       base_release=base_release, base_package=base_package)
+                                       base_release=base_release, base_package=base_package, force_full=force_full)
             self._issued = (result, installed_version, installed_commit, base_release,
-                            str(Path(base_package).absolute()) if base_package is not None else None)
+                            str(Path(base_package).absolute()) if base_package is not None else None, force_full)
             return result
 
-    def _download(self, asset, *, cancel, progress):
-        cache = _safe_directory(self.root / 'packages')
+    def recovery_package_path(self, release):
+        return self.root / 'packages' / 'recovery-base' / release.full.name
+
+    def _download(self, asset, *, cancel, progress, cache=None):
+        cache = _safe_directory(cache if cache is not None else self.root / 'packages')
         cache.mkdir(exist_ok=True)
         path = cache / asset.name
         _safe_directory(path)
@@ -273,25 +285,43 @@ class UpdateService:
                 _check_cancel(cancel)
                 if self._issued is None:
                     raise ValueError('An authenticated plan is required.')
-                issued, version, commit, expected_base, expected_path = self._issued
+                issued, version, commit, expected_base, expected_path, force_full = self._issued
                 current_path = str(Path(base_package).absolute()) if base_package is not None else None
                 if plan != issued or base_release != expected_base or current_path != expected_path:
                     raise ValueError('Transfer plan or base changed after planning.')
                 fresh = self._plan_locked(installed_version=version, installed_commit=commit,
-                                          base_release=base_release, base_package=base_package)
+                                          base_release=base_release, base_package=base_package, force_full=force_full)
                 if fresh != issued:
                     raise ValueError('The verified base or selected transfer changed.')
                 # Both reconstruction and later native staging need full-sized storage.
                 expanded = sum(item.size for item in plan.target.inventory)
-                import shutil
                 required = 2 * expanded + plan.target.full.size + sum(a.size for a in plan.assets)
+                fetch_base = base_release is not None and base_package is None
+                if base_release is not None:
+                    required += base_release.full.size  # The offline recovery copy.
+                if fetch_base:
+                    if base_release not in self.releases:
+                        raise ValueError('The signed update index does not contain the installed recovery base.')
+                    required += base_release.full.size  # The verified download.
                 if shutil.disk_usage(self.root).free < required:
                     raise OSError('Insufficient free space to prepare and recover this update.')
                 self._state('downloading', version=plan.target.version, commit=plan.target.commit)
                 total, completed, files = sum(a.size for a in plan.assets), 0, []
+                if fetch_base:
+                    total += base_release.full.size
+                    base_package = self._download(base_release.full, cancel=cancel,
+                        progress=lambda received, _size: progress(received, total),
+                        cache=self.recovery_package_path(base_release).parent)
+                    verify_zip(base_package, base_release.inventory)
+                    completed = base_release.full.size
                 for asset in plan.assets:
-                    files.append(self._download(asset, cancel=cancel,
-                        progress=lambda received, _size, offset=completed: progress(offset + received, total)))
+                    try:
+                        files.append(self._download(asset, cancel=cancel,
+                            progress=lambda received, _size, offset=completed: progress(offset + received, total)))
+                    except (OSError, ValueError, HTTPException) as exc:
+                        if plan.kind == 'patch':
+                            raise FullDownloadRequired('The incremental download failed. Accept the full download or try later.') from exc
+                        raise
                     completed += asset.size
                 self._state('verifying', version=plan.target.version, commit=plan.target.commit)
                 if plan.kind == 'patch':

@@ -10,15 +10,21 @@ $Payload = (Resolve-Path $Payload).Path
 $Evidence = (Resolve-Path $Evidence).Path
 $contract = Get-Content (Join-Path $Payload 'verification-contract.json') -Raw | ConvertFrom-Json
 if ($contract.commit -ne $env:GITHUB_SHA) { throw 'Payload commit does not match workflow commit' }
+if ($contract.version -cnotmatch '\A[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?\z') {
+    throw 'Missing or invalid application version in the build contract'
+}
 
 . (Join-Path $PSScriptRoot 'windows_installer_helpers.ps1')
 
-$gate = @{phase=$Mode;success=$false;commit=$contract.commit}
+$gate = @{phase=$Mode;success=$false;commit=$contract.commit;version=$contract.version}
 try {
     if ($Mode -eq 'install') {
-        $installer = Join-Path $Payload 'TEMPO_Setup_v1.0.1.exe'
-        $expected = (Get-Content (Join-Path $Payload 'SHA256SUMS.txt') -Raw).Trim().Split(' ')[0]
-        if ((Get-FileHash $installer -Algorithm SHA256).Hash.ToLower() -ne $expected) { throw 'Installer checksum mismatch' }
+        $filename = "TEMPO_Setup_v$($contract.version).exe"
+        $installer = Join-Path $Payload $filename
+        $expected = (Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash.ToLowerInvariant()
+        if ((Get-Content (Join-Path $Payload 'SHA256SUMS.txt') -Raw).Trim() -cne "$expected  $filename") {
+            throw 'Installer checksum or filename mismatch'
+        }
         Invoke-Bounded $installer @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/SP-',"/DIR=`"$Target`"","/LOG=`"$(Join-Path $Evidence 'installation.log')`"") 300
         if (-not (Test-Path (Join-Path $Target 'TEMPO.exe'))) { throw 'Installer did not create TEMPO.exe' }
         $gate.installer_sha256 = $expected

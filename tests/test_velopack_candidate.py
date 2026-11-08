@@ -1,4 +1,5 @@
 """Full-app candidate packaging must preserve exact tested bytes and disabled trust."""
+import base64
 from datetime import datetime, timezone
 import json
 from pathlib import Path
@@ -13,7 +14,9 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from scripts.build_velopack_candidate import (ROOT, VERSIONS, check_payload,
     file_record, folder_inventory, signed_fixture)
 from scripts import build_velopack_candidate as candidate
+from scripts import build_velopack_release as release_builder
 from scripts.package_windows_updates import _digest
+from tempo_release import REPORT_SCHEMA, REQUIRED_CHECKS, VERSION
 from tempo_update_manifest import load_verified_manifest
 from cryptography.hazmat.primitives import serialization
 
@@ -113,6 +116,65 @@ class VelopackCandidateTests(unittest.TestCase):
             folder_inventory(self.bundle)
         with self.assertRaisesRegex(ValueError, 'ordinary artifact'):
             file_record(self.bundle / 'linked-file')
+
+    def test_release_assembly_keeps_the_tested_bundle_and_enables_reviewed_stable_trust(self):
+        project, options = self.prepare_builder()
+        commit, archive, setup, updater = (options[name] for name in ('commit', 'vpk_archive', 'setup', 'updater'))
+        identity = dict(version=VERSION, commit=commit, profile='cpu', lock_sha256='a' * 64)
+        (self.bundle / '_internal/assets/build-provenance.json').write_text(json.dumps(identity))
+        verification = self.root / 'verification.json'
+        expected = dict(version=VERSION, commit=commit, schema_version=REPORT_SCHEMA,
+                        lock_sha256=identity['lock_sha256'], required_checks=list(REQUIRED_CHECKS))
+        verification.write_text(json.dumps(expected))
+        report = self.root / 'runtime.json'
+        report.write_text(json.dumps(dict(expected, success=True, frozen=True, checks=list(REQUIRED_CHECKS),
+                                          runtime_details=dict.fromkeys(REQUIRED_CHECKS, {}))))
+        build_contract = self.root / 'build-contract.json'
+        build_contract.write_text(json.dumps(dict(purpose='isolated-full-app-acceptance', source_commit=commit,
+            packager_sha256=_digest(archive), updater_sha256=_digest(updater), setup_sha256=_digest(setup),
+            bundle_inventory=folder_inventory(self.bundle))))
+        keys = self.root / 'keys.json'
+        keys.write_text(json.dumps({'stable': base64.b64encode(b'x' * 32).decode()}))
+        repair = self.root / 'TEMPORepair.exe'
+        repair.write_bytes(b'reviewed repair')
+        pin_path = project / 'installer/velopack/pin.json'
+        pin = dict(json.loads(pin_path.read_bytes()), certification_status='certified', updater_sha256=_digest(updater))
+        pin_path.write_text(json.dumps(pin))
+        evidence = self.root / 'evidence.json'
+        evidence.write_text(json.dumps(dict(schema_version=1, source_commit=commit,
+            upstream_commit=pin['upstream_commit'], patch_sha256=pin['patch_sha256'], updater_sha256=_digest(updater),
+            repair_sha256=_digest(repair), public_keys_sha256=_digest(keys),
+            checks=dict.fromkeys(pin['required_checks'], True))))
+        output = self.root / 'release'
+
+        def pack(command, log, timeout):
+            self.assertEqual(command[command.index('--packVersion') + 1], VERSION)
+            folder = Path(command[command.index('--packDir') + 1])
+            packages = Path(command[command.index('--outputDir') + 1])
+            packages.mkdir()
+            with zipfile.ZipFile(packages / f'TEMPO-{VERSION}-full.nupkg', 'w') as package:
+                for row in folder_inventory(folder):
+                    package.write(folder / row['path'], 'lib/app/' + row['path'])
+                package.writestr('lib/app/Squirrel.exe', updater.read_bytes())
+            (packages / 'TEMPO-Setup.exe').write_bytes(b'setup bytes')
+            return 0
+
+        with patch.object(release_builder.sys, 'platform', 'win32'), \
+             patch.object(release_builder, 'VPK_SHA256', _digest(archive)), \
+             patch.object(release_builder, 'run_logged', side_effect=pack):
+            assembled = release_builder.build(self.bundle, build_contract, verification, report, archive, setup,
+                output, public_keys=keys, native_updater=updater, repair_executable=repair,
+                certification=evidence, pin_path=pin_path, patch_path=pin_path.with_name('0001-tempo-recovery.patch'))
+        revision = assembled['revisions'][0]
+        self.assertEqual(revision['installer']['path'], f'TEMPO_Setup_v{VERSION}.exe')
+        self.assertFalse(assembled['release_certified'])
+        with zipfile.ZipFile(output / revision['full']['path']) as package:
+            config = json.loads(package.read('lib/app/_internal/assets/tempo-updates.json'))
+            self.assertTrue(config['enabled'])
+            self.assertEqual(config['channel'], 'stable')
+            self.assertEqual(config['trusted_keys'], json.loads(keys.read_bytes()))
+        self.assertEqual((self.bundle / '_internal/assets/tempo-updates.json').read_bytes(),
+                         self.source['_internal/assets/tempo-updates.json'])
 
     def prepare_builder(self):
         project = self.root / 'project'

@@ -30,6 +30,7 @@ class CoordinatorTests(unittest.TestCase):
         self.service = Mock()
         self.service.root = self.local / 'TEMPO' / 'updates'
         self.service.root.mkdir(parents=True)
+        self.service.recovery_package_path.return_value = self.service.root / 'packages' / 'recovery-base' / 'base.nupkg'
         self.service.keys = {'key': b'k' * 32}
         self.installation = SimpleNamespace(root=self.root, uninstaller=self.updater)
         self.config = {'trusted_keys': {'key': base64.b64encode(b'k' * 32).decode()},
@@ -37,8 +38,8 @@ class CoordinatorTests(unittest.TestCase):
                        'repair_sha256': sha(self.repair.read_bytes())}
         self.coordinator = PackagedUpdateCoordinator(self.installation, self.config,
                             self.local / 'TEMPO', '1.0.1', 'a' * 40, service=self.service)
-        self.base = SimpleNamespace(version='1.0.1', commit='a' * 40,
-                                    full=SimpleNamespace(name='base.nupkg'))
+        self.base = SimpleNamespace(version='1.0.1', commit='a' * 40, inventory=(),
+                                    full=SimpleNamespace(name='base.nupkg', size=123))
         self.target = SimpleNamespace(version='1.0.2', commit='b' * 40, nvidia_descriptor=None)
         self.package = self.local / 'target.nupkg'
         self.base_package = self.local / 'base.nupkg'
@@ -152,10 +153,23 @@ class CoordinatorTests(unittest.TestCase):
         self.assertIs(self.coordinator.use_full_download(), full)
         self.coordinator.download()
         kwargs = self.service.prepare.call_args.kwargs
-        self.assertIsNone(kwargs['base_release'])
-        self.assertIsNone(kwargs['base_package'])
+        self.assertTrue(self.service.plan.call_args.kwargs['force_full'])
+        self.assertIs(kwargs['base_release'], self.base)
+        self.assertEqual(kwargs['base_package'], self.base_package)
         self.assertIs(self.coordinator.base_release, self.base)
         self.assertEqual(self.coordinator.base_package, self.base_package)
+
+    def test_missing_recovery_base_is_included_in_download_and_used_for_install(self):
+        self.service.check.return_value = [self.base]
+        self.service.plan.return_value = SimpleNamespace(target=self.target)
+        self.coordinator.check()
+        self.assertEqual(self.coordinator.recovery_download_size, self.base.full.size)
+        self.assertIsNone(self.coordinator.base_package)
+        self.coordinator.download()
+        self.assertIs(self.service.prepare.call_args.kwargs['base_release'], self.base)
+        self.assertIsNone(self.service.prepare.call_args.kwargs['base_package'])
+        _, arm = self.preflight()
+        self.assertEqual(arm.call_args.args[3], self.service.recovery_package_path.return_value)
 
     def test_cpu_and_gpu_check_require_matching_nvidia_descriptor(self):
         self.service.check.return_value = [self.base]

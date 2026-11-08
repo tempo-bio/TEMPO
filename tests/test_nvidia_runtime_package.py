@@ -12,6 +12,7 @@ from unittest.mock import patch
 
 from scripts.package_nvidia_runtime import package, verify_descriptor, verify_published
 from tempo_nvidia_manifest import MAX_PART
+from tempo_release import VERSION
 
 
 class NvidiaRuntimePackageTests(unittest.TestCase):
@@ -30,7 +31,7 @@ class NvidiaRuntimePackageTests(unittest.TestCase):
         self.output = self.root/'output'
 
     def package(self):
-        return package(self.bundle, self.output, tag='v1.0.1', provenance=self.provenance, part_size=256)
+        return package(self.bundle, self.output, tag=f'v{VERSION}', provenance=self.provenance, part_size=256)
 
     def verify(self):
         return verify_descriptor(self.output/'nvidia-runtime.json', commit=self.commit)
@@ -57,13 +58,13 @@ class NvidiaRuntimePackageTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'missing'):
             self.verify()
         part.write_bytes(backup)
-        (self.output/'TEMPO_NVIDIA_Runtime_v1.0.1.zip').write_bytes(b'oversized old-style archive')
+        (self.output/f'TEMPO_NVIDIA_Runtime_v{VERSION}.zip').write_bytes(b'oversized old-style archive')
         with self.assertRaisesRegex(ValueError, 'undeclared'):
             self.verify()
 
     def test_publisher_rejects_oversized_parts_and_mismatched_runtime(self):
         with self.assertRaisesRegex(ValueError, '1 GiB'):
-            package(self.bundle, self.output, tag='v1.0.1', provenance=self.provenance, part_size=MAX_PART+1)
+            package(self.bundle, self.output, tag=f'v{VERSION}', provenance=self.provenance, part_size=MAX_PART+1)
         self.provenance.write_text(json.dumps({'commit':self.commit, 'profile':'cpu'}))
         with self.assertRaisesRegex(ValueError, 'wrong profile'):
             self.package()
@@ -106,7 +107,7 @@ class NvidiaRuntimePackageTests(unittest.TestCase):
         command = [sys.executable, '-S', '-m', 'scripts.package_nvidia_runtime']
         options = dict(cwd=Path(__file__).resolve().parents[1], capture_output=True, text=True, timeout=30)
         packaged = subprocess.run([*command, '--bundle', str(self.bundle), '--output', str(output),
-                                  '--provenance', str(self.provenance), '--release-tag', 'v1.0.1'], **options)
+                                  '--provenance', str(self.provenance), '--release-tag', f'v{VERSION}'], **options)
         self.assertEqual(packaged.returncode, 0, packaged.stderr)
         verified = subprocess.run([*command, '--verify-descriptor', str(output/'nvidia-runtime.json'),
                                    '--commit', self.commit], **options)
@@ -115,7 +116,7 @@ class NvidiaRuntimePackageTests(unittest.TestCase):
 
     def test_publication_requires_all_exact_uploaded_parts_and_matching_source_tag(self):
         descriptor = self.package()
-        release = dict(draft=False, prerelease=True, tag_name='v1.0.1', assets=[dict(
+        release = dict(draft=False, prerelease=True, tag_name=f'v{VERSION}', assets=[dict(
             name=part['url'].rsplit('/', 1)[-1], size=part['size'], state='uploaded',
             digest='sha256:'+part['sha256'], browser_download_url=part['url']) for part in descriptor['parts']])
         source = {'sha':self.commit}

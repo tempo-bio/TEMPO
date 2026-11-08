@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 from scripts.build_update_repair import read_keys
-from scripts.package_windows_updates import COMMIT, HASH, PIN, REQUIRED_CHECKS, _digest, _read_json
+from scripts.package_windows_updates import COMMIT, HASH, PIN, REQUIRED_CHECKS, _digest, _read_json, reviewed_native_pin
 
 PATCH = ROOT / 'installer/velopack/0001-tempo-recovery.patch'
 
@@ -84,6 +84,7 @@ def main():
     parser.add_argument('--native-updater', type=Path, required=True)
     parser.add_argument('--repair-executable', type=Path, required=True)
     parser.add_argument('--certification', type=Path, required=True)
+    parser.add_argument('--native-pin', type=Path)
     parser.add_argument('--source-commit', required=True)
     parser.add_argument('--channel', choices=('stable', 'prerelease'), default='stable')
     parser.add_argument('--output', type=Path, required=True, help='configuration file named tempo-updates.json')
@@ -93,7 +94,8 @@ def main():
         parser.error('--output must be named tempo-updates.json')
     options = dict(public_keys=args.public_keys, native_updater=args.native_updater,
                    repair_executable=args.repair_executable, certification=args.certification,
-                   source_commit=args.source_commit, channel=args.channel)
+                   source_commit=args.source_commit, channel=args.channel,
+                   pin_path=reviewed_native_pin(args.native_pin))
     config = candidate(**options)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(config, indent=2, sort_keys=True) + '\n', encoding='utf-8')

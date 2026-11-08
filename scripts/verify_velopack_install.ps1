@@ -1,5 +1,5 @@
 param(
-    [Parameter(Mandatory)][ValidateSet('matrix','migration','uninstall','gate')][string]$Mode,
+    [Parameter(Mandatory)][ValidateSet('matrix','migration','uninstall','gate','release-smoke')][string]$Mode,
     [Parameter(Mandatory)][string]$Payload,
     [Parameter(Mandatory)][string]$Evidence,
     [ValidatePattern('^[0-9a-f]{40}$')][string]$SourceCommit = $env:GITHUB_SHA
@@ -11,11 +11,23 @@ $Evidence = (Resolve-Path $Evidence).Path
 . (Join-Path $PSScriptRoot 'windows_installer_helpers.ps1')
 $result = @{schema_version=1;source_commit=$SourceCommit;fixture_commit=$env:GITHUB_SHA;fixture_sha256=(Get-FileHash $PSCommandPath -Algorithm SHA256).Hash.ToLowerInvariant();helper_sha256=(Get-FileHash (Join-Path $PSScriptRoot 'windows_installer_helpers.ps1') -Algorithm SHA256).Hash.ToLowerInvariant();release_certified=$false;mode=$Mode;success=$false;scenarios=@{};measurements=@()}
 try {
-$contract = Get-Content (Join-Path $Payload 'candidate-contract.json') -Raw | ConvertFrom-Json
-$result.contract_sha256=(Get-FileHash (Join-Path $Payload 'candidate-contract.json') -Algorithm SHA256).Hash.ToLowerInvariant()
+$releaseSmoke = $Mode -eq 'release-smoke'
+$contractName = if ($releaseSmoke) { 'release-contract.json' } else { 'candidate-contract.json' }
+$contractPath = Join-Path $Payload $contractName
+$contract = Get-Content $contractPath -Raw | ConvertFrom-Json
+$result.contract_sha256=(Get-FileHash $contractPath -Algorithm SHA256).Hash.ToLowerInvariant()
 $verification = Get-Content (Join-Path $Payload 'verification-contract.json') -Raw | ConvertFrom-Json
 if ($contract.schema_version -ne 1 -or $contract.source_commit -ne $SourceCommit -or
-    $verification.commit -ne $SourceCommit -or $contract.release_certified -ne $false -or
+    $verification.commit -ne $SourceCommit -or $contract.release_certified -ne $false) {
+    throw 'Candidate identity/verification contract mismatch'
+}
+if ($releaseSmoke) {
+    if ($contract.purpose -ne 'stable-prerelease' -or @($contract.revisions).Count -ne 1 -or
+        $contract.package_id -ne 'TEMPO.Bio.Desktop' -or $contract.title -ne 'TEMPO' -or
+        -not $verification.version -or $verification.version -cne $contract.revisions[0].version) {
+        throw 'Expected one version-aligned stable-channel release package'
+    }
+} elseif (
     $contract.purpose -ne 'isolated-full-app-acceptance' -or @($contract.revisions).Count -ne 3) {
     throw 'Candidate identity/verification contract mismatch'
 }
@@ -83,7 +95,15 @@ function Assert-Installed($Revision) {
         throw 'Installed updater differs from the exact native candidate'
     }
     $config = Get-Content (Join-Path $current '_internal\assets\tempo-updates.json') -Raw | ConvertFrom-Json
-    if ($config.enabled -ne $false -or @($config.trusted_keys.PSObject.Properties).Count) { throw 'Candidate enabled updates or acquired trust keys' }
+    if ($releaseSmoke) {
+        if ($config.enabled -ne $true -or $config.channel -ne 'stable' -or
+            $config.native_recovery_certified -ne $true -or $config.updater_sha256 -ne $contract.updater_sha256 -or
+            $config.repair_sha256 -ne $contract.repair.sha256 -or -not @($config.trusted_keys.PSObject.Properties).Count) {
+            throw 'Installed update trust differs from the reviewed stable-channel configuration'
+        }
+    } elseif ($config.enabled -ne $false -or @($config.trusted_keys.PSObject.Properties).Count) {
+        throw 'Candidate enabled updates or acquired trust keys'
+    }
     $registered = Get-ItemProperty -LiteralPath $registry
     if ($registered.InstallLocation.TrimEnd('\') -ne $root.TrimEnd('\')) { throw 'Uninstall registration owns a different location' }
     $shell = New-Object -ComObject WScript.Shell
@@ -212,6 +232,35 @@ function Apply-Revision($Base, $Target, [string]$Label) {
         foreach ($property in $migration.scenarios.PSObject.Properties) { $result.scenarios[$property.Name]=$property.Value }
         $result.scenarios.uninstall_preserves_external_state=$true
         $result.legacy_installer_sha256=$migration.legacy_installer_sha256
+    } elseif ($releaseSmoke) {
+        foreach ($path in @($root,$registry) + $links) {
+            if (Test-Path -LiteralPath $path) { throw "Use a clean Windows profile for release verification: $path" }
+        }
+        $revision = $contract.revisions[0]
+        $installer = Join-Path $Payload $revision.installer.path
+        Assert-File $installer $revision.installer
+        Assert-File (Join-Path $Payload $revision.full.path) $revision.full
+        $stateFile = 'AppData\Local\TEMPO\release-smoke-state.txt'
+        $statePath = Join-Path $profile $stateFile
+        New-Item -ItemType Directory -Force $state | Out-Null
+        [IO.File]::WriteAllText($statePath, 'retain this release fixture')
+        ConvertTo-Json -InputObject @(@{path=$stateFile;size=(Get-Item $statePath).Length;
+            sha256=(Get-FileHash -LiteralPath $statePath).Hash.ToLowerInvariant()}) |
+            Set-Content (Join-Path $Evidence 'preserved-state.json') -Encoding utf8NoBOM
+        Invoke-Bounded $installer @('--silent','--log',"`"$(Join-Path $Evidence 'release-setup.log')`"",
+            '--installto',"`"$root`"") 600
+        Assert-Installed $revision
+        Invoke-Diagnostics 'release-installed'
+        Invoke-Bounded (Join-Path $root 'current\TEMPORepair.exe') @('--help') 120
+        Assert-State
+        Invoke-Bounded (Join-Path $root 'Update.exe') @('uninstall','--silent','--log',
+            "`"$(Join-Path $Evidence 'release-uninstall.log')`"",'--rootDir',"`"$root`"") 300
+        Assert-VelopackUninstalled
+        $result.artifacts = @{version=$revision.version;installer_sha256=$revision.installer.sha256;
+            full_package_sha256=$revision.full.sha256;repair_sha256=$contract.repair.sha256;
+            updater_sha256=$contract.updater_sha256}
+        $result.scenarios = @{fresh_install=$true;frozen_runtime=$true;repair_entrypoint=$true;
+            uninstall_preserves_external_state=$true}
     } elseif ($Mode -eq 'migration') {
         $third=$contract.revisions[2]
         Assert-Installed $third

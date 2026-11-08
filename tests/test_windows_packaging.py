@@ -21,7 +21,8 @@ import tempo_cloud
 
 def valid_report():
     checks=list(tempo_release.REQUIRED_CHECKS)
-    return dict(schema_version=tempo_release.REPORT_SCHEMA, commit='fixture', frozen=True,
+    return dict(schema_version=tempo_release.REPORT_SCHEMA, version=tempo_release.VERSION,
+                commit='fixture', frozen=True,
                 success=True, required_checks=checks, checks=checks, failures=[],
                 runtime_details={name: {'origin':'fixture'} for name in checks})
 
@@ -185,7 +186,8 @@ class PackagingCommandTests(unittest.TestCase):
     def test_successful_exit_requires_valid_complete_identity_report(self):
         for mutate in (lambda r:r.update(success=False),lambda r:r.update(frozen=False),
                        lambda r:r.update(checks=[]),lambda r:r.update(required_checks=[]),
-                       lambda r:r.update(commit='foreign'),lambda r:r.update(failures=[{'error':'fixture'}]),
+                       lambda r:r.update(commit='foreign'),lambda r:r.update(version='0.0.0'),
+                       lambda r:r.update(failures=[{'error':'fixture'}]),
                        lambda r:r.update(schema_version=-1),lambda r:r.update(runtime_details={})):
             with self.subTest(mutate=mutate):
                 report=valid_report();mutate(report)

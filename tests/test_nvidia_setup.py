@@ -39,7 +39,7 @@ class NvidiaSetupTests(unittest.TestCase):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name).resolve()
-        self.url = 'https://github.com/tempo-bio/TEMPO/releases/download/v1.0.1/TEMPO_NVIDIA_Runtime_v1.0.1.zip'
+        self.url = f'https://github.com/tempo-bio/TEMPO/releases/download/v{VERSION}/TEMPO_NVIDIA_Runtime_v{VERSION}.zip'
 
     def descriptor(self, data):
         return dict(schema_version=1, profile='nvidia-cu126', app_version=VERSION,
@@ -244,7 +244,7 @@ class NvidiaSetupTests(unittest.TestCase):
     def test_target_stage_preserves_selection_and_activation_checks_target_and_inventory(self):
         data = _archive()
         descriptor = self.descriptor(data)
-        descriptor.update(app_version='2.0.0', archive_url=self.url.replace('1.0.1', '2.0.0'))
+        descriptor.update(app_version='2.0.0', archive_url=self.url.replace(VERSION, '2.0.0'))
         old = {'schema_version': 1, 'version': 'old'}
         (self.root/'active.json').write_text(json.dumps(old))
         with patch.object(setup, 'runtime_root', return_value=self.root), \

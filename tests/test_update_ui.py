@@ -39,6 +39,7 @@ def coordinator():
     obj.version = '1.0.1'
     obj.component_required = False
     obj.component_download_size = 0
+    obj.recovery_download_size = 0
     obj.check.return_value = plan
     obj.download.return_value = {}
     obj.prepare_components.return_value = None
@@ -308,6 +309,8 @@ class UpdateDialogTests(unittest.TestCase):
             for state in ('available', 'downloading', 'ready', 'error'):
                 with self.subTest(size=label, state=state):
                     service = coordinator()
+                    service.recovery_download_size = 128 * 1024 * 1024
+                    service.component_download_size = 256 * 1024 * 1024
                     started = threading.Event(); release = threading.Event()
                     def delayed(*, cancel, progress):
                         progress(42, 100); started.set()
@@ -316,6 +319,7 @@ class UpdateDialogTests(unittest.TestCase):
                     if state == 'downloading': service.download.side_effect = delayed
                     if state == 'error': service.download.side_effect = OSError('Not enough disk space. Free space and try again.')
                     dialog = self.make(service)
+                    self.assertIn('for offline recovery', dialog.log_view.toPlainText())
                     dialog.resize(*size)
                     if state != 'available':
                         dialog.btn_update.click()

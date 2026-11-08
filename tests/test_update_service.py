@@ -4,6 +4,7 @@ from pathlib import Path
 import tempfile
 import unittest
 from unittest.mock import patch
+from urllib.error import URLError
 import zipfile
 from dataclasses import replace
 
@@ -118,6 +119,27 @@ class UpdateServiceTests(unittest.TestCase):
             self.update.plan(installed_version='1.0.1', installed_commit='b'*40,
                              base_release=replace(base, commit='c'*40), base_package=archive)
 
+    def test_recovery_base_download_is_budgeted_and_kept_separate_from_target(self):
+        base_data = package(b'old app')
+        base_obj = payload('1.0.1', 'b'*40)
+        base_obj['inventory'][0].update(size=len(b'old app'), sha256=sha(b'old app'))
+        base_obj['full'] = asset('1.0.1', 'full.zip', base_data)
+        self.obj['sequence'] = base_obj['sequence'] + 1
+        self.index = json.dumps({'releases': [json.loads(signed(obj)) for obj in (base_obj, self.obj)]}).encode()
+        self.downloads[base_obj['full']['url']] = base_data
+        base, _ = self.update.check()
+        plan = self.update.plan(installed_version=base.version, installed_commit=base.commit, base_release=base)
+        without_base = 2 * (len(b'app') + len(self.data))
+        with patch.object(service.shutil, 'disk_usage', return_value=type('Disk', (), {'free': without_base})()):
+            with self.assertRaisesRegex(OSError, 'Insufficient free space'):
+                self.update.prepare(plan, base_release=base)
+        self.assertFalse(self.update.recovery_package_path(base).exists())
+        progress = []
+        self.update.prepare(plan, base_release=base, progress=lambda received, total: progress.append((received, total)))
+        self.assertEqual(progress[-1], (len(base_data) + len(self.data),) * 2)
+        self.assertEqual(self.update.recovery_package_path(base).read_bytes(), base_data)
+        self.assertEqual(self.update.verified_prepared()[1].read_bytes(), self.data)
+
     def test_patch_output_is_verified_and_invalid_reconstruction_removed(self):
         from tempo_update_manifest import inventory_digest
         base_obj = payload('1.0.1', 'b'*40)
@@ -135,6 +157,13 @@ class UpdateServiceTests(unittest.TestCase):
         plan = self.update.plan(installed_version='1.0.1', installed_commit='b'*40,
                                 base_release=base, base_package=base_zip)
         self.assertEqual(plan.kind, 'patch')
+        with patch.object(self.update, 'opener', side_effect=URLError('missing delta')):
+            with self.assertRaises(service.FullDownloadRequired):
+                self.update.prepare(plan, base_release=base, base_package=base_zip)
+        self.downloads[self.obj['patches'][0]['asset']['url']] = b'wrong checksum'
+        with self.assertRaises(service.FullDownloadRequired):
+            self.update.prepare(plan, base_release=base, base_package=base_zip)
+        self.downloads[self.obj['patches'][0]['asset']['url']] = delta
         patcher = self.root/'patcher'
         patcher.write_bytes(b'fixture')
 

@@ -126,10 +126,13 @@ class PackagedSoftwareUpdateDialog(QDialog):
         target = plan.target
         notes = target.release_notes or 'Release notes are not available.'
         size = sum(asset.size for asset in plan.assets)
-        component_size = self.coordinator.component_download_size
-        summary = f'Installed: {self.coordinator.version}  \nDownload: {_size_text(size + component_size)}'
-        if component_size:
-            summary += f' (includes {_size_text(component_size)} for NVIDIA support)'
+        extras = [(self.coordinator.recovery_download_size, 'offline recovery'),
+                  (self.coordinator.component_download_size, 'NVIDIA support')]
+        total = size + sum(amount for amount, _ in extras)
+        summary = f'Installed: {self.coordinator.version}  \nDownload: {_size_text(total)}'
+        details = ', '.join(f'{_size_text(amount)} for {label}' for amount, label in extras if amount)
+        if details:
+            summary += f' (includes {details})'
         self.log_view.setMarkdown(f'## TEMPO {target.version}\n\n{summary}\n\n{notes}')
 
     def check_release(self):
@@ -186,9 +189,11 @@ class PackagedSoftwareUpdateDialog(QDialog):
         if self._finish_background():
             return
         if isinstance(error, UpdateCancelled):
+            self._display_plan(self.coordinator.plan)
             self._set_state('available')
         elif isinstance(error, FullDownloadRequired):
-            size = _size_text(self.coordinator.plan.target.full.size + self.coordinator.component_download_size)
+            size = _size_text(self.coordinator.plan.target.full.size + self.coordinator.component_download_size
+                              + self.coordinator.recovery_download_size)
             self.error_details.set_error(f'The incremental update could not be prepared. Download the full update ({size}) or try later.', error)
             self._set_state('full_required')
         elif error:

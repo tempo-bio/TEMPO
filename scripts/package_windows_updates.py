@@ -69,6 +69,20 @@ def _read_json(path, limit=MAX_METADATA):
                       parse_constant=lambda _: (_ for _ in ()).throw(ValueError('Invalid JSON value.')))
 
 
+def reviewed_native_pin(path=None):
+    """Allow certification after the build while retaining the source pin."""
+    if path is None:
+        return PIN
+    source, reviewed = _read_json(PIN), _read_json(path)
+    if not isinstance(reviewed, dict) or any(
+            reviewed.get(field) != value for field, value in source.items()
+            if field not in ('certification_status', 'updater_sha256')):
+        raise ValueError('The reviewed native pin differs from the pinned source or required checks.')
+    if source.get('certification_status') == 'certified' and source.get('updater_sha256') != reviewed.get('updater_sha256'):
+        raise ValueError('The reviewed updater differs from the certified source pin.')
+    return Path(path)
+
+
 def _digest(path):
     digest = hashlib.sha256()
     with Path(path).open('rb') as stream:
@@ -370,6 +384,7 @@ def main(argv=None):
     parser.add_argument('--output', type=Path)
     parser.add_argument('--certification', type=Path)
     parser.add_argument('--native-updater', type=Path)
+    parser.add_argument('--native-pin', type=Path, help='reviewed certification for the unchanged source pin')
     parser.add_argument('--native-patch', type=Path, default=PIN.parent/'0001-tempo-recovery.patch')
     parser.add_argument('--previous-index', type=Path)
     parser.add_argument('--trusted-keys', type=Path)
@@ -396,7 +411,8 @@ def main(argv=None):
     result = package(full_package=args.package, version=args.version, commit=args.commit,
                      channel=args.channel, sequence=args.sequence, expires_at=args.expires_at,
                      signing_key=args.signing_key, key_id=args.key_id, output=args.output,
-                     certification=args.certification, previous_index=args.previous_index,
+                     certification=args.certification, pin_path=reviewed_native_pin(args.native_pin),
+                     previous_index=args.previous_index,
                      trusted_keys=args.trusted_keys, patch_spec=args.patch_spec,
                      nvidia_descriptor=args.nvidia_descriptor, native_updater=args.native_updater,
                      native_patch=args.native_patch, release_notes=args.release_notes,

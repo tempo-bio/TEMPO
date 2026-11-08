@@ -64,7 +64,7 @@ def folder_inventory(root):
     return sorted(result, key=lambda item: item['path'])
 
 
-def check_payload(package, source_inventory, updater_hash, commit):
+def check_payload(package, source_inventory, updater_hash, commit, *, release_config=None):
     """Require every built file, including source/notices/workers, byte for byte."""
     inventory = inventory_package(package)
     actual = {item['path']: item for item in inventory}
@@ -79,9 +79,12 @@ def check_payload(package, source_inventory, updater_hash, commit):
         config = json.loads(archive.read('lib/app/_internal/assets/tempo-updates.json'))
     if provenance.get('commit') != commit or provenance.get('profile') != 'cpu':
         raise ValueError('Expected the tested CPU application at the exact source commit.')
-    disabled = json.loads((ROOT / 'installer/tempo-updates.json').read_bytes())
-    if config != disabled or config.get('enabled') is not False or config.get('trusted_keys'):
-        raise ValueError('Acceptance packages must retain the disabled, empty-trust configuration.')
+    if release_config is None:
+        disabled = json.loads((ROOT / 'installer/tempo-updates.json').read_bytes())
+        if config != disabled or config.get('enabled') is not False or config.get('trusted_keys'):
+            raise ValueError('Acceptance packages must retain the disabled, empty-trust configuration.')
+    elif config != release_config:
+        raise ValueError('Package trust differs from the reviewed release configuration.')
     return inventory
 
 
@@ -133,7 +136,8 @@ def build(bundle, vpk_archive, updater, native_evidence, output, commit, *, setu
                     source_commit=commit, package_id=PACKAGE_ID, title=TITLE,
                     same_source_packaging_revisions=True, updater_sha256=updater_hash,
                     setup_sha256=setup_hash,
-                    packager_sha256=VPK_SHA256, native_evidence=evidence, revisions=[])
+                    packager_sha256=VPK_SHA256, native_evidence=evidence,
+                    bundle_inventory=source_inventory, revisions=[])
     contract['legacy_source'] = dict(SUPPORTED_LEGACY['1.0.1'], version='1.0.1',
         url='https://github.com/tempo-bio/TEMPO/releases/download/v1.0.1/TEMPO_Setup_v1.0.1.exe')
     key = Ed25519PrivateKey.generate()  # Never saved or exported.

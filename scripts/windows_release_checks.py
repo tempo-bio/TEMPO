@@ -102,7 +102,7 @@ def isolated_environment(root):
 
 
 def validate_report(report, *, frozen=True, commit=None):
-    from tempo_release import REQUIRED_CHECKS, REPORT_SCHEMA
+    from tempo_release import REQUIRED_CHECKS, REPORT_SCHEMA, VERSION
     if not isinstance(report, dict) or report.get('schema_version') != REPORT_SCHEMA:
         raise ValueError('Missing or unsupported verification schema.')
     if report.get('frozen') is not frozen or report.get('success') is not True:
@@ -113,6 +113,8 @@ def validate_report(report, *, frozen=True, commit=None):
         raise ValueError('Incomplete verification checks.')
     if commit and report.get('commit') != commit:
         raise ValueError('Verification commit does not match the built revision.')
+    if report.get('version') != VERSION:
+        raise ValueError('Verification version does not match the built application.')
     if not report.get('commit') or not report.get('runtime_details'):
         raise ValueError('Verification identity/runtime evidence is missing.')
     if set(report['runtime_details']) != set(REQUIRED_CHECKS):
@@ -158,13 +160,14 @@ def provenance(output):
     output.mkdir(parents=True, exist_ok=True)
     root = Path(__file__).resolve().parents[1]
     from scripts.windows_build_profile import build_profile, validate_torch_build
+    from tempo_release import REPORT_SCHEMA, REQUIRED_CHECKS, VERSION
     profile = build_profile()
     import torch, torchvision
     validate_torch_build(profile, torch.__version__, torchvision.__version__, torch.version.cuda)
     packages = {d.metadata['Name'].lower().replace('_', '-'): d.version for d in importlib.metadata.distributions()}
     data = dict(commit=os.environ.get('GITHUB_SHA') or subprocess.check_output(
         ['git', 'rev-parse', 'HEAD'], cwd=root, text=True).strip(),
-        python=platform.python_version(), architecture=platform.machine(), platform=platform.platform(),
+        version=VERSION, python=platform.python_version(), architecture=platform.machine(), platform=platform.platform(),
         runner_image=os.environ.get('ImageOS'), runner_image_version=os.environ.get('ImageVersion'),
         profile=profile.key, lock_sha256=hashlib.sha256((root/profile.lock).read_bytes()).hexdigest(), packages=packages,
         project_license_sha256=hashlib.sha256((root/'LICENSE').read_bytes()).hexdigest(),
@@ -190,9 +193,8 @@ def provenance(output):
         'version': providers[0].version, 'native_file': str(path), 'sha256': digest.hex(),
         'matching_distribution_records': matches}}
     (output/'build-provenance.json').write_text(json.dumps(data, indent=2)+'\n', encoding='utf-8')
-    from tempo_release import REPORT_SCHEMA, REQUIRED_CHECKS
     (output/'verification-contract.json').write_text(json.dumps(dict(
-        schema_version=REPORT_SCHEMA, commit=data['commit'], lock_sha256=data['lock_sha256'],
+        schema_version=REPORT_SCHEMA, version=VERSION, commit=data['commit'], lock_sha256=data['lock_sha256'],
         required_checks=list(REQUIRED_CHECKS)), indent=2)+'\n', encoding='utf-8')
     (output/'pip-freeze.txt').write_text(subprocess.check_output([sys.executable, '-m', 'pip', 'freeze', '--all'], text=True), encoding='utf-8')
     return 0

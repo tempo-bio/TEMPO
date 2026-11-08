@@ -34,17 +34,18 @@ These checks do not connect to microscope hardware, use real collaborator accoun
 | `Windows_test_evidence` | Regression output and machine-readable results | 7 days |
 | `Windows_prebuild_evidence` | Source checks and interface captures | 3 days |
 | `Windows_bundle_evidence` | Packaged-runtime checks and bundler diagnostics | 3 days |
+| `Windows_release_bundle` | Exact verified CPU folder and versioned verification reports for stable-channel assembly | 7 days |
 | `Windows_build_evidence` | Collected build reports, logs, and captures | 7 days |
 | `Windows_install_evidence` | Fresh-runner installation, runtime, and uninstall reports | 7 days |
 | `velopack-production-feature-candidate` | Production-feature updater, source/patch identity and native fixture linkage; unverified adoption pin | 7 days |
 | `Windows_velopack_candidate_payload` | Three same-source full-app packaging revisions, original setup executables, deltas, test companion, public test key and exact artifact contract | 7 days |
 | `Windows_velopack_candidate_evidence` | Installed diagnostics, replacement/recovery/migration/uninstall results and exact artifact acceptance gate | 7 days |
 
-Download the payload before expiry. Keep the installer, checksum, and provenance together. The filename `TEMPO_Setup_v1.0.1.exe` alone does not identify which test build produced it. The workflow does not publish release assets.
+Download the payload before expiry. Keep the installer, checksum, and provenance together. Identify a test build by its source commit and installer checksum. Publication is a separate step.
 
 Velopack candidate artifacts use disposable test trust and must not be distributed to collaborators or uploaded to the update feed. Expiring workflow artifacts do not satisfy durable retention for a user release or its repair packages.
 
-The NVIDIA runtime is split into sequential `TEMPO_NVIDIA_Runtime_v1.0.1.zip.part001`, `.part002`, etc., each no larger than 1 GiB. Publish **every part named by `nvidia-runtime.json`** to the matching release tag, preserving filenames. Publish that descriptor alongside them for maintainers. Do not upload the outer Actions artifact ZIP or concatenate the parts into a single release asset: the complete runtime exceeds GitHub's individual file-size limit. Before publication, verify the downloaded artifact with:
+The NVIDIA runtime is split into sequential parts, each no larger than 1 GiB. Publish **every part named by `nvidia-runtime.json`** to the matching release tag, preserving filenames. Publish that descriptor alongside them for maintainers. Do not upload the outer Actions artifact ZIP or concatenate the parts into a single release asset: the complete runtime exceeds GitHub's individual file-size limit. Before publication, verify the downloaded artifact with:
 
 ```powershell
 python -m scripts.package_nvidia_runtime --verify-descriptor path/to/nvidia-runtime.json --commit FULL_TESTED_COMMIT

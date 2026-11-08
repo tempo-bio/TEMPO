@@ -1,8 +1,10 @@
 ; Inno Setup Script for TEMPO
-; Builds the Windows installer TEMPO_Setup_v1.0.1.exe.
+; Builds the Windows installer for the version passed by the release build.
 
 #define MyAppName "TEMPO"
-#define MyAppVersion "1.0.1"
+#ifndef MyAppVersion
+  #error Pass the TEMPO application version with /DMyAppVersion.
+#endif
 #define MyAppPublisher "TEMPO"
 #define MyAppURL "https://github.com/tempo-bio/TEMPO"
 #define MyAppExeName "TEMPO.exe"

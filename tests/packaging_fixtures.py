@@ -61,10 +61,11 @@ def stage_spec_inputs(source, target):
     output.mkdir()
     (output/'third-party-licenses').mkdir()
     (output/'build-provenance.json').write_text(json.dumps({'commit': 'a'*40, 'profile': 'cpu'}))
+    from tempo_release import VERSION
     (output/'nvidia-runtime.json').write_text(json.dumps({
-        'schema_version': 2, 'profile': 'nvidia-cu126', 'app_version': '1.0.1',
+        'schema_version': 2, 'profile': 'nvidia-cu126', 'app_version': VERSION,
         'commit': 'a'*40, 'archive_size': 1, 'archive_sha256': 'b'*64,
-        'parts': [{'url': 'https://github.com/tempo-bio/TEMPO/releases/download/v1.0.1/TEMPO_NVIDIA_Runtime_v1.0.1.zip.part001',
+        'parts': [{'url': f'https://github.com/tempo-bio/TEMPO/releases/download/v{VERSION}/TEMPO_NVIDIA_Runtime_v{VERSION}.zip.part001',
                    'size': 1, 'sha256': 'b'*64}],
         'executable': 'TEMPO/TEMPO.exe', 'executable_sha256': 'c'*64,
     }))

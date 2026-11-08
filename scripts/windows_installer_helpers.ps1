@@ -13,6 +13,9 @@ function Assert-Verification($Report, $Contract) {
     if ($Report.schema_version -ne $Contract.schema_version -or $Report.commit -ne $Contract.commit) {
         throw 'Missing or mismatched verification identity'
     }
+    if ($Contract.version -and $Report.version -cne $Contract.version) {
+        throw 'Installed executable version differs from the build contract'
+    }
     if ($Report.frozen -ne $true -or $Report.success -ne $true -or @($Report.failures).Count -ne 0) {
         throw 'Installed executable verification failed'
     }
