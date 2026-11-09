@@ -95,6 +95,24 @@ def run_windows(command, env, *, timeout=600):
 
 
 @contextmanager
+def trial_directory(parent, prefix):
+    directory = Path(tempfile.mkdtemp(dir=parent, prefix=prefix))
+    try:
+        yield directory
+    finally:
+        deadline = time.monotonic() + 60
+        while True:
+            try:
+                shutil.rmtree(directory)
+            except PermissionError as error:
+                if getattr(error, 'winerror', None) != 32 or time.monotonic() >= deadline:
+                    raise
+                time.sleep(.2)
+            else:
+                break
+
+
+@contextmanager
 def installed_trial(trial, contract, directory):
     """Install into a fresh profile on the disposable CI runner."""
     import winreg
@@ -129,6 +147,14 @@ def installed_trial(trial, contract, directory):
     run_windows([repair, '--mode', 'uninstall'], env)
     if root.exists() or state.read_bytes() != b'Test recording outside the installation':
         raise ValueError('Uninstall did not retire the trial installation or preserve the sample recording.')
+    # The pinned updater moves the old installation aside, then cleans it up
+    # in a detached process. Keep its parent available until that finishes.
+    retired = f'.{PACKAGE_ID}.tempo-uninstalled-*'
+    deadline = time.monotonic() + 60
+    while any(root.parent.glob(retired)):
+        if time.monotonic() >= deadline:
+            raise TimeoutError('The detached uninstaller did not finish retiring the trial installation.')
+        time.sleep(.2)
 
 
 def require_startup(report, release):
@@ -211,10 +237,8 @@ def verify(trial, patcher, report_path):
         return package, base, release
 
     try:
-        with tempfile.TemporaryDirectory(prefix='.tempo-trial-verify-', dir=trial.parent) as temp:
-            root = Path(temp)
-            with tempfile.TemporaryDirectory(prefix='sequence-', dir=root) as sequence:
-                sequence = Path(sequence)
+        with trial_directory(trial.parent, '.tempo-trial-verify-') as root:
+            with trial_directory(root, 'sequence-') as sequence:
                 with installed_trial(trial, contract, sequence / 'installation') as installed:
                     first, base, target = exercise('first-update', a, b, initial, 'patch', root=sequence / 'first')
                     replace_or_repair(trial, installed, base, initial, target, first, keys,
@@ -230,8 +254,7 @@ def verify(trial, patcher, report_path):
                 ('reconstruction-fallback', 'invalid-reconstruction', b, initial, 'patch', 'reconstruction', None),
                 ('download-recovery-base', 'first-update', b, None, 'full', None, None),
             ):
-                with tempfile.TemporaryDirectory(prefix='case-', dir=root) as scenario:
-                    scenario = Path(scenario)
+                with trial_directory(root, 'case-') as scenario:
                     package, base, release = exercise(index, a, target, cached, kind, failure=failure,
                                                        fail_asset=failed_asset, root=scenario / name)
                     if name in ('skip', 'reconstruction-fallback'):
