@@ -302,7 +302,6 @@ function Apply-Revision($Base, $Target, [string]$Label) {
             }
             foreach ($asset in @($target.full,$target.installer)) { Assert-File (Join-Path $Payload $asset.path) $asset }
             $legacySource = @{
-                url='https://github.com/tempo-bio/TEMPO/releases/download/v1.0.1/TEMPO_Setup_v1.0.1.exe'
                 installer_sha256='5f462548ef2c086140c91b207c6b67679f45b72f35f4432dee727107536381a4'
                 executable_sha256='f9daa9029e7949ec052853abe6c0d2d59c664c2b36e1fc2155f59913e5fdb030'
             }
@@ -315,14 +314,17 @@ function Apply-Revision($Base, $Target, [string]$Label) {
         }
         Assert-Installed $target
         $legacy=Join-Path $profile 'old custom installation é'
-        $oldInstaller=Join-Path $Evidence 'published-v1.0.1-Setup.exe'
-        $ProgressPreference='SilentlyContinue'
-        Invoke-WebRequest $legacySource.url -OutFile $oldInstaller -MaximumRetryCount 3 -RetryIntervalSec 5
+        if ($releaseMigration) {
+            $oldInstaller = Join-Path $Payload 'TEMPO_Setup_v1.0.1.exe'
+        } else {
+            $oldInstaller = Join-Path $Evidence 'published-v1.0.1-Setup.exe'
+            $ProgressPreference = 'SilentlyContinue'
+            Invoke-WebRequest $legacySource.url -OutFile $oldInstaller -MaximumRetryCount 3 -RetryIntervalSec 5
+        }
         if ((Get-FileHash $oldInstaller -Algorithm SHA256).Hash.ToLowerInvariant() -ne $legacySource.installer_sha256) { throw 'Published legacy installer checksum mismatch' }
         $legacySetupArgs = @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/SP-', '/TASKS=desktopicon',"/DIR=`"$legacy`"")
         if ($LegacyBridge) {
-            $bridgeInstaller = Join-Path $Evidence 'published-v1.0.0-Setup.exe'
-            Invoke-WebRequest 'https://github.com/tempo-bio/TEMPO/releases/download/v1.0.0/TEMPO_Setup_v1.0.0.exe' -OutFile $bridgeInstaller -MaximumRetryCount 3 -RetryIntervalSec 5
+            $bridgeInstaller = Join-Path $Payload 'TEMPO_Setup_v1.0.0.exe'
             $result.bridge_installer_sha256 = (Get-FileHash $bridgeInstaller -Algorithm SHA256).Hash.ToLowerInvariant()
             if ($result.bridge_installer_sha256 -cne '5e2e94e0a9323ff88606fc31032a7f2aa95d89bb675750784d69d02be1dc27f4') {
                 throw 'Published v1.0.0 installer checksum mismatch'

@@ -574,7 +574,6 @@ jobs:
         migration: [direct, bridge]
     env:
       RELEASE_COMMIT: 4dc336fc8b655ed347a6a1e37a0ae944bf3502e3
-      RELEASE_URL: https://github.com/tempo-bio/TEMPO/releases/download/v1.0.2
     steps:
       - name: Check the release tag
         env:
@@ -591,7 +590,10 @@ jobs:
           run-id: '42471873273'
           name: TEMPO_v1.0.2_stable_channel
           path: payload
-      - name: Verify the contracts and fetch the public downloads
+      - name: Verify the contracts and fetch the published files
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MIGRATION_PATH: ${{ matrix.migration }}
         run: |
           $contractHash = (Get-FileHash payload/release-contract.json -Algorithm SHA256).Hash.ToLowerInvariant()
           if ($contractHash -cne 'cef0a7ae7e69ead8b562427dad01a11123e317113e67d366a384e076f0a95a65') {
@@ -601,9 +603,20 @@ jobs:
           if ($diagnosticsHash -cne 'e9682278ddf68c08ad31c02c9c6e50d47030a26ffab10196da174aa3993dd0a0') {
             throw 'Diagnostics contract differs from the Windows smoke test'
           }
-          $ProgressPreference = 'SilentlyContinue'
-          foreach ($name in @('TEMPO_Setup_v1.0.2.exe','TEMPO.Bio.Desktop-1.0.2-full.nupkg','TEMPORepair.exe','tempo-update-v1.0.2.json')) {
-            Invoke-WebRequest "$env:RELEASE_URL/$name" -OutFile "payload/$name" -MaximumRetryCount 3 -RetryIntervalSec 5
+          function Get-ReleaseFiles([string]$Tag, [string[]]$Files) {
+            $arguments = @('release','download',$Tag,'--repo','tempo-bio/TEMPO','--dir','payload','--clobber')
+            foreach ($file in $Files) { $arguments += @('--pattern',$file) }
+            for ($attempt = 1; $attempt -le 3; $attempt++) {
+              & gh @arguments
+              if ($LASTEXITCODE -eq 0) { return }
+              if ($attempt -lt 3) { Start-Sleep -Seconds (5 * $attempt) }
+            }
+            throw "Could not download the required $Tag release files"
+          }
+          Get-ReleaseFiles 'v1.0.2' @('TEMPO_Setup_v1.0.2.exe','TEMPO.Bio.Desktop-1.0.2-full.nupkg','TEMPORepair.exe','tempo-update-v1.0.2.json')
+          Get-ReleaseFiles 'v1.0.1' @('TEMPO_Setup_v1.0.1.exe')
+          if ($env:MIGRATION_PATH -ceq 'bridge') {
+            Get-ReleaseFiles 'v1.0.0' @('TEMPO_Setup_v1.0.0.exe')
           }
       - name: Run the upgrade with the published installer
         env:
