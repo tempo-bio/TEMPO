@@ -96,16 +96,17 @@ def run_windows(command, env, *, timeout=600):
 
 @contextmanager
 def trial_directory(parent, prefix):
-    directory = Path(tempfile.mkdtemp(dir=parent, prefix=prefix))
+    # TemporaryDirectory resets read-only Windows shell files and directories.
+    temporary = tempfile.TemporaryDirectory(dir=parent, prefix=prefix)
     try:
-        yield directory
+        yield Path(temporary.name)
     finally:
         deadline = time.monotonic() + 60
         while True:
             try:
-                shutil.rmtree(directory)
+                temporary.cleanup()
             except PermissionError as error:
-                if getattr(error, 'winerror', None) != 32 or time.monotonic() >= deadline:
+                if getattr(error, 'winerror', None) not in (5, 32) or time.monotonic() >= deadline:
                     raise
                 time.sleep(.2)
             else:
