@@ -88,7 +88,7 @@ def check_payload(package, source_inventory, updater_hash, commit, *, release_co
     return inventory
 
 
-def signed_fixture(package, inventory, version, commit, sequence, key):
+def signed_fixture(package, inventory, version, commit, sequence, key, *, patches=()):
     public = key.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
     asset = file_record(package)
     asset['name'] = asset.pop('path')
@@ -96,7 +96,7 @@ def signed_fixture(package, inventory, version, commit, sequence, key):
     obj = dict(schema_version=1, package_id=PACKAGE_ID, version=version, commit=commit,
                architecture=ARCHITECTURE, channel='prerelease', sequence=sequence,
                expires_at=(datetime.now(timezone.utc) + timedelta(days=14)).strftime('%Y-%m-%dT%H:%M:%SZ'),
-               full=asset, inventory=inventory, patches=[], minimum_updater_version='1.2.161',
+               full=asset, inventory=inventory, patches=list(patches), minimum_updater_version='1.2.161',
                storage_schema_version=1)
     envelope = dict(signed=obj, signatures=[dict(key_id='acceptance-only',
         signature=base64.b64encode(key.sign(_canonical(obj))).decode('ascii'))])
