@@ -7,6 +7,10 @@ on:
         description: 'Exact application release tag (for example v1.0.2)'
         required: true
         type: string
+      test_published_migration:
+        description: 'Test upgrades to the published v1.0.2 installer'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -24,6 +28,7 @@ env:
 
 jobs:
   preflight:
+    if: ${{ !inputs.test_published_migration }}
     uses: ./.github/workflows/windows-preflight.yml
 
   velopack-native:
@@ -542,7 +547,7 @@ jobs:
   certify:
     name: Certify every required Windows gate
     needs: [preflight, validate-source, build-windows, verify-installed, velopack-native, verify-velopack, replay-velopack]
-    if: ${{ always() }}
+    if: ${{ always() && !inputs.test_published_migration }}
     runs-on: windows-2025
     steps:
       - name: Require complete build and clean installation success
@@ -557,3 +562,67 @@ jobs:
         run: |
           if ($env:PREFLIGHT_RESULT -ne 'success' -or $env:SOURCE_RESULT -ne 'success' -or $env:BUILD_RESULT -ne 'success' -or $env:INSTALL_RESULT -ne 'success' -or $env:NATIVE_RESULT -ne 'success' -or $env:VELOPACK_RESULT -ne 'success' -or $env:REPLAY_RESULT -ne 'success') { throw 'Windows build acceptance failed or required checks were skipped' }
           "Windows build checks passed for: $env:GITHUB_SHA. Velopack remains an unpublished, disabled candidate; this does not certify native adoption or rollout." >> $env:GITHUB_STEP_SUMMARY
+
+  verify-published-migration:
+    name: Test migration to the published Windows installer
+    if: ${{ inputs.test_published_migration }}
+    runs-on: windows-2025
+    timeout-minutes: 50
+    strategy:
+      fail-fast: false
+      matrix:
+        migration: [direct, bridge]
+    env:
+      RELEASE_COMMIT: 4dc336fc8b655ed347a6a1e37a0ae944bf3502e3
+      RELEASE_URL: https://github.com/tempo-bio/TEMPO/releases/download/v1.0.2
+    steps:
+      - name: Check the release tag
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          if ($env:RELEASE_TAG -cne 'v1.0.2') { throw 'Published migration testing requires release tag v1.0.2' }
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Retrieve the original release and diagnostics contracts
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          github-token: ${{ github.token }}
+          run-id: '42471873273'
+          name: TEMPO_v1.0.2_stable_channel
+          path: payload
+      - name: Verify the contracts and fetch the public downloads
+        run: |
+          $contractHash = (Get-FileHash payload/release-contract.json -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($contractHash -cne 'cef0a7ae7e69ead8b562427dad01a11123e317113e67d366a384e076f0a95a65') {
+            throw 'Release contract differs from the Windows smoke test'
+          }
+          $diagnosticsHash = (Get-FileHash payload/verification-contract.json -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($diagnosticsHash -cne 'e9682278ddf68c08ad31c02c9c6e50d47030a26ffab10196da174aa3993dd0a0') {
+            throw 'Diagnostics contract differs from the Windows smoke test'
+          }
+          $ProgressPreference = 'SilentlyContinue'
+          foreach ($name in @('TEMPO_Setup_v1.0.2.exe','TEMPO.Bio.Desktop-1.0.2-full.nupkg','TEMPORepair.exe','tempo-update-v1.0.2.json')) {
+            Invoke-WebRequest "$env:RELEASE_URL/$name" -OutFile "payload/$name" -MaximumRetryCount 3 -RetryIntervalSec 5
+          }
+      - name: Run the upgrade with the published installer
+        env:
+          MIGRATION_PATH: ${{ matrix.migration }}
+        run: |
+          $bridge = $env:MIGRATION_PATH -ceq 'bridge'
+          ./scripts/verify_velopack_install.ps1 -Mode release-migration -Payload payload -Evidence evidence -SourceCommit $env:RELEASE_COMMIT -ReleaseManifestSha256 89bbbdb9649f17a37ef7d8be87bb68b2a7fb7bbf1f42de5e46567c8accef9115 -LegacyBridge:$bridge
+      - name: Retain migration results
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: TEMPO_v1.0.2_migration_${{ matrix.migration }}
+          retention-days: 14
+          path: |
+            evidence/*-result.json
+            evidence/*-verification.json
+            evidence/*-verification-probes/**/*.json
+            evidence/*-shell-folders.json
+            evidence/preserved-state.json
+            evidence/**/legacy-migration/*.json
+            evidence/**/*.log
+          if-no-files-found: warn
