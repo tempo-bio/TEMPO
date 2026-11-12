@@ -108,6 +108,12 @@
     "reason": "Synthetic Git author address on a reserved test domain for isolated updater repositories."
   },
   {
+    "path": "scripts/prepare_windows_update_trial.py",
+    "rule": "email",
+    "sha256": "7b712258b5e266773b55e290039443a2f65c4ee53a68886476284807220007e8",
+    "reason": "Synthetic Git author address on a reserved test domain for isolated signed update trials."
+  },
+  {
     "path": "assets/licenses/pyserial/LICENSE",
     "rule": "email",
     "sha256": "c8b9bfbb62628f1dc90a8c365e9334d966e429688ca762ca19bcaa97ad023381",
