@@ -7,6 +7,12 @@ on:
         description: 'Exact application release tag (for example v1.0.2)'
         required: true
         type: string
+      assemble_build_run:
+        description: 'Completed Windows release build run ID to assemble and smoke-test'
+        type: string
+      assemble_source_commit:
+        description: 'Exact source commit of the reviewed build run'
+        type: string
       test_published_migration:
         description: 'Test upgrades to the published v1.0.2 installer'
         type: boolean
@@ -38,7 +44,7 @@ env:
 
 jobs:
   preflight:
-    if: ${{ !inputs.test_published_migration && !inputs.test_signed_updates }}
+    if: ${{ inputs.assemble_build_run == '' && !inputs.test_published_migration && !inputs.test_signed_updates }}
     uses: ./.github/workflows/windows-preflight.yml
 
   velopack-native:
@@ -557,7 +563,7 @@ jobs:
   certify:
     name: Certify every required Windows gate
     needs: [preflight, validate-source, build-windows, verify-installed, velopack-native, verify-velopack, replay-velopack]
-    if: ${{ always() && !inputs.test_published_migration && !inputs.test_signed_updates }}
+    if: ${{ always() && inputs.assemble_build_run == '' && !inputs.test_published_migration && !inputs.test_signed_updates }}
     runs-on: windows-2025
     steps:
       - name: Require complete build and clean installation success
@@ -836,4 +842,191 @@ jobs:
             Output/trial-*-startup.json
             Output/trial-*-startup.log
           retention-days: 14
+          if-no-files-found: warn
+
+  assemble:
+    name: Assemble the stable-channel Windows installer
+    if: ${{ inputs.assemble_build_run != '' && !inputs.test_published_migration && !inputs.test_signed_updates }}
+    env:
+      BUILD_RUN: ${{ inputs.assemble_build_run }}
+      BUILD_COMMIT: ${{ inputs.assemble_source_commit }}
+      RELEASE_TAG: ${{ inputs.release_tag }}
+    runs-on: windows-2025
+    timeout-minutes: 65
+    steps:
+      - name: Confirm the completed source build
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if ($env:BUILD_RUN -cnotmatch '^[0-9]+$' -or $env:BUILD_COMMIT -cnotmatch '^[0-9a-f]{40}$') {
+              throw 'Supply the exact Windows build run ID and full commit SHA'
+          }
+          $run = Invoke-RestMethod -Uri "$env:GITHUB_API_URL/repos/$env:GITHUB_REPOSITORY/actions/runs/$env:BUILD_RUN" -Headers @{
+              Authorization = "Bearer $env:GH_TOKEN"
+              Accept = 'application/vnd.github+json'
+          }
+          if ($run.head_sha -cne $env:BUILD_COMMIT -or $run.repository.full_name -cne $env:GITHUB_REPOSITORY -or
+              $run.head_branch -cne $env:GITHUB_REF_NAME -or $run.event -cne 'workflow_dispatch' -or
+              $run.path -cne '.github/workflows/release-windows.yml' -or $run.conclusion -cne 'success') {
+              throw 'The run is not a successful Windows release build for this branch and commit'
+          }
+      - name: Preserve pinned source and patch bytes
+        run: git config --global core.autocrlf false
+      - name: Check out the tested source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ env.BUILD_COMMIT }}
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.13.16'
+          architecture: x64
+      - uses: actions/setup-dotnet@d4c94342e560b34958eacfc5d055d21461ed1c5d
+        with:
+          dotnet-version: '8.0.413'
+      - name: Download build inputs and reviewed evidence
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ env.BUILD_RUN }}
+          pattern: '{Windows_release_bundle,velopack-production-feature-candidate,velopack-native-candidate-evidence,Windows_velopack_candidate_evidence,Windows_velopack_candidate_replay_evidence,Windows_test_evidence}'
+          path: inputs
+      - name: Install locked packaging dependencies and fetch the pinned packager
+        run: |
+          python -m pip install --require-hashes --no-deps -r tests/fixtures/velopack/requirements-windows.lock
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $ProgressPreference = 'SilentlyContinue'
+          Invoke-WebRequest 'https://github.com/velopack/velopack/releases/download/1.2.161/vpk.1.2.161.nupkg' -OutFile vpk.nupkg
+          if ((Get-FileHash vpk.nupkg -Algorithm SHA256).Hash.ToLowerInvariant() -cne '2b56ce117f803fc70c103cb423bd040e395e40370f6ff6e10818e9ff9c26a323') {
+              throw 'Packager checksum mismatch'
+          }
+      - name: Verify source and binary identities and build the repair companion
+        run: |
+          @'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          import subprocess
+          import sys
+
+          def read(path):
+              return json.loads(path.read_bytes())
+
+          def digest(path):
+              with path.open("rb") as file:
+                  return hashlib.file_digest(file, "sha256").hexdigest()
+
+          def require(condition, description):
+              if not condition:
+                  raise SystemExit(description)
+
+          from tempo_release import VERSION
+
+          commit = os.environ["BUILD_COMMIT"]
+          require(os.environ["RELEASE_TAG"] == "v" + VERSION, "Release tag differs from the tested application version")
+          require(subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip() == commit,
+                  "Release source differs from the tested commit")
+          inputs = Path("inputs")
+          native = inputs / "velopack-production-feature-candidate"
+          bins = native / "production-target/x86_64-pc-windows-msvc/release"
+          updater, setup = bins / "update.exe", bins / "setup.exe"
+          identity = read(native / "native-candidate.json")
+          pin = read(Path("installer/velopack/pin.json"))
+          require(identity["source_commit"] == commit
+                  and str(identity["workflow_run_id"]) == os.environ["BUILD_RUN"]
+                  and identity["upstream_commit"] == pin["upstream_commit"]
+                  and identity["patch_sha256"] == pin["patch_sha256"]
+                  and identity["fixture_passed"] is True and identity["production_passed"] is True
+                  and digest(updater) == identity["updater_sha256"]
+                  and digest(setup) == identity["setup_sha256"],
+                  "Native candidate evidence differs from the exact updater/setup bytes")
+
+          raw = inputs / "velopack-native-candidate-evidence"
+          fixture_path, production_path = raw / "fixture-results.json", raw / "production-results.json"
+          for report, switches in ((fixture_path, []), (production_path, ["--production"])):
+              subprocess.run([sys.executable, "tests/fixtures/velopack/recovery_gate.py", str(report), *switches], check=True)
+          production = read(production_path)
+          require(production["updater_sha256"] == identity["updater_sha256"]
+                  and production["setup_sha256"] == identity["setup_sha256"],
+                  "Production recovery was run with different binaries")
+
+          full_reports = []
+          for name in ("Windows_velopack_candidate_evidence", "Windows_velopack_candidate_replay_evidence"):
+              folder = inputs / name
+              contract_path = folder / "payload/candidate-contract.json"
+              report = folder / "evidence/gate-result.json"
+              contract = read(contract_path)
+              observed = read(report)
+              require(observed["contract_sha256"] == digest(contract_path)
+                      and contract["source_commit"] == commit
+                      and observed["source_commit"] == commit and observed["success"] is True
+                      and observed["release_certified"] is False,
+                      "Full-app evidence failed or describes a different build")
+              full_reports.append(report)
+          source_report = inputs / "Windows_test_evidence/unittest-results.json"
+          require(read(source_report)["success"] is True, "Windows source regressions did not pass")
+
+          public = Path("stable-public-keys.json")
+          public.write_bytes(b'{"tempo-stable-1": "4G5Gdmfrxu5bbK14sLuFla3XOGsimiEtFPtQcHqJ28Q="}\n')
+          require(digest(public) == "92f5a51b932c66d4b3fc0a4b88491405ea231e83e5167219666433bb0e8d91d7",
+                  "Public key file differs from the reviewed release trust map")
+          subprocess.run([sys.executable, "-m", "scripts.build_update_repair", "--public-keys", str(public),
+                          "--native-updater", str(updater), "--dist", "tools", "--work", "repair-work"], check=True)
+          repair = Path("tools/TEMPORepair.exe")
+          reviewed = dict(pin, certification_status="certified", updater_sha256=identity["updater_sha256"])
+          Path("reviewed-pin.json").write_text(json.dumps(reviewed, sort_keys=True), encoding="utf-8")
+          evidence = {
+              "schema_version": 1, "source_commit": commit, "workflow_run_id": os.environ["BUILD_RUN"],
+              "upstream_commit": pin["upstream_commit"], "patch_sha256": pin["patch_sha256"],
+              "updater_sha256": digest(updater), "setup_sha256": digest(setup),
+              "repair_sha256": digest(repair), "public_keys_sha256": digest(public),
+              "checks": dict.fromkeys(pin["required_checks"], True),
+              "reports": {
+                  "native_faults": digest(fixture_path), "native_production": digest(production_path),
+                  "full_app": digest(full_reports[0]), "full_app_replay": digest(full_reports[1]),
+                  "source_regressions": digest(source_report),
+              },
+          }
+          Path("native-evidence.json").write_text(json.dumps(evidence, sort_keys=True), encoding="utf-8")
+          '@ | python -
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Assemble the stable-channel installer from the verified CPU bundle
+        run: |
+          $bundle = 'inputs/Windows_release_bundle'
+          $contract = 'inputs/Windows_velopack_candidate_evidence/payload/candidate-contract.json'
+          $tools = 'inputs/velopack-production-feature-candidate/production-target/x86_64-pc-windows-msvc/release'
+          python -m scripts.build_velopack_release --bundle "$bundle/dist/TEMPO" --build-contract $contract --verification "$bundle/Output/verification-contract.json" --runtime-report "$bundle/Output/portable-verification.json" --vpk-archive vpk.nupkg --native-updater "$tools/update.exe" --setup "$tools/setup.exe" --public-keys stable-public-keys.json --repair-executable tools/TEMPORepair.exe --certification native-evidence.json --native-pin reviewed-pin.json --output assembled
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Copy-Item stable-public-keys.json,reviewed-pin.json,native-evidence.json,"$tools/update.exe","$tools/setup.exe" assembled/
+      - name: Retain the exact installer and its inputs
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: TEMPO_${{ inputs.release_tag }}_stable_channel
+          path: assembled/
+          compression-level: 0
+          retention-days: 7
+          if-no-files-found: error
+
+  smoke:
+    name: Smoke-test the exact stable-channel Windows installer
+    needs: assemble
+    env:
+      BUILD_COMMIT: ${{ inputs.assemble_source_commit }}
+    runs-on: windows-2025
+    timeout-minutes: 40
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: TEMPO_${{ inputs.release_tag }}_stable_channel
+          path: payload
+      - name: Install, exercise, and remove the exact stable-channel installer
+        run: ./payload/verify_velopack_install.ps1 -Mode release-smoke -Payload payload -Evidence evidence -SourceCommit $env:BUILD_COMMIT
+      - name: Retain clean-runner evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: TEMPO_${{ inputs.release_tag }}_release_smoke
+          path: evidence/
+          retention-days: 7
           if-no-files-found: warn
