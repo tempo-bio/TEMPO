@@ -4,7 +4,8 @@ param(
     [Parameter(Mandatory)][string]$Evidence,
     [ValidatePattern('^[0-9a-f]{40}$')][string]$SourceCommit = $env:GITHUB_SHA,
     [ValidatePattern('^[0-9a-f]{64}$')][string]$ReleaseManifestSha256,
-    [switch]$LegacyBridge
+    [switch]$LegacyBridge,
+    [switch]$LegacyUninstallLeftovers
 )
 $ErrorActionPreference = 'Stop'
 New-Item -ItemType Directory -Force $Evidence | Out-Null
@@ -18,6 +19,9 @@ $releaseMigration = $Mode -eq 'release-migration'
 $releasePayload = $releaseSmoke -or $releaseMigration
 if (($LegacyBridge -or $ReleaseManifestSha256) -and -not $releaseMigration) {
     throw 'Release migration options require release-migration mode'
+}
+if ($LegacyUninstallLeftovers -and -not $releaseSmoke) {
+    throw 'Legacy uninstall leftovers require release-smoke mode'
 }
 $contractName = if ($releasePayload) { 'release-contract.json' } else { 'candidate-contract.json' }
 $contractPath = Join-Path $Payload $contractName
@@ -276,10 +280,20 @@ function Apply-Revision($Base, $Target, [string]$Label) {
         ConvertTo-Json -InputObject @(@{path=$stateFile;size=(Get-Item $statePath).Length;
             sha256=(Get-FileHash -LiteralPath $statePath).Hash.ToLowerInvariant()}) |
             Set-Content (Join-Path $Evidence 'preserved-state.json') -Encoding utf8NoBOM
+        if ($LegacyUninstallLeftovers) {
+            $oldDraft = Join-Path $env:LOCALAPPDATA 'Programs\TEMPO\_internal\datasets\workspace\draft.json'
+            $recoveredDraft = Join-Path $state 'collaboration\workspace\draft.json'
+            New-Item -ItemType Directory -Force (Split-Path $oldDraft) | Out-Null
+            [IO.File]::WriteAllText($oldDraft, '{"boxes":[]}')
+            $draftHash = (Get-FileHash -LiteralPath $oldDraft -Algorithm SHA256).Hash
+        }
         Invoke-Bounded $installer @('--silent','--log',"`"$(Join-Path $Evidence 'release-setup.log')`"",
             '--installto',"`"$root`"") 600
         Assert-Installed $revision
         Invoke-Diagnostics 'release-installed'
+        if ($LegacyUninstallLeftovers -and (Get-FileHash -LiteralPath $recoveredDraft -Algorithm SHA256).Hash -cne $draftHash) {
+            throw 'Packaged startup did not recover the leftover draft'
+        }
         Invoke-Bounded (Join-Path $root 'current\TEMPORepair.exe') @('--help') 120
         Assert-State
         Invoke-Bounded (Join-Path $root 'Update.exe') @('uninstall','--silent','--log',
@@ -290,6 +304,14 @@ function Apply-Revision($Base, $Target, [string]$Label) {
             updater_sha256=$contract.updater_sha256}
         $result.scenarios = @{fresh_install=$true;frozen_runtime=$true;repair_entrypoint=$true;
             uninstall_preserves_external_state=$true}
+        if ($LegacyUninstallLeftovers) {
+            foreach ($draft in @($oldDraft,$recoveredDraft)) {
+                if ((Get-FileHash -LiteralPath $draft -Algorithm SHA256).Hash -cne $draftHash) {
+                    throw 'The original or recovered draft changed after uninstall'
+                }
+            }
+            $result.scenarios.legacy_uninstall_leftovers_recovered=$true
+        }
     } elseif ($Mode -eq 'migration' -or $releaseMigration) {
         if ($releaseMigration) {
             foreach ($path in @($root,$registry) + $links) {

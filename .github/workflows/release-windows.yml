@@ -1016,17 +1016,25 @@ jobs:
     runs-on: windows-2025
     timeout-minutes: 40
     steps:
+      - name: Check out the reviewed smoke-test fixture
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: TEMPO_${{ inputs.release_tag }}_stable_channel
           path: payload
       - name: Install, exercise, and remove the exact stable-channel installer
         run: ./payload/verify_velopack_install.ps1 -Mode release-smoke -Payload payload -Evidence evidence -SourceCommit $env:BUILD_COMMIT
+      - name: Verify startup with data left by an older uninstall
+        run: ./scripts/verify_velopack_install.ps1 -Mode release-smoke -Payload payload -Evidence leftover-evidence -SourceCommit $env:BUILD_COMMIT -LegacyUninstallLeftovers
       - name: Retain clean-runner evidence
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: TEMPO_${{ inputs.release_tag }}_release_smoke
-          path: evidence/
+          path: |
+            evidence/
+            leftover-evidence/
           retention-days: 7
           if-no-files-found: warn
