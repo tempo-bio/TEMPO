@@ -289,7 +289,7 @@ class CaptureSession:
             field = self._field
             if field is None:
                 return
-            if timing_alignment is None:
+            if timing_alignment is None and not error:
                 if self.document.get('stimulated'):
                     service = self.pacer_service
                     if service is not None:

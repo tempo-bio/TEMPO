@@ -1365,7 +1365,12 @@ class CameraAcquisitionWorker(QThread):
                         if quality_pending is not None:
                             try: writer.metadata.setdefault('quality_assessments',[]).append(quality_pending.result(timeout=2))
                             except Exception as exc: writer.metadata['quality_error']=str(exc)
-                        alignment = self.capture_hooks[3]() if (self.capture_hooks and len(self.capture_hooks) > 3 and self.capture_hooks[3]) else None
+                        alignment = None
+                        if self.capture_hooks and len(self.capture_hooks) > 3 and self.capture_hooks[3]:
+                            try:
+                                alignment = self.capture_hooks[3]()
+                            except Exception as exc:
+                                error = error or f'Could not finalize stimulation timing: {exc}'
                         writer.close(error or '', timing_alignment=alignment)
                     else:
                         writer.release()
@@ -6061,16 +6066,17 @@ class AnalyzerTab(QWidget):
         self.cell_selector.addItem('Full Well', None)
         noun = 'groups' if self.measurement_selector.currentData() == 'group' else 'cells'
         self.cell_selector.setItemData(0, f'Show statistics across all {noun} in this well. The selected map view is retained.', Qt.ItemDataRole.ToolTipRole)
-        has_duplicate_cells = self.current_field_data['Cell_ID'].duplicated().any()
+        duplicate_cells = self.current_field_data['Cell_ID'].duplicated(keep=False)
         for index, row in self.current_field_data.iterrows():
             name = display_cell_name(row['Cell_ID'], row.get('Object_Type', 'cell'))
-            if identity is None and has_duplicate_cells:
+            if identity is None and duplicate_cells.at[index]:
                 field_label = str(row['FOV_ID']).removeprefix('FOV').lstrip('0') or str(row['FOV_ID'])
-                label = f"{name} (Field {field_label})"
+                label = f"{name} · Field {field_label} · {row['Recording_ID']}"
             else:
                 label = name
             self.cell_selector.addItem(label, int(index))
-            self.cell_selector.setItemData(self.cell_selector.count()-1, f"{name} · Field {row['FOV_ID']}", Qt.ItemDataRole.ToolTipRole)
+            self.cell_selector.setItemData(self.cell_selector.count()-1,
+                f"{name} · Field {row['FOV_ID']} · Recording {row['Recording_ID']}", Qt.ItemDataRole.ToolTipRole)
         self.cell_selector.setCurrentIndex(0)
         self.cell_selector.blockSignals(False)
         self.plot_item.setTitle('Full Well' if identity is None else f'Field {field}')

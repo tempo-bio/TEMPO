@@ -7,7 +7,7 @@ from pathlib import Path
 import sys
 import traceback
 
-VERSION = '1.0.2'
+VERSION = '1.0.3'
 
 
 def configure_verification_environment():

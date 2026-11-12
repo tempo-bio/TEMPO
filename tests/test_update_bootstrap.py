@@ -1,10 +1,14 @@
 """Storage publication requires exclusion of uncooperative legacy installations."""
+from contextlib import nullcontext
+import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from tempo_update_bootstrap import (StorageBootstrapError, bootstrap_packaged_storage,
                                     find_registered_legacy)
+from tempo_legacy_migration import legacy_writer_guard
 from tempo_update_storage import collaboration_base
 
 
@@ -87,23 +91,68 @@ class BootstrapTests(unittest.TestCase):
             self.run_bootstrap(Registry(denied={('machine', 2)}))
         self.assertFalse((self.profile / 'config/collaboration-location.json').exists())
 
-    def test_unregistered_default_data_blocks_without_changes(self):
-        data = self.legacy / 'datasets' / 'draft.json'
+    def test_unregistered_data_is_copied_and_published_in_both_legacy_layouts(self):
+        for prefix in ('', '_internal'):
+            with self.subTest(prefix=prefix), tempfile.TemporaryDirectory(dir=self.root) as folder:
+                profile = Path(folder) / 'TEMPO'
+                legacy = Path(folder) / 'Programs' / 'TEMPO'
+                data = legacy / prefix / 'datasets/workspace/draft.json'
+                data.parent.mkdir(parents=True)
+                data.write_text('unsynced legacy draft')
+                model = legacy / prefix / 'cellpose4_cardio.pt'
+                model.write_bytes(b'unknown model bytes')
+                model_root = profile / 'models'
+                guard_impl = legacy_writer_guard if os.name == 'nt' else lambda _: nullcontext()
+                with patch('tempo_legacy_migration.legacy_writer_guard', side_effect=guard_impl) as guard:
+                    result = bootstrap_packaged_storage(self.bundle, profile, registry=Registry(),
+                        legacy_default_root=legacy, model_root=model_root)
+                    self.assertEqual(result['pointer']['sources'], [str(data.parent.parent)])
+                    again = bootstrap_packaged_storage(self.bundle, profile, registry=Registry(),
+                        legacy_default_root=legacy, model_root=model_root)
+                    self.assertTrue(again['already_published'])
+                    guard.assert_called_once_with(legacy)
+                copy = profile / 'collaboration/workspace/draft.json'
+                self.assertEqual(copy.read_text(), 'unsynced legacy draft')
+                self.assertEqual(data.read_text(), copy.read_text())
+                self.assertEqual(model.read_bytes(), b'unknown model bytes')
+                self.assertFalse((model_root / model.name).exists())
+
+    def test_leftover_model_alone_does_not_block_startup_or_become_active(self):
+        model = self.legacy / '_internal' / 'cellpose4_cardio.pt'
+        model.parent.mkdir(parents=True)
+        model.write_bytes(b'unknown model bytes')
+        self.assertEqual(self.run_bootstrap()['status'], 'complete')
+        self.assertEqual(model.read_bytes(), b'unknown model bytes')
+        self.assertFalse((self.profile / 'models/repository' / model.name).exists())
+
+    def test_leftover_executable_or_active_writer_still_blocks(self):
+        data = self.legacy / 'datasets/draft.json'
         data.parent.mkdir(parents=True)
-        data.write_text('legacy')
-        with self.assertRaisesRegex(StorageBootstrapError, 'origin and active writers'):
+        data.write_text('draft')
+        executable = self.legacy / 'TEMPO.exe'
+        executable.write_bytes(b'orphaned application')
+        with self.assertRaisesRegex(StorageBootstrapError, 'unregistered installation'):
             self.run_bootstrap()
-        self.assertEqual(data.read_text(), 'legacy')
+        self.assertEqual(executable.read_bytes(), b'orphaned application')
+        executable.unlink()
+        with patch('tempo_legacy_migration.legacy_writer_guard', side_effect=BlockingIOError('Old app is running')):
+            with self.assertRaisesRegex(StorageBootstrapError, 'Old app is running'):
+                self.run_bootstrap()
+        self.assertEqual(data.read_text(), 'draft')
         self.assertFalse((self.profile / 'config/collaboration-location.json').exists())
 
-    def test_unregistered_internal_legacy_drafts_are_not_mistaken_for_fresh_install(self):
-        data = self.legacy / '_internal/datasets/workspace/draft.json'
-        data.parent.mkdir(parents=True)
-        data.write_text('unsynced legacy draft')
-        with self.assertRaisesRegex(StorageBootstrapError, 'origin and active writers'):
-            self.run_bootstrap()
-        self.assertEqual(data.read_text(), 'unsynced legacy draft')
-        self.assertFalse((self.profile / 'config/collaboration-location.json').exists())
+    def test_leftover_data_does_not_replace_an_already_published_store(self):
+        self.run_bootstrap()
+        current = self.profile / 'collaboration/draft.json'
+        current.write_text('current draft')
+        leftover = self.legacy / 'datasets/draft.json'
+        leftover.parent.mkdir(parents=True)
+        leftover.write_text('older draft')
+        with patch('tempo_legacy_migration.legacy_writer_guard', return_value=nullcontext()):
+            with self.assertRaisesRegex(StorageBootstrapError, 'additional older datasets'):
+                self.run_bootstrap()
+        self.assertEqual(current.read_text(), 'current draft')
+        self.assertEqual(leftover.read_text(), 'older draft')
 
     def test_models_are_verified_and_preserved_without_overwriting(self):
         source = self.bundle / 'yolo26n-scout.pt'

@@ -5,7 +5,7 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QKeySequence,QShortcut
 from PyQt6.QtWidgets import (QDialog,QVBoxLayout,QHBoxLayout,QLabel,QTableWidget,
     QTableWidgetItem,QHeaderView,QCheckBox,QLineEdit,QPushButton)
-from tempo_ui import ErrorDetails
+from tempo_ui import ErrorDetails, confirm_action
 from tempo_quality import dataset_decisions,decide_dataset
 from tempo_recording import sha256
 
@@ -26,7 +26,9 @@ class QualityReviewDialog(QDialog):
         note=QLabel('Flagged recordings are included unless you exclude them. Double-click any row or click Inspect to view that field on the map.')
         note.setWordWrap(True);layout.addWidget(note)
         beta=QLabel('Focus assessment is in beta.');beta.setStyleSheet('color: #99a3b0;');layout.addWidget(beta)
-        records=data.drop_duplicates('Recording_ID')
+        records=data.groupby('Recording_ID', sort=False, dropna=False)
+        locations=data.drop_duplicates('Recording_ID').reindex(columns=['Well_ID','FOV_ID'],fill_value='Unknown')
+        repeated_locations=set(locations[locations.duplicated(keep=False)].itertuples(index=False,name=None))
         self.table=QTableWidget(len(records),5)
         self.table.setHorizontalHeaderLabels(['Well & Field','Quality flags & issues','Include','Reason','Action'])
         self.table.horizontalHeader().setSectionResizeMode(0,QHeaderView.ResizeMode.Interactive)
@@ -39,12 +41,15 @@ class QualityReviewDialog(QDialog):
         self.rows=[]
         self.row_targets=[]
         history=dataset_decisions(csv_path)['recordings']
-        for index,(_,row) in enumerate(records.iterrows()):
-            recording=str(row['Recording_ID'])
+        for index,(recording,rec_cells) in enumerate(records):
+            recording=str(recording)
+            row=rec_cells.iloc[0]
             well=str(row.get('Well_ID','Unknown'))
             fov=str(row.get('FOV_ID','Unknown'))
             fov_clean=fov.removeprefix('FOV').lstrip('0') or fov
             location_text=f"Well {well} · Field {fov_clean}" if well!='Unknown' else recording
+            if well!='Unknown' and (well,fov) in repeated_locations:
+                location_text=f'{recording} · {location_text}'
             self.row_targets.append((well,fov,recording))
             labels={'focus_unavailable':'Focus unavailable','focus':'Focus', 'focus_override':'Focus override',
                     'focus_timeout':'Focus response timeout','nominal_timing':'Nominal frame timing',
@@ -53,22 +58,18 @@ class QualityReviewDialog(QDialog):
                     'possible_measurement_validity_effect':'Possible measurement-validity effect',
                     'saturation':'Saturation','inadequate_signal':'Inadequate signal',
                     'low_amplitude':'Low amplitude','irregular_beat':'Irregular beat'}
-            rec_cells=data[data['Recording_ID']==recording]
-            flagged_cells=rec_cells[rec_cells['Quality_Flags'].fillna('').astype(str).ne('')]
-            raw=str(row.get('Quality_Flags','Unknown'))
-            flags_list=[labels.get(flag,flag.replace('_',' ').capitalize()) for flag in raw.split(';') if flag.strip() and flag!='nan']
-            if flagged_cells.empty and not flags_list:
-                flags_display='None reported'
-            else:
-                flags_desc=', '.join(flags_list) if flags_list else 'Flagged'
-                if not flagged_cells.empty and len(flagged_cells)<len(rec_cells):
-                    cids=', '.join(str(cid) for cid in flagged_cells['Cell_ID'].head(2))
+            flags_display='Unknown'
+            if 'Quality_Flags' in rec_cells:
+                flags=rec_cells['Quality_Flags'].fillna('').astype(str).str.strip()
+                unique_flags=dict.fromkeys(flag.strip() for value in flags for flag in value.split(';') if flag.strip())
+                flags_display=', '.join(labels.get(flag,flag.replace('_',' ').capitalize()) for flag in unique_flags) or 'None reported'
+                flagged_cells=rec_cells.loc[flags.ne(''), 'Cell_ID'].drop_duplicates()
+                if 0 < len(flagged_cells) < rec_cells['Cell_ID'].nunique():
+                    cids=', '.join(map(str,flagged_cells.head(2)))
                     if len(flagged_cells)>2: cids+=f' +{len(flagged_cells)-2}'
-                    flags_display=f"{flags_desc} ({cids})"
-                else:
-                    flags_display=flags_desc
+                    flags_display=f'{flags_display} ({cids})'
             for column,text in ((0,location_text),(1,flags_display)):
-                item=QTableWidgetItem(text);item.setToolTip(f"Recording: {recording}\nWell: {well}\nField: {fov}")
+                item=QTableWidgetItem(text);item.setToolTip(text if column == 1 else f"Recording: {recording}\nWell: {well}\nField: {fov}")
                 item.setFlags(Qt.ItemFlag.ItemIsEnabled|Qt.ItemFlag.ItemIsSelectable)
                 self.table.setItem(index,column,item)
             check=InclusionCheckBox();check.setAccessibleName('Include '+recording)
@@ -81,7 +82,7 @@ class QualityReviewDialog(QDialog):
             self.table.setCellWidget(index,3,reason)
             btn_inspect=QPushButton('Inspect')
             btn_inspect.setToolTip(f'View Well {well}, Field {fov_clean} on map')
-            btn_inspect.clicked.connect(lambda _,w=well,f=fov: self.inspect_recording(w,f))
+            btn_inspect.clicked.connect(lambda _,w=well,f=fov,r=recording: self.inspect_recording(w,f,r))
             self.table.setCellWidget(index,4,btn_inspect)
             self.rows.append((recording,check,reason,included,reason.text()))
         self.table.cellDoubleClicked.connect(self._on_double_clicked)
@@ -96,31 +97,31 @@ class QualityReviewDialog(QDialog):
 
     def _on_double_clicked(self,row,_col):
         if 0<=row<len(self.row_targets):
-            well,fov,_=self.row_targets[row]
-            self.inspect_recording(well,fov)
+            self.inspect_recording(*self.row_targets[row])
 
-    def inspect_recording(self,well,fov):
+    def inspect_recording(self,well,fov,recording):
+        if self._changes() and not confirm_action(self, 'Discard quality edits?',
+                'Apply your edits to keep them. Inspecting this recording closes the review.',
+                'Discard and Inspect'):
+            return
         parent=self.parent()
         if parent is not None:
-            if hasattr(parent,'load_well') and well!='Unknown':
-                parent.load_well(well)
-            if hasattr(parent,'field_selector') and fov!='Unknown':
-                for i in range(parent.field_selector.count()):
-                    item_data=parent.field_selector.itemData(i)
-                    if item_data is not None and len(item_data)==2 and item_data[1]==fov:
-                        parent.field_selector.setCurrentIndex(i)
-                        break
-        self.accept()
+            parent.load_well(well)
+            parent.select_field_identity((recording,fov))
+        self.reject()
 
     def resizeEvent(self,event):
         super().resizeEvent(event)
         if hasattr(self,'table'):
             self.table.resizeRowsToContents()
 
+    def _changes(self):
+        return {recording:dict(included=check.isChecked(),reason=reason.text().strip())
+                for recording,check,reason,old,old_reason in self.rows
+                if check.isChecked()!=old or reason.text().strip()!=old_reason}
+
     def save(self):
-        changes={recording:dict(included=check.isChecked(),reason=reason.text().strip())
-                 for recording,check,reason,old,old_reason in self.rows
-                 if check.isChecked()!=old or reason.text().strip()!=old_reason}
+        changes=self._changes()
         try:
             if sha256(self.csv_path)!=self.source_digest:
                 raise ValueError('The results file changed during review. Reopen Recording Quality before applying decisions.')

@@ -25,6 +25,13 @@ To prevent IDE static analysis noise, false-positive import errors (e.g., `Canno
 * **Final Check**: Inspect staged changes, unstaged changes, and untracked files before finishing. Remove temporary validation scripts, keep meaningful regression tests and reusable fixtures, and verify that generated outputs are ignored. Do not append task history or test-run summaries to maintained documentation.
 * **No Hidden Changes**: Never use blanket resets, destructive cleanup, `assume-unchanged`, or `skip-worktree` to make Git appear clean. Do not commit without explicit authorization. Genuine implementation changes remain visible until the user commits or discards them.
 
+### D. Release Work and User Involvement
+
+* Carry out the release work the agent can perform, including preparing test builds, running automated checks, investigating failures, and verifying downloads. Keep that work with the agent. If a check genuinely requires unavailable equipment or access, record what is missing and ask before assigning the user a task.
+* Prepare automated checks, test builds, and recovery materials before publishing a prerelease. Run the checks that can be completed on the exact candidate before publication. Keep checks that need the public download or a public trial in the trial phase, and state which results still matter for stable approval.
+* Keep a user-facing worklist specific to the user's computer and agreed scope. Use direct instructions in plain language, and distinguish what is already verified, what the agent is handling, and what requires the user's decision.
+* Check GitHub Actions status on request. When following a run to completion, check after 30 minutes, then at 15-minute intervals.
+
 ---
 
 ## 2. Environment & Python Interpreter Hygiene

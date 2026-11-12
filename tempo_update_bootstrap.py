@@ -2,7 +2,7 @@
 
 The caller must hold the exclusive application lease until this function returns,
 then hold a desktop lease for its lifetime. Older Inno applications do not honor
-that lease, so their registered or default-location evidence blocks migration.
+that lease. Data left by an uninstall can be copied after checking for old writers.
 """
 import os
 from pathlib import Path
@@ -10,7 +10,7 @@ import tempfile
 
 from tempo_update_migration import _hash, _safe, inventory_legacy
 from tempo_model_catalog import INSTALLABLE_MODEL_FILES
-from tempo_update_storage import prepare_packaged_storage
+from tempo_update_storage import _read_pointer, prepare_packaged_storage
 
 _INNO_KEY = r'Software\Microsoft\Windows\CurrentVersion\Uninstall\{D8C8E192-3B48-4FE2-9653-532F99277A81}_is1'
 
@@ -91,16 +91,21 @@ def _preserve_models(bundle_root, model_root):
     return inventory
 
 
+def _leftover_datasets(legacy):
+    inventory = inventory_legacy(legacy)
+    if (inventory['addons'] or _safe(legacy / 'TEMPO.exe').exists()
+            or _safe(legacy / '_internal' / 'TEMPO.exe').exists()
+            or any(legacy.glob('unins*.exe'))):
+        raise StorageBootstrapError(
+            f'TEMPO found an older app or add-on at {legacy}. Its files were retained. '
+            'An unregistered installation requires review before migration.')
+    return inventory['dataset_roots']
+
+
 def bootstrap_packaged_storage(bundle_root, profile_root, *, registry=None,
                                legacy_default_root=None, model_root=None, cancel=None):
-    """Publish stable collaboration storage only when competing writers are excluded.
-
-    The legacy registry identity is intentionally never used as authorization to
-    copy files or remove software. Custom registered paths are blocked even if
-    missing or unverifiable; unregistered evidence at the default location is
-    also blocked. An expert must verify and migrate such installations separately.
-    """
-    from tempo_legacy_migration import completed_migration
+    """Publish stable storage and recover data left by an older uninstall."""
+    from tempo_legacy_migration import completed_migration, legacy_writer_guard
     pending = _safe(Path(profile_root) / 'updates' / 'legacy-migration' / 'migration.json')
     if pending.exists() and not completed_migration(profile_root):
         raise StorageBootstrapError('Legacy migration is pending. Finish the prepared migration with TEMPORepair before starting TEMPO.')
@@ -115,23 +120,23 @@ def bootstrap_packaged_storage(bundle_root, profile_root, *, registry=None,
     profile = Path(profile_root)
     legacy = Path(legacy_default_root) if legacy_default_root is not None else profile.parent / 'Programs' / 'TEMPO'
     try:
-        inventory = inventory_legacy(legacy)
-        evidence = ((legacy / 'unins000.exe').exists() or (legacy / 'TEMPO.exe').exists()
-                    or inventory['datasets'] is not None or inventory['models'] or inventory['addons'])
-    except (OSError, ValueError) as error:
-        raise StorageBootstrapError('Could not inspect the older TEMPO location. '
-                                    'Resolve the access problem before starting.') from error
-    if evidence and not completed_migration(profile_root, legacy):
-        raise StorageBootstrapError(
-            f'Possible older TEMPO data or installation found at {legacy}. '
-            'Its origin and active writers cannot be verified. Use a verified '
-            'migration procedure before starting; the original files are unchanged.')
-    try:
+        datasets = () if completed_migration(profile_root, legacy) else _leftover_datasets(legacy)
+        existing = _read_pointer(profile) if datasets else None
+        if existing is not None and not set(datasets).issubset(existing['sources']):
+            raise StorageBootstrapError(
+                f'TEMPO found additional older datasets at {legacy}. '
+                'Both copies were retained. Review them before combining your work.')
         if model_root is None:
             from tempo_model_catalog import installed_model_dir
             model_root = installed_model_dir()
         models = _preserve_models(bundle_root, model_root)
-        result = prepare_packaged_storage(bundle_root, profile_root, cancel=cancel)
+        if datasets and existing is None:
+            with legacy_writer_guard(legacy):
+                if find_registered_legacy(registry) or _leftover_datasets(legacy) != datasets:
+                    raise StorageBootstrapError('The older TEMPO installation changed during recovery. Try starting again.')
+                result = prepare_packaged_storage(bundle_root, profile_root, (legacy,), cancel=cancel)
+        else:
+            result = prepare_packaged_storage(bundle_root, profile_root, cancel=cancel)
     except (OSError, ValueError) as error:
         raise StorageBootstrapError(
             'TEMPO could not prepare its collaboration storage. The existing '

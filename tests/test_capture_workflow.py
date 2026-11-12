@@ -48,6 +48,31 @@ class SimulatedService:
 
 
 class NativeAcquisitionTimingTests(unittest.TestCase):
+    def test_timing_callback_failure_still_closes_recording_and_releases_owner(self):
+        from tempo_recording import NativeCapture, read_metadata
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'field.tif'
+            camera = Mock()
+            camera.get.return_value = 32
+            camera.read.return_value = (True, np.zeros((32, 32), dtype=np.uint8))
+            worker = gui.CameraAcquisitionWorker(cv_cap=camera, output_path=str(path), max_frames=1,
+                native=True, recording_options={'retention': {'owned': True}})
+            complete = Mock()
+            worker.capture_hooks = (Mock(), complete, None, Mock(side_effect=RuntimeError('timing unavailable')))
+            errors = []
+            worker.error_signal.connect(errors.append)
+            worker.run()
+            self.assertEqual(len(errors), 1)
+            self.assertIn('timing unavailable', errors[0])
+            complete.assert_called_once_with(1, errors[0])
+            self.assertEqual(read_metadata(path)['status'], 'failed')
+            captured = NativeCapture(str(path))
+            try:
+                self.assertTrue(captured.read()[0])
+            finally:
+                captured.release()
+
     def test_requested_duration_uses_camera_time_instead_of_requested_frame_count(self):
         from types import SimpleNamespace
         from tempo_recording import read_metadata,timeline
