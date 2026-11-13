@@ -25,7 +25,7 @@ on:
         type: boolean
   push:
     branches:
-      - v1.0.2-dev
+      - v1.0.4-dev
 permissions:
   contents: read
   actions: read

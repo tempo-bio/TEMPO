@@ -752,9 +752,10 @@ jobs:
             $headers = @{Authorization="Bearer $env:GH_TOKEN";Accept='application/vnd.github+json'}
             $source = Invoke-RestMethod "https://api.github.com/repos/$env:GITHUB_REPOSITORY/actions/runs/$env:SOURCE_RUN_ID" -Headers $headers
             if ($source.status -ne 'completed' -or $source.event -ne 'workflow_dispatch' -or
-                $source.path -ne '.github/workflows/release-windows.yml' -or $source.head_branch -ne 'v1.0.2-dev' -or
+                $source.path -ne '.github/workflows/release-windows.yml' -or
+                $source.head_branch -cnotin @('v1.0.4-dev','v1.0.2-dev') -or
                 $source.head_repository.full_name -ne $env:GITHUB_REPOSITORY) {
-              throw 'Use a completed trial run from the Windows release workflow on v1.0.2-dev'
+              throw 'Use a completed trial run from the Windows release workflow on the release development branch'
             }
           } elseif ($env:CONTRACT_SHA256) {
             throw 'A trial contract SHA-256 requires the source run ID'
@@ -868,8 +869,10 @@ jobs:
               Authorization = "Bearer $env:GH_TOKEN"
               Accept = 'application/vnd.github+json'
           }
+          $matchesBranch = $run.head_branch -ceq $env:GITHUB_REF_NAME -or
+              ($env:GITHUB_REF_NAME -ceq 'v1.0.4-dev' -and $run.head_branch -ceq 'v1.0.2-dev')
           if ($run.head_sha -cne $env:BUILD_COMMIT -or $run.repository.full_name -cne $env:GITHUB_REPOSITORY -or
-              $run.head_branch -cne $env:GITHUB_REF_NAME -or $run.event -cne 'workflow_dispatch' -or
+              -not $matchesBranch -or $run.event -cne 'workflow_dispatch' -or
               $run.path -cne '.github/workflows/release-windows.yml' -or $run.conclusion -cne 'success') {
               throw 'The run is not a successful Windows release build for this branch and commit'
           }
@@ -1159,7 +1162,9 @@ jobs:
           $headers = @{ Authorization = "Bearer $env:GH_TOKEN"; Accept = 'application/vnd.github+json' }
           $source = Invoke-RestMethod -Uri $uri -Headers $headers
           $jobs = (Invoke-RestMethod -Uri "$uri/jobs" -Headers $headers).jobs
-          if ($source.path -cne '.github/workflows/release-windows.yml' -or $source.head_branch -cne $env:GITHUB_REF_NAME -or
+          $matchesBranch = $source.head_branch -ceq $env:GITHUB_REF_NAME -or
+              ($env:GITHUB_REF_NAME -ceq 'v1.0.4-dev' -and $source.head_branch -ceq 'v1.0.2-dev')
+          if ($source.path -cne '.github/workflows/release-windows.yml' -or -not $matchesBranch -or
               $source.status -cne 'completed' -or -not ($jobs | Where-Object {
                   $_.name -ceq 'Assemble the stable-channel Windows installer' -and $_.conclusion -ceq 'success'
               })) { throw 'The selected run did not complete installer assembly on this branch' }
