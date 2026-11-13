@@ -136,6 +136,34 @@ function Invoke-Diagnostics([string]$Label) {
     Assert-Verification (Get-Content $report -Raw | ConvertFrom-Json) $verification
 }
 
+function Assert-DesktopStartup {
+    $setupState = Join-Path $state 'config\setup_state.json'
+    New-Item -ItemType Directory -Force (Split-Path $setupState) | Out-Null
+    [IO.File]::WriteAllText($setupState, '{"schema_version":1,"stage":"complete"}')
+    $report = Join-Path $Evidence 'desktop-startup.json'
+    $app = Start-Process -FilePath (Join-Path $root 'current\TEMPO.exe') -PassThru `
+        -WorkingDirectory $Evidence -ArgumentList @('--diagnose-startup', '"' + $report + '"')
+    try {
+        $deadline = [Diagnostics.Stopwatch]::StartNew()
+        while ($deadline.Elapsed.TotalSeconds -lt 90) {
+            $app.Refresh()
+            if ($app.HasExited) { throw "TEMPO exited during desktop startup with code $($app.ExitCode)" }
+            if ((Test-Path -LiteralPath $report) -and
+                ((Get-Content -LiteralPath $report -Raw | ConvertFrom-Json).events.stage -contains 'dashboard.shown')) { return }
+            Start-Sleep -Milliseconds 250
+        }
+        throw 'TEMPO did not open its dashboard after recovering old data'
+    } finally {
+        $app.Refresh()
+        if (-not $app.HasExited) {
+            # The offscreen test dashboard has no Windows close target.
+            $app.Kill($true)
+            if (-not $app.WaitForExit(15000)) { throw 'The desktop startup fixture did not exit' }
+        }
+        $app.Dispose()
+    }
+}
+
 function Assert-State {
     $expected = Get-Content (Join-Path $Evidence 'preserved-state.json') -Raw | ConvertFrom-Json
     foreach ($entry in $expected) { Assert-File (Join-Path $profile $entry.path) $entry }
@@ -291,8 +319,11 @@ function Apply-Revision($Base, $Target, [string]$Label) {
             '--installto',"`"$root`"") 600
         Assert-Installed $revision
         Invoke-Diagnostics 'release-installed'
-        if ($LegacyUninstallLeftovers -and (Get-FileHash -LiteralPath $recoveredDraft -Algorithm SHA256).Hash -cne $draftHash) {
-            throw 'Packaged startup did not recover the leftover draft'
+        if ($LegacyUninstallLeftovers) {
+            Assert-DesktopStartup
+            if ((Get-FileHash -LiteralPath $recoveredDraft -Algorithm SHA256).Hash -cne $draftHash) {
+                throw 'Packaged startup did not recover the leftover draft'
+            }
         }
         Invoke-Bounded (Join-Path $root 'current\TEMPORepair.exe') @('--help') 120
         Assert-State

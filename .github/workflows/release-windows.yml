@@ -13,6 +13,9 @@ on:
       assemble_source_commit:
         description: 'Exact source commit of the reviewed build run'
         type: string
+      smoke_source_run:
+        description: 'Optional assembly run whose exact installer should be smoke-tested again'
+        type: string
       test_published_migration:
         description: 'Test upgrades to the published v1.0.2 installer'
         type: boolean
@@ -846,7 +849,7 @@ jobs:
 
   assemble:
     name: Assemble the stable-channel Windows installer
-    if: ${{ inputs.assemble_build_run != '' && !inputs.test_published_migration && !inputs.test_signed_updates }}
+    if: ${{ inputs.assemble_build_run != '' && inputs.smoke_source_run == '' && !inputs.test_published_migration && !inputs.test_signed_updates }}
     env:
       BUILD_RUN: ${{ inputs.assemble_build_run }}
       BUILD_COMMIT: ${{ inputs.assemble_source_commit }}
@@ -1011,8 +1014,10 @@ jobs:
   smoke:
     name: Smoke-test the exact stable-channel Windows installer
     needs: assemble
+    if: ${{ !cancelled() && (needs.assemble.result == 'success' || (inputs.assemble_build_run != '' && inputs.smoke_source_run != '')) }}
     env:
       BUILD_COMMIT: ${{ inputs.assemble_source_commit }}
+      SMOKE_SOURCE_RUN: ${{ inputs.smoke_source_run }}
     runs-on: windows-2025
     timeout-minutes: 40
     steps:
@@ -1021,7 +1026,31 @@ jobs:
         with:
           persist-credentials: false
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        if: ${{ inputs.smoke_source_run == '' }}
         with:
+          name: TEMPO_${{ inputs.release_tag }}_stable_channel
+          path: payload
+      - name: Verify and retrieve the original assembly
+        if: ${{ inputs.smoke_source_run != '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if ($env:SMOKE_SOURCE_RUN -cnotmatch '^[0-9]+$' -or $env:BUILD_COMMIT -cnotmatch '^[0-9a-f]{40}$') {
+              throw 'Supply a numeric assembly run ID and the full build commit'
+          }
+          $uri = "$env:GITHUB_API_URL/repos/$env:GITHUB_REPOSITORY/actions/runs/$env:SMOKE_SOURCE_RUN"
+          $headers = @{ Authorization = "Bearer $env:GH_TOKEN"; Accept = 'application/vnd.github+json' }
+          $source = Invoke-RestMethod -Uri $uri -Headers $headers
+          $jobs = (Invoke-RestMethod -Uri "$uri/jobs" -Headers $headers).jobs
+          if ($source.path -cne '.github/workflows/release-windows.yml' -or $source.head_branch -cne $env:GITHUB_REF_NAME -or
+              $source.status -cne 'completed' -or -not ($jobs | Where-Object {
+                  $_.name -ceq 'Assemble the stable-channel Windows installer' -and $_.conclusion -ceq 'success'
+              })) { throw 'The selected run did not complete installer assembly on this branch' }
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        if: ${{ inputs.smoke_source_run != '' }}
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.smoke_source_run }}
           name: TEMPO_${{ inputs.release_tag }}_stable_channel
           path: payload
       - name: Install, exercise, and remove the exact stable-channel installer
