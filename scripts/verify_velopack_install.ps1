@@ -136,27 +136,37 @@ function Invoke-Diagnostics([string]$Label) {
     Assert-Verification (Get-Content $report -Raw | ConvertFrom-Json) $verification
 }
 
-function Assert-DesktopStartup {
-    $setupState = Join-Path $state 'config\setup_state.json'
-    New-Item -ItemType Directory -Force (Split-Path $setupState) | Out-Null
-    [IO.File]::WriteAllText($setupState, '{"schema_version":1,"stage":"complete"}')
-    $report = Join-Path $Evidence 'desktop-startup.json'
+function Assert-LeftoverRecovery($OldDraft, $RecoveredDraft, $ExpectedHash) {
+    $pointerPath = Join-Path $state 'config\collaboration-location.json'
     $app = Start-Process -FilePath (Join-Path $root 'current\TEMPO.exe') -PassThru `
-        -WorkingDirectory $Evidence -ArgumentList @('--diagnose-startup', '"' + $report + '"')
+        -WorkingDirectory $Evidence
     try {
         $deadline = [Diagnostics.Stopwatch]::StartNew()
         while ($deadline.Elapsed.TotalSeconds -lt 90) {
+            if (Test-Path -LiteralPath $pointerPath -PathType Leaf) {
+                $pointer = Get-Content -LiteralPath $pointerPath -Raw | ConvertFrom-Json
+                $oldStore = Split-Path (Split-Path $OldDraft)
+                if ($pointer.format -cne 'tempo-collaboration-pointer-v1' -or
+                    $pointer.target -cne 'collaboration' -or $oldStore -notin $pointer.sources) {
+                    throw 'Packaged startup published a different collaboration store'
+                }
+                foreach ($draft in @($OldDraft,$RecoveredDraft)) {
+                    if ((Get-FileHash -LiteralPath $draft -Algorithm SHA256).Hash -cne $ExpectedHash) {
+                        throw 'Packaged startup did not preserve the exact leftover draft bytes'
+                    }
+                }
+                Copy-Item -LiteralPath $pointerPath -Destination (Join-Path $Evidence 'recovered-collaboration.json')
+                return
+            }
             $app.Refresh()
             if ($app.HasExited) { throw "TEMPO exited during desktop startup with code $($app.ExitCode)" }
-            if ((Test-Path -LiteralPath $report) -and
-                ((Get-Content -LiteralPath $report -Raw | ConvertFrom-Json).events.stage -contains 'dashboard.shown')) { return }
             Start-Sleep -Milliseconds 250
         }
-        throw 'TEMPO did not open its dashboard after recovering old data'
+        throw 'TEMPO did not publish recovered collaboration storage during startup'
     } finally {
         $app.Refresh()
         if (-not $app.HasExited) {
-            # The offscreen test dashboard has no Windows close target.
+            # The isolated offscreen app has no Windows close target.
             $app.Kill($true)
             if (-not $app.WaitForExit(15000)) { throw 'The desktop startup fixture did not exit' }
         }
@@ -320,10 +330,7 @@ function Apply-Revision($Base, $Target, [string]$Label) {
         Assert-Installed $revision
         Invoke-Diagnostics 'release-installed'
         if ($LegacyUninstallLeftovers) {
-            Assert-DesktopStartup
-            if ((Get-FileHash -LiteralPath $recoveredDraft -Algorithm SHA256).Hash -cne $draftHash) {
-                throw 'Packaged startup did not recover the leftover draft'
-            }
+            Assert-LeftoverRecovery $oldDraft $recoveredDraft $draftHash
         }
         Invoke-Bounded (Join-Path $root 'current\TEMPORepair.exe') @('--help') 120
         Assert-State
