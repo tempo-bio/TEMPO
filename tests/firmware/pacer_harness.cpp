@@ -22,12 +22,15 @@ int main() {
   std::string helloReply = send("1 hello");
   assert(helloReply.find("TEMPO_AU26_V2")!=std::string::npos);
   assert(helloReply.find("\"protocol\":2")!=std::string::npos);
-  assert(helloReply.find("\"firmware\":\"1.0.2\"")!=std::string::npos);
+  assert(helloReply.find("\"firmware\":\"1.0.3\"")!=std::string::npos);
+  assert(helloReply.find("\"amplitude_v\":0.600000,\"frequency_hz\":1.000000")!=std::string::npos);
+  assert(helloReply.find("\"pulse_width_ms\":2.000")!=std::string::npos);
+  assert(helloReply.find("\"dac_reference_v\":4.7700")!=std::string::npos);
 
   // Sync command without ID
-  std::string syncReply = send("sync 987654321");
+  std::string syncReply = send("sync 18446744073709551615");
   assert(syncReply.find("\"evt\":\"sync_ack\"")!=std::string::npos);
-  assert(syncReply.find("\"nonce\":987654321")!=std::string::npos);
+  assert(syncReply.find("\"nonce\":18446744073709551615")!=std::string::npos);
   assert(syncReply.find("\"t_us\":")!=std::string::npos);
 
   // Sync command with ID
@@ -68,6 +71,7 @@ int main() {
   assert(send("36 set nan 1 2 0 0").find("\"result\":\"error\"")!=std::string::npos);
   assert(send("37 set 0.5 1 1000 0 0").find("\"result\":\"error\"")!=std::string::npos);
   assert(send("38 set 0.5 1 2 0 0 garbage").find("\"result\":\"error\"")!=std::string::npos);
+  assert(send("38 set 0.5V 1 2 0 0").find("\"result\":\"error\"")!=std::string::npos);
   send("39 set 0.6 1 2 0 0");
   Serial.capacity=0; send("40 pace");
   assert(highPhase); advance(2000); assert(!highPhase); // Congested TX cannot extend a pulse.

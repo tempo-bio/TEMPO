@@ -1,0 +1,63 @@
+name: Stimulation firmware
+
+on:
+  push:
+    branches: [v1.0.4-dev]
+    paths:
+      - .github/workflows/stimulation-firmware.yml
+      - firmware/tempo_pacer/**
+      - tempo_firmware.py
+      - tests/firmware/**
+      - tests/test_pacer_firmware.py
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify-firmware:
+    name: Test and compile the Uno R4 Minima sketch
+    runs-on: windows-2025
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.13.16'
+      - name: Check the firmware protocol and output state machine
+        run: |
+          if (-not (Get-Command clang++,g++ -ErrorAction SilentlyContinue)) { throw 'C++ compiler unavailable' }
+          python -m unittest -v tests.test_pacer_firmware
+      - name: Compile with TEMPO's pinned Arduino toolchain
+        run: |
+          Select-String -Path requirements-windows.lock -Pattern '^certifi @ ' |
+            ForEach-Object { $_.Line } | Set-Content "$env:RUNNER_TEMP\tempo-certifi.txt"
+          python -m pip install --no-deps --require-hashes -r "$env:RUNNER_TEMP\tempo-certifi.txt"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          @'
+          import os
+          from pathlib import Path
+          import shutil
+          from tempo_firmware import FQBN, FirmwareInstaller
+
+          root = Path(os.environ['RUNNER_TEMP'])
+          installer = FirmwareInstaller(root / 'tempo-arduino', print)
+          installer.prepare()
+          sketch = Path('firmware/tempo_pacer')
+          build = root / 'tempo-firmware-build'
+          print(installer.run(['compile', '--fqbn', FQBN, '--warnings', 'all',
+                               '--output-dir', str(build), str(sketch)], timeout=300))
+          payload = root / 'tempo-firmware'
+          (payload / sketch.name).mkdir(parents=True)
+          shutil.copyfile(sketch / 'tempo_pacer.ino', payload / sketch.name / 'tempo_pacer.ino')
+          shutil.copyfile(build / 'tempo_pacer.ino.bin', payload / 'tempo_pacer.ino.bin')
+          '@ | python -
+      - name: Retain the sketch and compiled firmware
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: TEMPO-Pacer-Uno-R4-Minima
+          path: ${{ runner.temp }}/tempo-firmware
+          if-no-files-found: error
+          retention-days: 14

@@ -134,21 +134,35 @@ const char *modeName() {
   }
 }
 
+// Format decimal JSON fields without relying on newlib-nano's optional float I/O.
 void reply(uint32_t id, const char *result = "ok", const char *error = "") {
   // A stop must still be acknowledged if an old response stalled. Terminate
   // its partial JSON line before the new response. Commands never wait on TX.
   bool partial = outgoingOffset > 0 && outgoingOffset < outgoingLength;
+  const unsigned long amplitudeMillionths = lround((double)voltage * 1000000);
+  const unsigned long frequencyMillionths = lround((double)frequency * 1000000);
+  const unsigned long widthThousandths = lround((double)widthMs * 1000);
+  const unsigned long referenceTenThousandths = lround((double)DAC_REFERENCE_V * 10000);
   int n = snprintf(outgoing, sizeof(outgoing),
     "%s{\"id\":%lu,\"device\":\"TEMPO_AU26_V2\",\"protocol\":2,"
-    "\"firmware\":\"1.0.2\",\"result\":\"%s\",\"error\":\"%s\","
-    "\"mode\":\"%s\",\"amplitude_v\":%.6f,\"frequency_hz\":%.6f,"
-    "\"pulse_width_ms\":%.3f,\"channel\":%u,\"cycling\":%s,"
-    "\"uptime_ms\":%lu,\"watchdog_ms\":2000,\"dac_reference_v\":%.4f}\n",
+    "\"firmware\":\"1.0.3\",\"result\":\"%s\",\"error\":\"%s\","
+    "\"mode\":\"%s\",\"amplitude_v\":%lu.%06lu,\"frequency_hz\":%lu.%06lu,"
+    "\"pulse_width_ms\":%lu.%03lu,\"channel\":%u,\"cycling\":%s,"
+    "\"uptime_ms\":%lu,\"watchdog_ms\":2000,\"dac_reference_v\":%lu.%04lu}\n",
     partial ? "\n" : "", (unsigned long)id, result, error, modeName(),
-    voltage, frequency, widthMs, channel, cycling ? "true" : "false",
-    (unsigned long)millis(), DAC_REFERENCE_V);
+    amplitudeMillionths / 1000000, amplitudeMillionths % 1000000,
+    frequencyMillionths / 1000000, frequencyMillionths % 1000000,
+    widthThousandths / 1000, widthThousandths % 1000, (unsigned int)channel,
+    cycling ? "true" : "false", (unsigned long)millis(),
+    referenceTenThousandths / 10000, referenceTenThousandths % 10000);
   outgoingOffset = 0;
   outgoingLength = n > 0 && (size_t)n < sizeof(outgoing) ? (size_t)n : 0;
+}
+
+bool parseNumber(const char *token, float &value) {
+  char *end;
+  value = strtof(token, &end);
+  return end != token && *end == '\0' && isfinite(value);
 }
 
 void handle(char *line) {
@@ -189,10 +203,14 @@ void handle(char *line) {
     if (mode != REST && mode != ISOLATED) {
       reply(id, "error", "Stop output before changing settings"); return;
     }
+    char voltageToken[32], frequencyToken[32], widthToken[32];
     float v, hz, ms;
     int ch, confirmed, used = 0;
-    int parsed = sscanf(command + 4, "%f %f %f %d %d %n", &v, &hz, &ms, &ch, &confirmed, &used);
-    if (parsed != 5 || command[4 + used] != '\0' || !isfinite(v) || !isfinite(hz) || !isfinite(ms) ||
+    int parsed = sscanf(command + 4, "%31s %31s %31s %d %d %n",
+                        voltageToken, frequencyToken, widthToken, &ch, &confirmed, &used);
+    if (parsed != 5 || command[4 + used] != '\0' ||
+        !parseNumber(voltageToken, v) || !parseNumber(frequencyToken, hz) ||
+        !parseNumber(widthToken, ms) ||
         v < 0 || v > 1 || hz < .1f || hz > 100 || ms < .1f || ms * hz >= 1000 ||
         ch < 0 || ch > 7 || (confirmed != 0 && confirmed != 1) ||
         (uint32_t)lroundf(ms * 1000.f) >= (uint32_t)lroundf(1000000.f / hz)) {
@@ -271,9 +289,18 @@ void loop() {
   if (outgoingOffset >= outgoingLength) {
     if (pendingSyncAck) {
       pendingSyncAck = false;
+      // newlib-nano printf also lacks a 64-bit integer conversion.
+      char digits[21];
+      char *nonce = digits + sizeof(digits) - 1;
+      *nonce = '\0';
+      unsigned long long remaining = syncNonce;
+      do {
+        *--nonce = '0' + remaining % 10;
+        remaining /= 10;
+      } while (remaining);
       int n = snprintf(outgoing, sizeof(outgoing),
-        "{\"evt\":\"sync_ack\",\"nonce\":%llu,\"t_us\":%lu}\n",
-        syncNonce, (unsigned long)syncUs);
+        "{\"evt\":\"sync_ack\",\"nonce\":%s,\"t_us\":%lu}\n",
+        nonce, (unsigned long)syncUs);
       outgoingOffset = 0;
       outgoingLength = n > 0 && (size_t)n < sizeof(outgoing) ? (size_t)n : 0;
     } else {
