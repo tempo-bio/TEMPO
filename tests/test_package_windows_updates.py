@@ -204,6 +204,24 @@ class PackageWindowsUpdatesTests(unittest.TestCase):
             package(**dict(args, output=self.root/'bad-target'))
         self.assertFalse((self.root/'bad-target').exists())
 
+        from scripts.build_velopack_candidate import file_record
+        report = self.root/'delta-verification.json'
+        observed = dict(base=file_record(prev_output/'full.nupkg'), target=file_record(self.full),
+                        delta=file_record(delta), patcher=file_record(self.updater),
+                        reconstructed_inventory_matches=True)
+        report.write_text(json.dumps(observed))
+        with patch('scripts.package_windows_updates.subprocess.run') as run:
+            verified = package(**dict(args, output=self.root/'verified-on-windows',
+                                      windows_delta_report=report))
+            run.assert_not_called()
+        self.assertEqual(verified.patches, release.patches)
+        for incorrect in (dict(observed, reconstructed_inventory_matches=1),
+                          dict(observed, delta=dict(observed['delta'], sha256='0' * 64))):
+            report.write_text(json.dumps(incorrect))
+            with self.assertRaisesRegex(ValueError, 'Windows delta verification'):
+                package(**dict(args, output=self.root/'invalid-report', windows_delta_report=report))
+        self.assertFalse((self.root/'invalid-report').exists())
+
     def test_packaged_updater_must_match_certified_bytes(self):
         pin = json.loads(self.pin.read_bytes())
         pin['updater_sha256'] = 'f'*64
