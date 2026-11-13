@@ -20,7 +20,8 @@ from tempo_update_manifest import ARCHITECTURE, PACKAGE_ID, FileRecord
 from tempo_update_recovery import _application_inventory
 
 
-def build(bundle, build_contract, verification, runtime_report, vpk_archive, setup, output, **review):
+def build(bundle, build_contract, verification, runtime_report, vpk_archive, setup, output,
+          *, tested_updater=None, **review):
     if sys.platform != 'win32':
         raise ValueError('The release installer must be assembled on Windows.')
     bundle, output = Path(bundle).resolve(), Path(output).resolve()
@@ -35,7 +36,7 @@ def build(bundle, build_contract, verification, runtime_report, vpk_archive, set
     if (contract.get('purpose') != 'isolated-full-app-acceptance'
             or contract.get('packager_sha256') != VPK_SHA256
             or _digest(vpk_archive) != VPK_SHA256
-            or contract.get('updater_sha256') != _digest(review['native_updater'])
+            or contract.get('updater_sha256') != _digest(tested_updater or review['native_updater'])
             or contract.get('setup_sha256') != _digest(setup)):
         raise ValueError('Use the exact packager and native tools reviewed by the full Windows build.')
     if folder_inventory(bundle) != contract.get('bundle_inventory'):
@@ -109,6 +110,8 @@ def main():
                  'setup', 'output', 'public-keys', 'native-updater', 'repair-executable', 'certification'):
         parser.add_argument('--' + name, required=True, type=Path)
     parser.add_argument('--native-pin', type=Path)
+    parser.add_argument('--tested-updater', type=Path,
+                        help='Exact updater used by the current build contract when shipping a retained updater')
     args = vars(parser.parse_args())
     args['pin_path'] = reviewed_native_pin(args.pop('native_pin'))
     build(**args)

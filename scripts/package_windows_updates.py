@@ -201,7 +201,7 @@ def package(*, full_package, version, commit, channel, sequence, expires_at, sig
             trusted_keys=None, patch_spec=None, nvidia_descriptor=None, now=None,
             native_updater=None, native_patch=None, release_notes=None,
             base_package_dir=None, storage_schema_version=None, minimum_updater_version=None,
-            additional_signing_keys=None):
+            additional_signing_keys=None, windows_delta_report=None):
     """Build authenticated output after evidence checks; never overwrite differing files."""
     from cryptography.hazmat.primitives import serialization
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
@@ -211,6 +211,8 @@ def package(*, full_package, version, commit, channel, sequence, expires_at, sig
         raise ValueError('Explicit storage schema and minimum updater versions are required.')
     if native_patch is None:
         raise ValueError('The certified native patch file is required.')
+    if windows_delta_report is not None and patch_spec is None:
+        raise ValueError('Windows delta verification requires a patch specification.')
     if patch_spec is not None and (not previous_index or not base_package_dir or not native_updater):
         raise ValueError('Patch publication requires a previous index, base package directory, and certified native updater.')
     certified_package_hash = _certified(pin_path, certification, commit, full_package, native_updater, native_patch)
@@ -288,6 +290,9 @@ def package(*, full_package, version, commit, channel, sequence, expires_at, sig
         if not base_dir.is_dir() or base_dir.is_symlink():
             raise ValueError('Invalid base package directory.')
         expected_updater_hash = _read_json(pin_path)['updater_sha256']
+        delta_report = _read_json(windows_delta_report) if windows_delta_report is not None else None
+        if delta_report is not None and len(specs) != 1:
+            raise ValueError('A Windows verification report must describe exactly one delta.')
         with tempfile.TemporaryDirectory(prefix='tempo-patch-check-') as temp:
             for index, item in enumerate(specs):
                 if not isinstance(item, dict) or set(item) != {'base_version', 'base_commit', 'base_inventory_sha256', 'file'}:
@@ -308,14 +313,28 @@ def package(*, full_package, version, commit, channel, sequence, expires_at, sig
                 reconstructed = Path(temp) / f'target-{index}.nupkg'
                 command = [str(Path(native_updater).resolve()), 'patch', '--old', str(base_path.resolve()),
                            '--delta', str(path.resolve()), '--output', str(reconstructed)]
-                try:
-                    subprocess.run(command, check=True, timeout=900, stdin=subprocess.DEVNULL,
-                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                except (subprocess.SubprocessError, OSError) as exc:
-                    raise ValueError('Patch reconstruction failed or timed out.') from exc
-                if not reconstructed.is_file() or reconstructed.is_symlink():
-                    raise ValueError('Patch reconstruction did not produce a target.')
-                verify_zip(reconstructed, target_inventory)
+                if delta_report is None:
+                    try:
+                        subprocess.run(command, check=True, timeout=900, stdin=subprocess.DEVNULL,
+                                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    except (subprocess.SubprocessError, OSError) as exc:
+                        raise ValueError('Patch reconstruction failed or timed out.') from exc
+                    if not reconstructed.is_file() or reconstructed.is_symlink():
+                        raise ValueError('Patch reconstruction did not produce a target.')
+                    verify_zip(reconstructed, target_inventory)
+                else:
+                    def record(name, size, digest):
+                        return dict(path=name, size=size, sha256=digest)
+
+                    expected_report = dict(
+                        base=record(base.full.name, base.full.size, base.full.sha256),
+                        target=record(full_package.name, full_package.stat().st_size, certified_package_hash),
+                        delta=record(delta['name'], delta['size'], delta['sha256']),
+                        patcher=record(Path(native_updater).name, Path(native_updater).stat().st_size, expected_updater_hash),
+                        reconstructed_inventory_matches=True)
+                    if (delta_report != expected_report
+                            or delta_report.get('reconstructed_inventory_matches') is not True):
+                        raise ValueError('Reviewed Windows delta verification does not match these package and updater bytes.')
                 # Detect source changes during reconstruction before signing it.
                 if _digest(path) != delta['sha256'] or path.stat().st_size != delta['size']:
                     raise ValueError('Patch changed during reconstruction.')
@@ -389,6 +408,8 @@ def main(argv=None):
     parser.add_argument('--previous-index', type=Path)
     parser.add_argument('--trusted-keys', type=Path)
     parser.add_argument('--patch-spec', type=Path)
+    parser.add_argument('--windows-delta-report', type=Path,
+                        help='Reviewed Windows reconstruction report for offline signing on another OS')
     parser.add_argument('--base-package-dir', type=Path)
     parser.add_argument('--storage-schema-version', type=int)
     parser.add_argument('--minimum-updater-version')
@@ -418,7 +439,7 @@ def main(argv=None):
                      native_patch=args.native_patch, release_notes=args.release_notes,
                      base_package_dir=args.base_package_dir, storage_schema_version=args.storage_schema_version,
                      minimum_updater_version=args.minimum_updater_version,
-                     additional_signing_keys=additional or None)
+                     additional_signing_keys=additional or None, windows_delta_report=args.windows_delta_report)
     print(json.dumps({'version': result.version, 'commit': result.commit, 'output': str(args.output)}))
 
 
