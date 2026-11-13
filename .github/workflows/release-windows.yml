@@ -1002,6 +1002,55 @@ jobs:
           python -m scripts.build_velopack_release --bundle "$bundle/dist/TEMPO" --build-contract $contract --verification "$bundle/Output/verification-contract.json" --runtime-report "$bundle/Output/portable-verification.json" --vpk-archive vpk.nupkg --native-updater "$tools/update.exe" --setup "$tools/setup.exe" --public-keys stable-public-keys.json --repair-executable tools/TEMPORepair.exe --certification native-evidence.json --native-pin reviewed-pin.json --output assembled
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Copy-Item stable-public-keys.json,reviewed-pin.json,native-evidence.json,"$tools/update.exe","$tools/setup.exe" assembled/
+      - name: Generate and verify the delta from the published v1.0.3 package
+        if: ${{ inputs.release_tag == 'v1.0.4' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for ($attempt = 1; $attempt -le 3; $attempt++) {
+              gh release download v1.0.3 --repo $env:GITHUB_REPOSITORY --pattern 'TEMPO.Bio.Desktop-1.0.3-full.nupkg' --dir delta-base --clobber
+              if ($LASTEXITCODE -eq 0) { break }
+              if ($attempt -eq 3) { exit $LASTEXITCODE }
+              Start-Sleep -Seconds 5
+          }
+          @'
+          import json
+          from pathlib import Path
+          import zipfile
+          from scripts.build_velopack_candidate import file_record
+          from scripts.package_windows_updates import inventory_package
+          from scripts.windows_release_checks import run_logged
+          from tempo_update_manifest import FileRecord, verify_zip
+
+          base = Path('delta-base/TEMPO.Bio.Desktop-1.0.3-full.nupkg').resolve()
+          base_record = file_record(base)
+          if base_record['sha256'] != '77a72a70fef37bbd8c5b7748da74b2076870877b38280a09e70dd6a565e79ec4':
+              raise SystemExit('Published v1.0.3 base checksum changed')
+          output = Path('assembled').resolve()
+          target, = output.glob('*-1.0.4-full.nupkg')
+          delta = output / 'TEMPO.Bio.Desktop-1.0.4-delta.nupkg'
+          patcher = base.with_name('update.exe')
+          with zipfile.ZipFile(base) as archive:
+              patcher.write_bytes(archive.read('lib/app/Squirrel.exe'))
+          vpk = base.parent / 'vpk'
+          with zipfile.ZipFile('vpk.nupkg') as archive:
+              archive.extractall(vpk)
+          if run_logged(['dotnet', str(vpk / 'tools/net8.0/any/vpk.dll'), 'delta', 'generate',
+                         '--base', str(base), '--new', str(target), '--output', str(delta)],
+                        output / 'delta-generate.log', 1200):
+              raise SystemExit('Delta generation failed')
+          reconstructed = base.with_name('reconstructed.nupkg')
+          if run_logged([str(patcher), 'patch', '--old', str(base), '--delta', str(delta),
+                         '--output', str(reconstructed)], output / 'delta-reconstruct.log', 900):
+              raise SystemExit('The v1.0.3 updater could not reconstruct the target')
+          verify_zip(reconstructed, tuple(FileRecord(**row) for row in inventory_package(target)))
+          if delta.stat().st_size * 4 >= target.stat().st_size * 3:
+              raise SystemExit('The delta does not meet the installed updater’s download threshold')
+          report = dict(base=base_record, target=file_record(target), delta=file_record(delta),
+                        patcher=file_record(patcher), reconstructed_inventory_matches=True)
+          (output / 'delta-verification.json').write_text(json.dumps(report, indent=2), encoding='utf-8')
+          '@ | python -
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Retain the exact installer and its inputs
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
