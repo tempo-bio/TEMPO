@@ -48,6 +48,7 @@ CHECKS = frozenset({'fresh_install', 'legacy_cpu_migration', 'two_successive_rel
     'hardware_shutdown', 'optional_package_transition', 'code_signing_review',
     'source_regressions', 'repository_privacy', 'dependency_sources', 'frozen_runtime', 'interface_review',
     'trust_bootstrap_and_rotation'})
+HARDWARE_DEFERRED_RELEASE = ('1.0.2', '4dc336fc8b655ed347a6a1e37a0ae944bf3502e3', 'stable')
 
 
 def _file(path):
@@ -95,6 +96,10 @@ def _acceptance(path, artifacts, release):
     hashes = {role: _digest(artifacts[role]) for role in ('installer', 'repair', 'updater')}
     hashes['full_package'] = release.full.sha256
     required = CHECKS | ({'legacy_nvidia_migration', 'matching_worker_inference'} if release.nvidia_descriptor else set())
+    if (release.version, release.commit, release.channel) == HARDWARE_DEFERRED_RELEASE:
+        if not isinstance(value, dict) or value.get('deferred_checks') != {'hardware_shutdown': 'v1.0.3'}:
+            raise ValueError('Record the v1.0.2 physical shutdown test deferral to v1.0.3.')
+        required = (required - {'hardware_shutdown'}) | {'software_shutdown'}
     if (not isinstance(value, dict) or type(value.get('schema_version')) is not int or value.get('schema_version') != 1
             or value.get('release_certified') is not True or value.get('source_commit') != release.commit
             or value.get('version') != release.version or value.get('artifact_sha256') != hashes

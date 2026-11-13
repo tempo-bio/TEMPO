@@ -4,23 +4,41 @@ This guide covers installation, workspace access, and your first shared annotati
 
 ## Install on Windows
 
-1. Download `TEMPO_Setup_v1.0.1.exe` from the [latest release](https://github.com/tempo-bio/TEMPO/releases/latest). The installer includes Python and the application libraries.
-2. Run the installer. The default location is `%LOCALAPPDATA%\Programs\TEMPO`.
+1. Download the `TEMPO_Setup_v*.exe` installer from the release you are installing. The installer includes Python and the application libraries. [Latest stable release](https://github.com/tempo-bio/TEMPO/releases/latest)
+2. Run the installer. TEMPO v1.0.2 uses `%LOCALAPPDATA%\TEMPO.Bio.Desktop`. The v1.0.1 default was `%LOCALAPPDATA%\Programs\TEMPO`.
 3. Open TEMPO from the Start menu or desktop shortcut. Guided Setup opens automatically and resumes if you close it before finishing.
 
-Existing users can install over their current installation with TEMPO closed. Recordings, analysis files, downloaded models, and saved account settings are retained.
+For an existing installation, follow the [upgrade instructions](#upgrade-tempo) before running the installer.
 
 ### Unsigned Windows installer
 
 The Windows installer is unsigned. Windows may show **Unknown publisher** or **Windows protected your PC**; a managed computer's policy may block installation.
 
-Download from this project's release page and compare the installer's SHA-256 with its entry in `SHA256SUMS.txt`. In PowerShell, from the download folder:
+Download from this project's release page and compare the installer's SHA-256 with its entry in `SHA256SUMS.txt`. In PowerShell, from the download folder, run the following with the filename of the installer you downloaded.
 
 ```powershell
-Get-FileHash .\TEMPO_Setup_v1.0.1.exe -Algorithm SHA256
+Get-FileHash .\TEMPO_Setup_v1.0.2.exe -Algorithm SHA256
 ```
 
 If the values differ, do not run the file. A matching checksum confirms file integrity; it does not verify the publisher. On a managed computer, ask IT if installation is blocked. Keep Windows security protections enabled. See Microsoft's [SmartScreen guidance](https://learn.microsoft.com/en-us/windows/apps/package-and-deploy/smartscreen-reputation).
+
+## Upgrade TEMPO
+
+### Move from v1.0.1 to v1.0.2
+
+Back up your recordings, results, and local annotation drafts. Close TEMPO and keep v1.0.1 installed while preparing the move. Install v1.0.2 in its default separate location and follow the migration procedure with the original v1.0.1 installer, the v1.0.2 repair companion, the signed release manifest, and the full package. Remove the old installation through Windows Settings only after the repair companion reports `prepared`. Run the finish command before opening TEMPO. [Migration procedure](../installer/velopack/README.md#legacy-migration-candidate)
+
+If you use NVIDIA acceleration, follow the NVIDIA preparation and finish steps. The migration can download both the old and new runtimes when the old archive is missing. If you have the Stimulation Investigation 1 add-on, follow the assessment and removal steps in the migration procedure before proceeding. If you use v1.0.0, install v1.0.1 first and confirm your work is accessible there. [v1.0.1 downloads](https://github.com/tempo-bio/TEMPO/releases/tag/v1.0.1)
+
+### Update from within TEMPO v1.0.2 or later
+
+Open **Settings → Application Tools → Check Software Updates**. If an update is available, choose **Download Update**. Save your work, then choose **Install and Restart**. If TEMPO offers **Download Full Update**, you can download it or wait and try again later.
+
+### Recover a Windows installation
+
+If setup failed or shortcuts disappeared, close TEMPO and rerun the verified installer for that version. If legacy migration stops, keep its recovery files and follow the migration procedure from the step that stopped.
+
+If an in-app update stopped after it downloaded its recovery files, close TEMPO and its workers. Run `TEMPORepair.exe --mode forward` from PowerShell using the repair companion for the installed release. The companion checks the retained signed files and tries to complete the update. If repair stops, keep those files and report the exact message, both version numbers, and whether you use NVIDIA acceleration. [TEMPO issues](https://github.com/tempo-bio/TEMPO/issues)
 
 ## Connect your workspace
 

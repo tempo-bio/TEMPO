@@ -5,6 +5,7 @@ import os
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 from pathlib import Path
 import tempfile
+from threading import Event
 import unittest
 from unittest.mock import Mock, patch
 
@@ -255,6 +256,40 @@ class PackagedWizardTests(IsolatedSetupState, unittest.TestCase):
             self.assertTrue(wait_for_qt(lambda: view._model_task is None))
             install.assert_called_once()
         self.assertTrue(view._nvidia_ready)
+
+    def test_nvidia_setup_shows_work_after_the_download_finishes(self):
+        from tempo_model_catalog import MODEL_FILES
+        manifest = {'models': dict.fromkeys(MODEL_FILES.values())}
+        with patch('tempo_nvidia_setup.release_descriptor', return_value={'archive_size': 100}):
+            view = self.view()
+        view.stack.setCurrentWidget(view.models_page)
+        view.show()
+        view.nvidia_option.setChecked(True)
+        finish = Event()
+
+        def install(report, *, report_stage):
+            report(100, 100)
+            report_stage('unpacking')
+            if not finish.wait(5):
+                raise TimeoutError('Fixture did not release NVIDIA installation.')
+
+        with patch.object(setup.tempo_hub, 'model_manifest', return_value=manifest), \
+             patch.object(setup.tempo_hub, 'download_model_release'), \
+             patch('tempo_nvidia_setup.install_nvidia_runtime', side_effect=install):
+            view._install_models()
+            try:
+                self.assertTrue(wait_for_qt(lambda: 'Unpacking' in view.nvidia_progress_label.text()))
+                self.assertTrue(view.model_progress.isHidden())
+                self.assertTrue(all(status.text() == 'Ready' for status in view.model_statuses.values()))
+                self.assertFalse(view.nvidia_progress.isHidden())
+                self.assertEqual((view.nvidia_progress.minimum(), view.nvidia_progress.maximum()), (0, 0))
+                self.assertFalse(view.btn_models.isEnabled())
+            finally:
+                finish.set()
+                self.assertTrue(wait_for_qt(lambda: view._model_task is None))
+
+        self.assertEqual(view.nvidia_progress_label.text(), 'NVIDIA acceleration ready')
+        self.assertTrue(view.nvidia_progress.isHidden())
 
     def test_first_signin_discovers_custom_repositories_before_checking_access(self):
         from tempo_shared_settings import values

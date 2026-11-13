@@ -1,6 +1,7 @@
 """Release retention/publication preflight must never trust candidate assertions."""
 import base64
 from datetime import datetime, timezone
+from dataclasses import replace
 import io
 import hashlib
 import json
@@ -167,6 +168,38 @@ class WindowsReleaseSetTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'evidence is missing or changed'):
             self.prepare()
         self.assertFalse(self.options['output'].exists())
+
+    def test_v102_deferral_requires_software_shutdown_and_matches_only_published_build(self):
+        version, commit, channel = retention.HARDWARE_DEFERRED_RELEASE
+        release = replace(self.release, version=version, commit=commit, channel=channel)
+        value = json.loads(self.artifacts['acceptance'].read_bytes())
+        value['source_commit'] = commit
+        value['checks'].pop('hardware_shutdown')
+        value['evidence'].pop('hardware_shutdown')
+        path = self.artifacts['acceptance']
+        path.write_bytes(_canonical(value))
+        with self.assertRaisesRegex(ValueError, 'deferral to v1.0.3'):
+            retention._acceptance(path, self.artifacts, release)
+        value['deferred_checks'] = {'hardware_shutdown': 'v1.0.3'}
+        path.write_bytes(_canonical(value))
+        with self.assertRaisesRegex(ValueError, 'incomplete'):
+            retention._acceptance(path, self.artifacts, release)
+
+        value['checks']['software_shutdown'] = True
+        report = self.put('software-shutdown.json', b'test fixture')
+        value['evidence']['software_shutdown'] = {'sha256': _digest(report)}
+        path.write_bytes(_canonical(value))
+        with self.assertRaisesRegex(ValueError, 'software_shutdown'):
+            retention._acceptance(path, self.artifacts, release)
+        self.artifacts['report_software_shutdown'] = report
+        required = retention._acceptance(path, self.artifacts, release)
+        self.assertIn('software_shutdown', required)
+        self.assertNotIn('hardware_shutdown', required)
+
+        value['source_commit'] = self.release.commit
+        path.write_bytes(_canonical(value))
+        with self.assertRaisesRegex(ValueError, 'incomplete'):
+            retention._acceptance(path, self.artifacts, self.release)
 
     def test_recovered_copy_needs_external_trust_and_exact_digest_and_bytes(self):
         result = self.prepare()

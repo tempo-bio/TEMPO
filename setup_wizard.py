@@ -22,6 +22,7 @@ from tempo_credentials import safe_profile_name
 from tempo_secure_store import save_hf_token, CredentialStorageError
 from tempo_shared_settings import CONTROL_REPO, fetch_shared_settings, apply_shared_settings
 from tempo_hub import tempo_hub, configure_desktop_http
+from tempo_model_progress import byte_text
 from tempo_tasks import run_read_task, run_task, run_background, run_inline_task
 from tempo_ui import ErrorDetails, FlowRow
 import tempo_oauth
@@ -639,8 +640,8 @@ class SetupWizardDialog(QDialog):
         layout.addWidget(self.nvidia_option)
         self.nvidia_option.setVisible(nvidia_release is not None)
         self.nvidia_description = self._add_setup_text(
-            layout, 'Uses a compatible NVIDIA GPU for cell outlines. Additional download: about '
-            + (f"{nvidia_release['archive_size'] / 1024**3:.1f} GB." if nvidia_release else '3 GB.'))
+            layout, ('Uses a compatible NVIDIA GPU for cell outlines. '
+                     f"Download size is {byte_text(nvidia_release['archive_size'])}." if nvidia_release else ''))
         self.nvidia_description.setStyleSheet('color: #42586b;')
         self.nvidia_description.setVisible(nvidia_release is not None)
         self.nvidia_progress_label = self._add_setup_text(layout, '')
@@ -719,7 +720,9 @@ class SetupWizardDialog(QDialog):
             self._nvidia_models_downloaded = True
             if download_nvidia:
                 from tempo_nvidia_setup import install_nvidia_runtime
-                install_nvidia_runtime(lambda received, total: report(('nvidia', received, total)))
+                install_nvidia_runtime(
+                    lambda received, total: report(('nvidia_download', received, total)),
+                    report_stage=lambda stage: report(('nvidia_stage', stage)))
             if not getattr(sys, 'frozen', False):
                 # The source VBS launcher still uses its environment marker.
                 try:
@@ -729,15 +732,34 @@ class SetupWizardDialog(QDialog):
                     raise RuntimeError('Models were installed, but setup completion could not be recorded. Check folder permissions and retry.') from error
 
         def progress(event):
-            if isinstance(event, tuple) and len(event) == 3 and event[0] == 'nvidia':
-                _, received, total = event
-                self.nvidia_progress_label.setText(
-                    f'Downloading NVIDIA acceleration: {received / 1024**3:.2f} of {total / 1024**3:.2f} GB')
-                self.nvidia_progress_label.show()
-                self.nvidia_progress.setValue(min(100, int(received * 100 / total)))
-                self.nvidia_progress.show()
-            else:
+            if not isinstance(event, tuple):
                 self.model_progress.update_progress(event)
+                return
+            if not self.model_progress.isHidden():
+                self.model_progress.timer.stop()
+                self.model_progress.hide()
+                for status in self.model_statuses.values():
+                    status.setText('Ready')
+            if event[0] == 'nvidia_download':
+                _, received, total = event
+                if received < total:
+                    self.nvidia_progress_label.setText(
+                        f'Downloading NVIDIA acceleration · {byte_text(received)} of {byte_text(total)}')
+                    self.nvidia_progress.setRange(0, 100)
+                    self.nvidia_progress.setValue(received * 100 // total)
+                else:
+                    self.nvidia_progress_label.setText('Checking the NVIDIA download…')
+                    self.nvidia_progress.setRange(0, 0)
+            else:
+                self.nvidia_progress_label.setText({
+                    'unpacking': 'Unpacking the NVIDIA runtime…',
+                    'checking_gpu': 'Testing NVIDIA acceleration on your GPU…',
+                    'verifying': 'Verifying the NVIDIA runtime files…',
+                    'activating': 'Activating NVIDIA acceleration…',
+                }[event[1]])
+                self.nvidia_progress.setRange(0, 0)
+            self.nvidia_progress_label.show()
+            self.nvidia_progress.show()
 
         self._model_task = run_inline_task(
             self, 'Installing the published model release…', install, self._models_finished,

@@ -153,7 +153,8 @@ def activate_nvidia_runtime(receipt, descriptor, *, target_version, target_commi
     return _locked(root, lambda: _activate_runtime(root, receipt, descriptor))
 
 
-def install_nvidia_runtime(report=lambda received, total: None, *, descriptor=None, open_url=None):
+def install_nvidia_runtime(report=lambda received, total: None, *, descriptor=None, open_url=None,
+                           report_stage=lambda stage: None):
     """Download, check, probe and atomically select the current release worker."""
     descriptor = descriptor or release_descriptor()
     if descriptor is None:
@@ -163,8 +164,9 @@ def install_nvidia_runtime(report=lambda received, total: None, *, descriptor=No
     validate_descriptor(descriptor, version=VERSION, commit=descriptor.get('commit'))
     root = runtime_root()
     def install():
-        receipt = _stage_runtime(root, descriptor, report, open_url)
-        _activate_runtime(root, receipt, descriptor)
+        report(0, descriptor['archive_size'])
+        receipt = _stage_runtime(root, descriptor, report, open_url, report_stage=report_stage)
+        _activate_runtime(root, receipt, descriptor, report_stage=report_stage)
         return True
     return _locked(root, install)
 
@@ -240,17 +242,20 @@ def retain_nvidia_archive(descriptor, marker, *, report=lambda received, total: 
     return _locked(root, retain)
 
 
-def _stage_runtime(root, descriptor, report, open_url):
+def _stage_runtime(root, descriptor, report, open_url, *, report_stage=lambda stage: None):
     with tempfile.TemporaryDirectory(prefix='nvidia-download-', dir=root) as folder:
         staging = Path(folder)
         archive = staging / 'runtime.zip'
         _download_archive(descriptor, archive, report, open_url)
         unpacked = staging / 'unpacked'
+        report_stage('unpacking')
         _extract_checked(archive, unpacked)
         executable = unpacked / 'TEMPO' / 'TEMPO.exe'
         if not executable.is_file() or _digest(executable) != descriptor['executable_sha256']:
             raise ValueError('NVIDIA runtime executable failed its release checksum.')
+        report_stage('checking_gpu')
         _probe(executable, descriptor)
+        report_stage('verifying')
         bundle = f"{descriptor['commit']}-{descriptor['archive_sha256'][:12]}"
         destination = root / bundle
         if destination.exists() and not _bundle_matches(unpacked, destination):
@@ -271,7 +276,7 @@ def _stage_runtime(root, descriptor, report, open_url):
                 'previous_marker': previous}
 
 
-def _activate_runtime(root, receipt, descriptor):
+def _activate_runtime(root, receipt, descriptor, *, report_stage=lambda stage: None):
     if not isinstance(receipt, dict) or receipt.get('schema_version') != 1 or receipt.get('descriptor') != descriptor:
         raise ValueError('Staged NVIDIA runtime does not match the target release.')
     bundle = receipt.get('bundle')
@@ -298,6 +303,7 @@ def _activate_runtime(root, receipt, descriptor):
         if (destination.is_symlink() or not _bundle_matches(expected, destination)
                 or _digest(expected / descriptor['executable']) != descriptor['executable_sha256']):
             raise ValueError('Staged NVIDIA runtime inventory failed verification.')
+    report_stage('activating')
     _atomic_json(root / 'active.json', {
         'schema_version': 1, 'version': descriptor['app_version'],
         'commit': descriptor['commit'], 'bundle': bundle,

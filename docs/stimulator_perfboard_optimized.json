@@ -147,29 +147,29 @@
     {
       "refDes": "U1",
       "type": "DIP-8",
-      "leftCol": 3,
+      "leftCol": 2,
       "rightCol": 5,
       "startRow": 7,
       "endRow": 10,
-      "desc": "OPA340 (Notch UP, Rows 7-10). Pin 1 top-left (3,7), Pin 4 bot-left (3,10), Pin 5 bot-right (5,10), Pin 8 top-right (5,7)"
+      "desc": "OPA340 (Notch UP, Rows 7-10). Pin 1 top-left (2,7), Pin 4 bot-left (2,10), Pin 5 bot-right (5,10), Pin 8 top-right (5,7)"
     },
     {
       "refDes": "U2",
       "type": "DIP-16",
       "leftCol": 7,
-      "rightCol": 9,
+      "rightCol": 10,
       "startRow": 5,
       "endRow": 12,
-      "desc": "CD74HC4053 (Notch UP, Rows 5-12). Pin 1 top-left (7,5), Pin 8 bot-left (7,12), Pin 9 bot-right (9,12), Pin 16 top-right (9,5)"
+      "desc": "CD74HC4053 (Notch UP, Rows 5-12). Pin 1 top-left (7,5), Pin 8 bot-left (7,12), Pin 9 bot-right (10,12), Pin 16 top-right (10,5)"
     },
     {
       "refDes": "U3",
       "type": "DIP-16",
-      "leftCol": 12,
-      "rightCol": 14,
+      "leftCol": 13,
+      "rightCol": 16,
       "startRow": 5,
       "endRow": 12,
-      "desc": "CD74HC4051 (Notch UP, Rows 5-12). Pin 1 top-left (12,5), Pin 8 bot-left (12,12), Pin 9 bot-right (14,12), Pin 16 top-right (14,5)"
+      "desc": "CD74HC4051 (Notch UP, Rows 5-12). Pin 1 top-left (13,5), Pin 8 bot-left (13,12), Pin 9 bot-right (16,12), Pin 16 top-right (16,5)"
     },
     {
       "refDes": "C1",
@@ -181,29 +181,29 @@
     {
       "refDes": "C2",
       "type": "capacitor_ceramic_0.1uF",
-      "lead1": { "col": 9, "row": 4, "net": "5V" },
-      "lead2": { "col": 8, "row": 4, "net": "GND" },
+      "lead1": { "col": 10, "row": 4, "net": "5V" },
+      "lead2": { "col": 9, "row": 4, "net": "GND" },
       "desc": "Decoupling capacitor for U2 (74HC4053), adjacent to Pin 16"
     },
     {
       "refDes": "C3",
       "type": "capacitor_ceramic_0.1uF",
-      "lead1": { "col": 14, "row": 4, "net": "5V" },
-      "lead2": { "col": 13, "row": 4, "net": "GND" },
+      "lead1": { "col": 16, "row": 4, "net": "5V" },
+      "lead2": { "col": 15, "row": 4, "net": "GND" },
       "desc": "Decoupling capacitor for U3 (74HC4051), adjacent to Pin 16"
     },
     {
       "refDes": "C4",
       "type": "capacitor_radial_10uF",
-      "lead1": { "col": 2, "row": 7, "net": "5V" },
-      "lead2": { "col": 2, "row": 8, "net": "GND" },
+      "lead1": { "col": 2, "row": 4, "net": "5V" },
+      "lead2": { "col": 2, "row": 5, "net": "GND" },
       "desc": "Bulk reservoir capacitor at power entry"
     },
     {
       "refDes": "R1",
       "type": "resistor_axial_100_ohm",
-      "lead1": { "col": 9, "row": 7, "net": "U2_OUT" },
-      "lead2": { "col": 12, "row": 7, "net": "MUX_COM" },
+      "lead1": { "col": 10, "row": 7, "net": "U2_OUT" },
+      "lead2": { "col": 13, "row": 7, "net": "MUX_COM" },
       "desc": "Series output resistor connecting U2 Pin 14 and U3 Pin 3 on Row 7"
     },
     {
@@ -281,54 +281,54 @@
     "5V": [
       "J_PWR.1 (col 1, row 7)",
       "U1.7 (col 5, row 8)",
-      "U2.16 (col 9, row 5)",
-      "U3.16 (col 14, row 5)",
+      "U2.16 (col 10, row 5)",
+      "U3.16 (col 16, row 5)",
       "C1.1 (col 5, row 6)",
-      "C2.1 (col 9, row 4)",
-      "C3.1 (col 14, row 4)",
-      "C4.1 (col 2, row 7)",
+      "C2.1 (col 10, row 4)",
+      "C3.1 (col 16, row 4)",
+      "C4.1 (col 2, row 4)",
       "R3.1 (col 7, row 3)",
       "R4.1 (col 12, row 3)"
     ],
     "GND": [
       "J_PWR.2 (col 1, row 8)",
-      "U1.4 (col 3, row 10)",
+      "U1.4 (col 2, row 10)",
       "U2.7 (col 7, row 11)",
       "U2.8 (col 7, row 12)",
-      "U2.9 (col 9, row 12)",
-      "U2.10 (col 9, row 11)",
-      "U2.12 (col 9, row 9)",
-      "U3.7 (col 12, row 11)",
-      "U3.8 (col 12, row 12)",
+      "U2.9 (col 10, row 12)",
+      "U2.10 (col 10, row 11)",
+      "U2.12 (col 10, row 9)",
+      "U3.7 (col 13, row 11)",
+      "U3.8 (col 13, row 12)",
       "J_OUT_GND.1-8 (col 20, rows 5-12)",
       "C1.2 (col 4, row 6)",
-      "C2.2 (col 8, row 4)",
-      "C3.2 (col 13, row 4)",
-      "C4.2 (col 2, row 8)",
+      "C2.2 (col 9, row 4)",
+      "C3.2 (col 15, row 4)",
+      "C4.2 (col 2, row 5)",
       "R2.2 (col 8, row 14)",
       "R5.2 (col 11, row 14)"
     ],
     "DAC_A0": [
       "J_PWR.3 (col 1, row 9)",
-      "U1.3 (col 3, row 9)"
+      "U1.3 (col 2, row 9)"
     ],
     "OPAMP_FB": [
       "U1.6 (col 5, row 9)",
-      "U1.2 (col 3, row 8)",
-      "U2.13 (col 9, row 8)"
+      "U1.2 (col 2, row 8)",
+      "U2.13 (col 10, row 8)"
     ],
     "U2_OUT": [
-      "U2.14 (col 9, row 7)",
-      "R1.1 (col 9, row 7)"
+      "U2.14 (col 10, row 7)",
+      "R1.1 (col 10, row 7)"
     ],
     "MUX_COM": [
-      "R1.2 (col 12, row 7)",
-      "U3.3 (col 12, row 7)",
+      "R1.2 (col 13, row 7)",
+      "U3.3 (col 13, row 7)",
       "R5.1 (col 11, row 13)"
     ],
     "D2": [
       "J_DIG.1 (col 8, row 1)",
-      "U2.11 (col 9, row 10)",
+      "U2.11 (col 10, row 10)",
       "R2.1 (col 8, row 13)"
     ],
     "D3": [
@@ -338,61 +338,61 @@
     ],
     "D4": [
       "J_DIG.3 (col 10, row 1)",
-      "U3.6 (col 12, row 10)",
+      "U3.6 (col 13, row 10)",
       "R4.2 (col 12, row 4)"
     ],
     "D5": [
       "J_DIG.4 (col 11, row 1)",
-      "U3.9 (col 14, row 12)"
+      "U3.11 (col 16, row 10)"
     ],
     "D6": [
       "J_DIG.5 (col 12, row 1)",
-      "U3.10 (col 14, row 11)"
+      "U3.10 (col 16, row 11)"
     ],
     "D7": [
       "J_DIG.6 (col 13, row 1)",
-      "U3.11 (col 14, row 10)"
+      "U3.9 (col 16, row 12)"
     ],
     "Well_1": [
-      "U3.13 (col 14, row 8)",
+      "U3.13 (col 16, row 8)",
       "J_OUT_WELL.1 (col 18, row 5)"
     ],
     "Well_2": [
-      "U3.14 (col 14, row 7)",
+      "U3.14 (col 16, row 7)",
       "J_OUT_WELL.2 (col 18, row 6)"
     ],
     "Well_3": [
-      "U3.15 (col 14, row 6)",
+      "U3.15 (col 16, row 6)",
       "J_OUT_WELL.3 (col 18, row 7)"
     ],
     "Well_4": [
-      "U3.12 (col 14, row 9)",
+      "U3.12 (col 16, row 9)",
       "J_OUT_WELL.4 (col 18, row 8)"
     ],
     "Well_5": [
-      "U3.1 (col 12, row 5)",
+      "U3.1 (col 13, row 5)",
       "J_OUT_WELL.5 (col 18, row 9)"
     ],
     "Well_6": [
-      "U3.5 (col 12, row 9)",
+      "U3.5 (col 13, row 9)",
       "J_OUT_WELL.6 (col 18, row 10)"
     ],
     "Well_7": [
-      "U3.2 (col 12, row 6)",
+      "U3.2 (col 13, row 6)",
       "J_OUT_WELL.7 (col 18, row 11)"
     ],
     "Well_8": [
-      "U3.4 (col 12, row 8)",
+      "U3.4 (col 13, row 8)",
       "J_OUT_WELL.8 (col 18, row 12)"
     ]
   },
   "stepByStepAssemblyGuide": [
     "Step 1: Sockets and Headers. Insert DIP sockets (U1 DIP-8, U2 DIP-16, U3 DIP-16) and female pin headers (J_PWR 1x3, J_DIG 1x6, J_OUT_WELL 1x8, J_OUT_GND 1x8). Verify Col 19 is left completely empty as the 1-hole gap between J_OUT_WELL (Col 18) and J_OUT_GND (Col 20). Solder corner pins to anchor them.",
-    "Step 2: Power and Ground Rails. Lay a bare tinned copper bus wire along Row 3 for +5V and along Row 14 for GND. Connect J_PWR Pin 1 (Row 7) to Row 3, and J_PWR Pin 2 (Row 8) to Row 14.",
-    "Step 3: Decoupling and Reservoir Capacitors. Solder C1 (0.1 uF) between U1 Pin 7 and GND. Solder C2 (0.1 uF) between U2 Pin 16 and GND. Solder C3 (0.1 uF) between U3 Pin 16 and GND. Place bulk electrolytic C4 (10 uF) across 5V and GND at Col 2.",
-    "Step 4: Resistors. Solder R1 (100 Ohm) spanning directly across Row 7 between U2 Pin 14 (Col 9) and U3 Pin 3 (Col 12). Solder R2 (100k pull-down on D2), R3 (100k pull-up on D3), R4 (100k pull-up on D4), and R5 (100k bleeder).",
+    "Step 2: Power and Ground Rails. Lay a bare tinned copper bus wire along Row 3 for +5V and along Row 14 for GND. Connect J_PWR Pin 1 (Row 7) to Row 3, and J_PWR Pin 2 (Row 8) to Row 14. Connect U1 Pin 7, U2 Pin 16 and U3 Pin 16 to +5V. Connect U1 Pin 4 to GND.",
+    "Step 3: Decoupling and Reservoir Capacitors. Solder C1 (0.1 uF) between U1 Pin 7 and GND. Solder C2 (0.1 uF) between U2 Pin 16 and GND. Solder C3 (0.1 uF) between U3 Pin 16 and GND. Place bulk electrolytic C4 (10 uF) at Col 2 with its positive lead in Row 4 (+5V) and negative lead in Row 5 (GND).",
+    "Step 4: Resistors. Solder R1 (100 Ohm) spanning directly across Row 7 between U2 Pin 14 (Col 10) and U3 Pin 3 (Col 13). Solder R2 (100k pull-down on D2), R3 (100k pull-up on D3), R4 (100k pull-up on D4), and R5 (100k bleeder).",
     "Step 5: Tie Unused & Static Pins to Ground. Solder-bridge U2 Pins 7, 8, 9, 10, 12 to the GND net. Solder-bridge U3 Pins 7 and 8 to GND.",
-    "Step 6: Control & Signal Wiring. Route insulated 30 AWG kynar / wrapping wire from J_PWR Pin 3 to U1 Pin 3 (DAC A0); bridge U1 Pin 6 to Pin 2 and U2 Pin 13 (Op-amp buffer output); connect J_DIG Pins 1-6 to D2-D7 inputs on U2 and U3.",
+    "Step 6: Control & Signal Wiring. Route insulated 30 AWG kynar / wrapping wire from J_PWR Pin 3 to U1 Pin 3 (DAC A0). Connect U1 Pin 6 to U1 Pin 2 and U2 Pin 13. Connect J_DIG Pins 1 and 2 (D2 and D3) to U2 Pins 11 and 6, respectively. Connect J_DIG Pin 3 (D4) to U3 Pin 6. Connect J_DIG Pins 4, 5 and 6 (D5, D6 and D7) to U3 Pins 11, 10 and 9 (S0, S1 and S2), respectively.",
     "Step 7: Multiplexer Output Routing. Route the 8 channel pins from U3 to J_OUT_WELL Pins 1 through 8 in sequential order (Wells 1 to 8 / Rows A to H).",
     "Step 8: Output Ground Bus. Solder a continuous vertical bridge down J_OUT_GND Pins 1 through 8 (Col 20, Rows 5-12) and link it directly to the bottom GND rail on Row 14."
   ]

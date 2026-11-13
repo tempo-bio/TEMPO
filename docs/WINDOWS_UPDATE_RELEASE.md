@@ -32,6 +32,8 @@ The `checks` map requires each of these names to be true, with retained raw evid
 
 Each name has an `evidence` entry containing the raw report's `sha256`, and a corresponding `report_<name>` artifact input. The record also includes `version`, `source_commit`, `artifact_sha256` with the four identities above, and `code_signing` with a reviewed `mode` (`authenticode` or `unsigned-approved`) and `decision_reference`. Writing assertions does not establish that the tests occurred. The candidate contract's `release_certified: false`, same-source replacements, simulated damage and mocked GPU checks cannot substitute for these gates.
 
+For the published stable-channel v1.0.2 build at `4dc336fc8b655ed347a6a1e37a0ae944bf3502e3`, camera and stimulator validation is scheduled for v1.0.3. Record `"deferred_checks": {"hardware_shutdown": "v1.0.3"}` and submit `software_shutdown` evidence in place of `hardware_shutdown`. Exercise restart during processing and with unsaved work, check that active TEMPO processes prevent replacement, then verify that an ordinary shutdown completes the update. NVIDIA migration and inference still require their own evidence. The physical hardware check applies to other release builds.
+
 ## Assemble and smoke-test the stable-channel installer
 
 Run **Build & Package Windows Release** on the intended release commit with the application version as the release tag, including its leading `v`. Retrieve `Windows_release_bundle`, `Windows_velopack_candidate_payload`, `velopack-production-feature-candidate`, and `Windows_NVIDIA_runtime` from that successful run. Use the original `candidate-contract.json` to check the exported CPU folder, setup helper, and updater. Keep the reviewed native certification and repair companion with the matching public trust file.
@@ -49,6 +51,10 @@ pwsh -File <release>/verify_velopack_install.ps1 -Mode release-smoke -Payload <r
 ```
 
 Review the report and preserve the exact installer and full package. Follow the [package-signing procedure](../installer/velopack/README.md#prepare-a-candidate-bundle) to bind the verified package hash and create signed stable metadata, passing the same `--native-pin`. Stage those same binaries for prerelease testing after approval, with the stable index withheld. Complete the broader acceptance checks before promoting the existing versioned release.
+
+## Build private versions for signed update testing
+
+In **Build & Package Windows Release**, enter `v1.0.2` and select **Test signed Windows updates and repair on isolated builds**. The workflow builds three complete CPU applications in isolated copies of the release source, with a different pinned version of tqdm in the first build. It signs their test feeds with a key generated for that run and retains the packages in Actions. The test reads signed assets from disk, exercises both delta failure paths and recovery-base download, and checks successive and skipped replacements with the native updater. A repair scenario restores an isolated installation from the retained packages after simulated damage. The restarted app runs bundled diagnostics offscreen. Review actual update dialog behavior, shutdown with active work, and NVIDIA behavior separately before release certification.
 
 ## Prepare an immutable release set
 

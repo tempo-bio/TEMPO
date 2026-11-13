@@ -64,7 +64,7 @@ class NvidiaSetupTests(unittest.TestCase):
     def test_multipart_download_is_combined_verified_and_activated_with_aggregate_progress(self):
         data = _archive()
         descriptor, payloads = self.multipart(data)
-        requested, progress = [], []
+        requested, progress, stages = [], [], []
         def opener(request, timeout):
             self.assertEqual(timeout, 30)
             requested.append(request.full_url)
@@ -72,11 +72,12 @@ class NvidiaSetupTests(unittest.TestCase):
         with patch.object(setup, 'runtime_root', return_value=self.root), \
              patch.object(setup, '_probe', return_value={'success':True}) as probe:
             self.assertTrue(setup.install_nvidia_runtime(lambda *value: progress.append(value),
-                descriptor=descriptor, open_url=opener))
+                descriptor=descriptor, open_url=opener, report_stage=stages.append))
         self.assertEqual(requested, [part['url'] for part in descriptor['parts']])
         self.assertEqual(progress[-1], (len(data), len(data)))
         self.assertEqual([value[0] for value in progress], sorted(value[0] for value in progress))
         self.assertTrue(all(value[1] == len(data) for value in progress))
+        self.assertEqual(stages, ['unpacking', 'checking_gpu', 'verifying', 'activating'])
         probe.assert_called_once()
         marker = json.loads((self.root/'active.json').read_text())
         executable = self.root/marker['bundle']/marker['executable']

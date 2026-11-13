@@ -22,7 +22,7 @@ See [Getting started](docs/GETTING_STARTED.md) for workspace access, model insta
 
 ### Updating TEMPO
 
-Close TEMPO and run the new installer using your existing installation folder. Recordings, analysis files, downloaded models, and saved account settings are retained.
+Moving from v1.0.1 to v1.0.2 requires a migration before removing the old installation. Follow the version-specific procedure, including its NVIDIA or add-on steps if applicable. Once you have a release with in-app updates, use **Settings → Application Tools → Check Software Updates**. [Upgrade and recovery instructions](docs/GETTING_STARTED.md#upgrade-tempo)
 
 ### Uninstall TEMPO
 
