@@ -11,6 +11,21 @@ from tempo_ui import ErrorDetails
 from tempo_update_service import FullDownloadRequired, UpdateCancelled
 
 
+_STAGE_TEXT = {
+    'checking_base': 'Checking the installed version…',
+    'downloading_recovery': 'Downloading a recovery copy…',
+    'verifying_recovery': 'Verifying the recovery copy…',
+    'downloading_update': 'Downloading the TEMPO update…',
+    'rebuilding_update': 'Rebuilding the update from the downloaded changes…',
+    'verifying_update': 'Verifying the TEMPO update…',
+    'nvidia_checking': 'Checking the NVIDIA package for the new TEMPO version…',
+    'nvidia_downloading': 'Downloading NVIDIA support for the new TEMPO version…',
+    'nvidia_unpacking': 'Unpacking NVIDIA support…',
+    'nvidia_checking_gpu': 'Testing NVIDIA support on your GPU…',
+    'nvidia_verifying': 'Verifying NVIDIA files…',
+}
+
+
 def _size_text(size):
     if size >= 1024 ** 3:
         return f'{size / (1024 ** 3):.3f} GB'
@@ -83,6 +98,10 @@ class PackagedSoftwareUpdateDialog(QDialog):
         if state != 'waiting':
             self.status.hide()
 
+    def _show_status(self, text):
+        self.status.setText(text)
+        self.status.show()
+
     def _run(self, action, done):
         self._cancel.clear()
         self._progress_timer.start()
@@ -96,20 +115,26 @@ class PackagedSoftwareUpdateDialog(QDialog):
                 latest = self._mailbox.get_nowait()
             except queue.Empty:
                 break
-        if latest is not None and self._state in ('downloading', 'cancelling'):
-            label, received, total = latest
-            if label == 'Preparing NVIDIA support':
-                self._component_preparing = True
-                self.btn_update.setEnabled(False)
-                self.btn_update.setText('Preparing…')
-                self.status.setText('Preparing NVIDIA support…')
-                self.status.show()
-                if total <= 0:
-                    self.progress.setRange(0, 0)
-            if total > 0:
-                self.progress.setRange(0, 100)
-                self.progress.setValue(min(100, max(0, int(received * 100 / total))))
-                self.progress.setFormat(label + ': %p%')
+        if latest is None or self._state != 'downloading':
+            return
+        stage, received, total = latest
+        if stage.startswith('nvidia_'):
+            self._component_preparing = True
+            self.btn_update.setEnabled(False)
+            self.btn_update.setText('Preparing…')
+        if self._close_when_done:
+            return
+        self._show_status('Verifying downloaded files…' if total and received >= total
+                          else _STAGE_TEXT[stage])
+        if not self._component_preparing:
+            self.btn_update.setText('Cancel Download' if stage.startswith('downloading_') and received < total
+                                    else 'Cancel Update')
+        if 0 <= received < total:
+            self.progress.setRange(0, 100)
+            self.progress.setValue(received * 100 // total)
+            self.progress.setFormat('%p%')
+        else:
+            self.progress.setRange(0, 0)
 
     def _finish_background(self):
         self._progress_timer.stop()
@@ -133,6 +158,9 @@ class PackagedSoftwareUpdateDialog(QDialog):
         details = ', '.join(f'{_size_text(amount)} for {label}' for amount, label in extras if amount)
         if details:
             summary += f' (includes {details})'
+        if self.coordinator.component_required:
+            summary += ('\n\nYou already have NVIDIA acceleration. TEMPO downloads the NVIDIA '
+                        'runtime that matches the new version so GPU processing stays available after the update.')
         self.log_view.setMarkdown(f'## TEMPO {target.version}\n\n{summary}\n\n{notes}')
 
     def check_release(self):
@@ -158,24 +186,35 @@ class PackagedSoftwareUpdateDialog(QDialog):
         if self._state == 'downloading':
             self._cancel.set()
             self._set_state('cancelling')
+            self._show_status('Cancelling update preparation…')
         elif self._state in ('available', 'full_required'):
             full = self._state == 'full_required'
             self.error_details.clear()
             self._component_preparing = False
             self._set_state('downloading')
+            self._show_status(_STAGE_TEXT['checking_base'])
+            self.btn_update.setText('Cancel Update')
             def transfer():
-                def report(label, received, total):
-                    self._mailbox.put((label, received, total))
+                stage = 'downloading_update'
+                def report_stage(name):
+                    nonlocal stage
+                    stage = name
+                    self._mailbox.put((stage, 0, 0))
+                def report(received, total):
+                    self._mailbox.put((stage, received, total))
                 if full:
                     self.coordinator.use_full_download()
-                self.coordinator.download(cancel=self._cancel.is_set,
-                    progress=lambda received, total: report('Downloading update', received, total))
+                self.coordinator.download(cancel=self._cancel.is_set, progress=report,
+                                          report_stage=report_stage)
                 if self._cancel.is_set():
                     raise UpdateCancelled('Update cancelled.')
                 if self.coordinator.component_required:
-                    self._mailbox.put(('Preparing NVIDIA support', 0, 0))
+                    report_stage('nvidia_checking')
+                    def report_nvidia(received, total):
+                        self._mailbox.put(('nvidia_downloading', received, total))
                     self.coordinator.prepare_components(
-                        progress=lambda received, total: report('Preparing NVIDIA support', received, total))
+                        progress=report_nvidia,
+                        report_stage=lambda name: report_stage('nvidia_' + name))
                 if self._cancel.is_set():
                     raise UpdateCancelled('Update cancelled.')
                 return True
@@ -183,6 +222,7 @@ class PackagedSoftwareUpdateDialog(QDialog):
         elif self._state == 'ready':
             self.error_details.clear()
             self._set_state('install_check')
+            self._show_status('Checking that the update can be installed…')
             self._run(self.coordinator.installation_consequences, self._installation_checked)
 
     def _downloaded(self, value, error):
@@ -200,6 +240,7 @@ class PackagedSoftwareUpdateDialog(QDialog):
             self._error('The update could not be prepared. Review the details and try again.', error)
         else:
             self._set_state('ready')
+            self._show_status('Update ready to install.')
 
     def _installation_checked(self, value, error):
         if self._finish_background():
@@ -251,6 +292,7 @@ class PackagedSoftwareUpdateDialog(QDialog):
             self._cancel.set()
             if self._state == 'downloading' and not self._component_preparing:
                 self._set_state('cancelling')
+                self._show_status('Cancelling update preparation…')
             elif self._component_preparing:
                 self.status.setText('Finishing NVIDIA preparation before closing…')
                 self.status.show()

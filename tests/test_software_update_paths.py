@@ -70,6 +70,16 @@ class SoftwareUpdatePathTests(unittest.TestCase):
                 updates.perform_software_update()
             command.assert_not_called()
 
+    def test_packaged_startup_uses_read_only_update_probe(self):
+        coordinator = Mock(version='1.0.3', commit='a'*40)
+        coordinator.service.probe.return_value = '1.0.4'
+        with patch.object(updates.sys, 'frozen', True, create=True), \
+             patch('tempo_update_coordinator.configured_coordinator', return_value=coordinator):
+            self.assertEqual(updates.software_release(), (True, 'TEMPO 1.0.4 is available.'))
+        coordinator.service.probe.assert_called_once_with(
+            installed_version='1.0.3', installed_commit='a'*40, timeout=1.2)
+        coordinator.check.assert_not_called()
+
     def test_windows_source_update_uses_windows_runtime_requirements(self):
         revisions = iter(('before', 'after'))
         def execute(command):

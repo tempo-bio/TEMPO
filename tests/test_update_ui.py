@@ -94,7 +94,7 @@ class UpdateDialogTests(unittest.TestCase):
     def test_cancel_waits_for_worker_and_does_not_prepare_component(self):
         service = coordinator()
         started = threading.Event()
-        def download(*, cancel, progress):
+        def download(*, cancel, progress, report_stage):
             started.set()
             while not cancel():
                 time.sleep(.005)
@@ -238,13 +238,14 @@ class UpdateDialogTests(unittest.TestCase):
         service.component_required = True
         service.component_download_size = 3 * 1024 ** 3
         started, release = threading.Event(), threading.Event()
-        def prepare(*, progress):
+        def prepare(*, progress, report_stage):
             progress(1, 4)
             started.set()
             release.wait(3)
         service.prepare_components.side_effect = prepare
         dialog = self.make(service)
         self.assertIn('3.000 GB for NVIDIA support', dialog.log_view.toPlainText())
+        self.assertIn('You already have NVIDIA acceleration', dialog.log_view.toPlainText())
         self.assertIn('Download: 3.004 GB', dialog.log_view.toPlainText())
         output = os.environ.get('TEMPO_UPDATE_PREVIEW_DIR')
         if output:
@@ -260,6 +261,47 @@ class UpdateDialogTests(unittest.TestCase):
         release.set()
         until(lambda: not dialog.isVisible())
         service.request_install.assert_not_called()
+
+    def test_transfer_completion_switches_to_active_preparation(self):
+        service = coordinator()
+        service.component_required = True
+        service.component_download_size = 6 * 1024 ** 3
+        service.version = '1.0.3'
+        service.plan.target.version = '1.0.4'
+        verifying, unpacking, finish = [threading.Event() for _ in range(3)]
+        for gate in (verifying, unpacking, finish):
+            self.addCleanup(gate.set)
+
+        def download(*, cancel, progress, report_stage):
+            report_stage('downloading_update')
+            progress(100, 100)
+            verifying.wait(3)
+            report_stage('verifying_update')
+            unpacking.wait(3)
+
+        def prepare(*, progress, report_stage):
+            progress(100, 100)
+            report_stage('unpacking')
+            finish.wait(3)
+
+        service.download.side_effect = download
+        service.prepare_components.side_effect = prepare
+        dialog = self.make(service)
+        dialog.btn_update.click()
+        output = os.environ.get('TEMPO_UPDATE_PREVIEW_DIR')
+        for status, screenshot, next_gate in (
+            ('Verifying downloaded files…', 'download-finished', verifying),
+            ('Verifying the TEMPO update…', 'verifying-update', unpacking),
+            ('Unpacking NVIDIA support…', 'unpacking-nvidia', finish),
+        ):
+            until(lambda: dialog.status.text() == status)
+            self.assertTrue(dialog.status.isVisible())
+            self.assertEqual(dialog.progress.maximum(), 0)
+            if output:
+                dialog.grab().save(str(Path(output) / f'{screenshot}.png'))
+            next_gate.set()
+        until(lambda: dialog._state == 'ready')
+        self.assertEqual(dialog.btn_update.text(), 'Install and Restart')
 
     def test_long_release_notes_scroll_without_hiding_actions(self):
         APP.setFont(QFont('Arial', 18))
@@ -312,7 +354,7 @@ class UpdateDialogTests(unittest.TestCase):
                     service.recovery_download_size = 128 * 1024 * 1024
                     service.component_download_size = 256 * 1024 * 1024
                     started = threading.Event(); release = threading.Event()
-                    def delayed(*, cancel, progress):
+                    def delayed(*, cancel, progress, report_stage):
                         progress(42, 100); started.set()
                         while not release.wait(.005):
                             if cancel(): raise UpdateCancelled('Cancelled')
@@ -327,7 +369,8 @@ class UpdateDialogTests(unittest.TestCase):
                             until(started.is_set)
                             until(lambda: dialog.progress.maximum() == 100)
                             self.assertEqual(dialog.progress.value(), 42)
-                            self.assertEqual(dialog.progress.format(), 'Downloading update: %p%')
+                            self.assertEqual(dialog.progress.format(), '%p%')
+                            self.assertEqual(dialog.status.text(), 'Downloading the TEMPO update…')
                         else:
                             until(lambda: dialog._state == state)
                     QTest.qWait(50)

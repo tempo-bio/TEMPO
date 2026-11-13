@@ -2,6 +2,7 @@ import io
 import json
 from pathlib import Path
 import tempfile
+import threading
 import unittest
 from unittest.mock import patch
 from urllib.error import URLError
@@ -50,6 +51,40 @@ class UpdateServiceTests(unittest.TestCase):
     def plan(self):
         self.update.check()
         return self.update.plan(installed_version='1.0.1', installed_commit='b'*40)
+
+    def test_stalled_startup_probe_leaves_manual_check_available(self):
+        entered, resume = threading.Event(), threading.Event()
+        results = []
+
+        def slow_open(request, timeout):
+            self.assertEqual(timeout, 1.2)
+            entered.set()
+            if not resume.wait(2):
+                raise TimeoutError('Test did not release the startup probe')
+            return self.open(request, timeout)
+
+        def probe():
+            try:
+                results.append(startup.probe(installed_version='1.0.1',
+                                             installed_commit='b'*40, timeout=1.2))
+            except Exception as error:
+                results.append(error)
+
+        startup = service.UpdateService(self.root, {'test': PUBLIC}, opener=slow_open, clock=lambda: NOW)
+        worker = threading.Thread(target=probe)
+        worker.start()
+        try:
+            self.assertTrue(entered.wait(2))
+            self.assertEqual(list(self.root.iterdir()), [])
+            self.assertEqual(self.plan().target.version, '1.0.2')
+            transaction = (self.root / 'transaction.json').read_bytes()
+        finally:
+            resume.set()
+            worker.join(timeout=2)
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(results, ['1.0.2'])
+        self.assertEqual((self.root / 'transaction.json').read_bytes(), transaction)
+        self.assertFalse(startup.releases)
 
     def test_prepare_and_reverify_and_tamper(self):
         plan = self.plan()
@@ -135,8 +170,12 @@ class UpdateServiceTests(unittest.TestCase):
                 self.update.prepare(plan, base_release=base)
         self.assertFalse(self.update.recovery_package_path(base).exists())
         progress = []
-        self.update.prepare(plan, base_release=base, progress=lambda received, total: progress.append((received, total)))
+        stages = []
+        self.update.prepare(plan, base_release=base, progress=lambda received, total: progress.append((received, total)),
+                            report_stage=stages.append)
         self.assertEqual(progress[-1], (len(base_data) + len(self.data),) * 2)
+        self.assertEqual(stages, ['checking_base', 'downloading_recovery', 'verifying_recovery',
+                                  'downloading_update', 'verifying_update'])
         self.assertEqual(self.update.recovery_package_path(base).read_bytes(), base_data)
         self.assertEqual(self.update.verified_prepared()[1].read_bytes(), self.data)
 

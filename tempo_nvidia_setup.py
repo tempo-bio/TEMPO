@@ -135,7 +135,8 @@ def _locked(root, action):
 
 
 def stage_nvidia_runtime(descriptor, *, target_version, target_commit,
-                         report=lambda received, total: None, open_url=None):
+                         report=lambda received, total: None, open_url=None,
+                         report_stage=lambda stage: None):
     """Stage and probe a release-pinned worker without changing the active marker.
 
     The caller supplies the descriptor authenticated for the target application.
@@ -143,7 +144,12 @@ def stage_nvidia_runtime(descriptor, *, target_version, target_commit,
     """
     validate_descriptor(descriptor, version=target_version, commit=target_commit)
     root = runtime_root()
-    return _locked(root, lambda: _stage_runtime(root, descriptor, report, open_url))
+
+    def stage():
+        report_stage('downloading')
+        return _stage_runtime(root, descriptor, report, open_url, report_stage=report_stage)
+
+    return _locked(root, stage)
 
 
 def activate_nvidia_runtime(receipt, descriptor, *, target_version, target_commit):

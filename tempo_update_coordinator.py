@@ -102,7 +102,8 @@ class PackagedUpdateCoordinator:
             base_package=self.base_package, force_full=True)
         return self.plan
 
-    def download(self, *, cancel=None, progress=lambda received, total: None):
+    def download(self, *, cancel=None, progress=lambda received, total: None,
+                 report_stage=lambda stage: None):
         if self.plan is None:
             raise ValueError('Check for an available update first.')
         configuration = self.configuration
@@ -110,9 +111,10 @@ class PackagedUpdateCoordinator:
             base_release=self.base_release, base_package=self.base_package,
             patcher=self.installation.uninstaller,
             patcher_sha256=configuration.get('updater_sha256'), cancel=cancel,
-            progress=progress)
+            progress=progress, report_stage=report_stage)
 
-    def prepare_components(self, *, progress=lambda received, total: None):
+    def prepare_components(self, *, progress=lambda received, total: None,
+                           report_stage=lambda stage: None):
         """Stage a target worker without selecting it for the running application."""
         if not self.component_required:
             return None
@@ -121,7 +123,8 @@ class PackagedUpdateCoordinator:
         descriptor = packaged_descriptor(release, package)
         from tempo_nvidia_setup import stage_nvidia_runtime
         self.nvidia_receipt = stage_nvidia_runtime(descriptor,
-            target_version=release.version, target_commit=release.commit, report=progress)
+            target_version=release.version, target_commit=release.commit,
+            report=progress, report_stage=report_stage)
         from tempo_annotation_store import atomic_bytes
         atomic_bytes(self.service.root / 'prepared-nvidia.json',
                      json.dumps(self.nvidia_receipt, allow_nan=False).encode('utf-8'))

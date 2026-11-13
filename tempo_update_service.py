@@ -123,69 +123,94 @@ class UpdateService:
         self.state = state
         _write(self.root / 'transaction.json', dict(details, schema_version=1, state=state))
 
-    def _response(self, url):
-        response = self.opener(urllib.request.Request(url, headers={'User-Agent': 'TEMPO-Updater'}), timeout=15)
+    def _response(self, url, *, timeout=15):
+        response = self.opener(urllib.request.Request(url, headers={'User-Agent': 'TEMPO-Updater'}), timeout=timeout)
         final = urlsplit(response.geturl())
         if final.scheme != 'https' or final.hostname not in DOWNLOAD_HOSTS or final.username or final.password or final.port not in (None, 443):
             response.close()
             raise ValueError('Update download redirected outside the trusted HTTPS hosts.')
         return response
 
+    def _fetch_index(self, *, cancel=None, timeout=15):
+        _check_cancel(cancel)
+        deadline = time.monotonic() + 2 * timeout
+        blocks, received = [], 0
+        try:
+            with self._response(FEEDS[self.channel], timeout=timeout) as response:
+                while block := response.read(65536):
+                    _check_cancel(cancel)
+                    received += len(block)
+                    if received > MAX_INDEX or time.monotonic() > deadline:
+                        raise ValueError('Update index exceeded its size or time limit.')
+                    blocks.append(block)
+        except HTTPError as error:
+            if error.code == 404:
+                raise ValueError('The update feed is unavailable. Check again later.') from error
+            raise
+        index = _json(b''.join(blocks))
+        if not isinstance(index, dict) or set(index) != {'releases'} or not isinstance(index['releases'], list) or not 1 <= len(index['releases']) <= 20:
+            raise ValueError('Invalid update release index.')
+        releases, envelopes, versions, sequences = [], {}, set(), set()
+        for envelope in index['releases']:
+            _check_cancel(cancel)
+            encoded = json.dumps(envelope, ensure_ascii=False, allow_nan=False).encode('utf-8')
+            if len(encoded) > MAX_METADATA:
+                raise ValueError('Release metadata exceeded its size limit.')
+            release = load_verified_manifest(encoded, self.keys, now=self.clock(), min_sequence=0, expected_channel=self.channel)
+            identity = (release.version, release.commit)
+            if identity in envelopes or release.version in versions or release.sequence in sequences:
+                raise ValueError('Duplicate update release identity, version, or sequence.')
+            releases.append(release)
+            envelopes[identity] = encoded
+            versions.add(release.version)
+            sequences.add(release.sequence)
+        return tuple(releases), envelopes
+
+    def _check_watermark(self, releases):
+        watermark = self.root / ('sequence-' + self.channel + '.json')
+        try:
+            previous = _json(watermark.read_bytes())
+        except FileNotFoundError:
+            previous = {'sequence': 0}
+        if not isinstance(previous, dict) or type(previous.get('sequence')) is not int or previous['sequence'] < 0:
+            raise ValueError('Invalid update sequence watermark.')
+        sequence = previous['sequence']
+        newest = max(releases, key=lambda release: release.sequence)
+        if newest.sequence < sequence:
+            raise ValueError('The update index is older than the last verified index.')
+        fingerprint = hashlib.sha256(newest.signed_payload).hexdigest()
+        if newest.sequence == sequence and sequence and previous.get('sha256') != fingerprint:
+            raise ValueError('Update sequence identity changed.')
+        return newest, watermark, fingerprint
+
+    def probe(self, *, installed_version, installed_commit, timeout):
+        """Check availability at launch without opening an update transaction."""
+        releases, _ = self._fetch_index(timeout=timeout)
+        newest, _, _ = self._check_watermark(releases)
+        try:
+            plan = plan_transfer(releases, installed_version=installed_version,
+                                 installed_commit=installed_commit, installed_inventory_sha256='0' * 64,
+                                 base_verified=False, channel=self.channel)
+        except ValueError as exc:
+            if str(exc) != 'Automatic downgrade or reinstall is not permitted.':
+                raise
+            return None
+        if plan.target != newest:
+            raise ValueError('Newest release sequence does not match version ordering.')
+        return newest.version
+
     def check(self, *, cancel=None):
         with update_lock(self.root / 'packages'):
             self.releases, self.envelopes, self._issued = (), {}, None
             self._state('checking')
             try:
+                releases, envelopes = self._fetch_index(cancel=cancel)
+                newest, watermark, fingerprint = self._check_watermark(releases)
                 _check_cancel(cancel)
-                deadline = time.monotonic() + 30
-                blocks, received = [], 0
-                with self._response(FEEDS[self.channel]) as response:
-                    while block := response.read(65536):
-                        _check_cancel(cancel)
-                        received += len(block)
-                        if received > MAX_INDEX or time.monotonic() > deadline:
-                            raise ValueError('Update index exceeded its size or time limit.')
-                        blocks.append(block)
-                index = _json(b''.join(blocks))
-                if not isinstance(index, dict) or set(index) != {'releases'} or not isinstance(index['releases'], list) or not 1 <= len(index['releases']) <= 20:
-                    raise ValueError('Invalid update release index.')
-                watermark = self.root / ('sequence-' + self.channel + '.json')
-                previous = _json(watermark.read_bytes()) if watermark.exists() else {'sequence': 0}
-                if not isinstance(previous, dict) or type(previous.get('sequence')) is not int or previous['sequence'] < 0:
-                    raise ValueError('Invalid update sequence watermark.')
-                sequence = previous['sequence']
-                releases, envelopes, versions, sequences = [], {}, set(), set()
-                for envelope in index['releases']:
-                    encoded = json.dumps(envelope, ensure_ascii=False, allow_nan=False).encode('utf-8')
-                    if len(encoded) > MAX_METADATA:
-                        raise ValueError('Release metadata exceeded its size limit.')
-                    release = load_verified_manifest(encoded, self.keys, now=self.clock(), min_sequence=0, expected_channel=self.channel)
-                    identity = (release.version, release.commit)
-                    if identity in envelopes or release.version in versions or release.sequence in sequences:
-                        raise ValueError('Duplicate update release identity, version, or sequence.')
-                    versions.add(release.version)
-                    sequences.add(release.sequence)
-                    releases.append(release)
-                    envelopes[identity] = encoded
-                newest = max(r.sequence for r in releases)
-                if newest < sequence:
-                    raise ValueError('The update index is older than the last verified index.')
-                newest_releases = [r for r in releases if r.sequence == newest]
-                if len(newest_releases) != 1:
-                    raise ValueError('Duplicate newest release sequence.')
-                fingerprint = hashlib.sha256(newest_releases[0].signed_payload).hexdigest()
-                if newest == sequence and sequence and previous.get('sha256') != fingerprint:
-                    raise ValueError('Update sequence identity changed.')
-                _check_cancel(cancel)
-                _write(watermark, {'sequence': newest, 'sha256': fingerprint})
-                self.releases, self.envelopes = tuple(releases), envelopes
+                _write(watermark, {'sequence': newest.sequence, 'sha256': fingerprint})
+                self.releases, self.envelopes = releases, envelopes
                 self._state('available', channel=self.channel)
                 return self.releases
-            except HTTPError as error:
-                self._state('failed')
-                if error.code == 404:
-                    raise ValueError('The update feed is unavailable. Check again later.') from error
-                raise
             except UpdateCancelled:
                 self._state('cancelled')
                 raise
@@ -278,10 +303,12 @@ class UpdateService:
                 os.unlink(temporary)
 
     def prepare(self, plan, *, base_release=None, base_package=None, patcher=None,
-                patcher_sha256=None, cancel=None, progress=lambda received, total: None):
+                patcher_sha256=None, cancel=None, progress=lambda received, total: None,
+                report_stage=lambda stage: None):
         """Download and verify a target; never execute native apply or modify the app."""
         with update_lock(self.root / 'packages'):
             try:
+                report_stage('checking_base')
                 _check_cancel(cancel)
                 if self._issued is None:
                     raise ValueError('An authenticated plan is required.')
@@ -309,11 +336,14 @@ class UpdateService:
                 total, completed, files = sum(a.size for a in plan.assets), 0, []
                 if fetch_base:
                     total += base_release.full.size
+                    report_stage('downloading_recovery')
                     base_package = self._download(base_release.full, cancel=cancel,
                         progress=lambda received, _size: progress(received, total),
                         cache=self.recovery_package_path(base_release).parent)
+                    report_stage('verifying_recovery')
                     verify_zip(base_package, base_release.inventory)
                     completed = base_release.full.size
+                report_stage('downloading_update')
                 for asset in plan.assets:
                     try:
                         files.append(self._download(asset, cancel=cancel,
@@ -329,6 +359,7 @@ class UpdateService:
                     try:
                         if base_package is None or base_release is None or patcher is None:
                             raise ValueError('No verified base or patch engine is available.')
+                        report_stage('checking_base')
                         verify_zip(base_package, base_release.inventory)
                         patcher = _safe_directory(patcher)
                         actual = hashlib.sha256(patcher.read_bytes()).hexdigest()
@@ -341,6 +372,7 @@ class UpdateService:
                             command += ['--delta', str(path.resolve())]
                         command += ['--output', str(output.resolve())]
                         options = {'creationflags': getattr(subprocess, 'CREATE_NO_WINDOW', 0)} if os.name == 'nt' else {'start_new_session': True}
+                        report_stage('rebuilding_update')
                         process = subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, **options)
                         started = time.monotonic()
                         try:
@@ -358,6 +390,7 @@ class UpdateService:
                             if process.poll() is None:
                                 from tempo_process import stop_tree
                                 stop_tree(process)
+                        report_stage('verifying_update')
                         verify_zip(output, plan.target.inventory)
                     except UpdateCancelled:
                         if output is not None:
@@ -371,6 +404,7 @@ class UpdateService:
                     if len(files) != 1 or plan.assets != (plan.target.full,):
                         raise ValueError('Invalid full transfer plan.')
                     output = files[0]
+                    report_stage('verifying_update')
                     verify_zip(output, plan.target.inventory)
                 else:
                     raise ValueError('Unknown update transfer kind.')

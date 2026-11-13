@@ -2,7 +2,7 @@ name: Stimulation firmware
 
 on:
   push:
-    branches: [v1.0.4-dev]
+    branches: [v1.0.4-dev, v1.0.5-dev]
     paths:
       - .github/workflows/stimulation-firmware.yml
       - firmware/tempo_pacer/**

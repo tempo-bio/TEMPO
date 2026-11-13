@@ -74,8 +74,9 @@ def software_release(timeout=1.2):
         from tempo_update_coordinator import configured_coordinator
         coordinator = configured_coordinator()
         if coordinator is not None:
-            plan = coordinator.check()
-            return (True, f'TEMPO {plan.target.version} is available.') if plan else (False, 'TEMPO is up to date.')
+            version = coordinator.service.probe(installed_version=coordinator.version,
+                                                installed_commit=coordinator.commit, timeout=timeout)
+            return (True, f'TEMPO {version} is available.') if version else (False, 'TEMPO is up to date.')
         raise RuntimeError('Check GitHub Releases for a TEMPO installer update.')
     # Use the same authenticated remote as the update itself, including SSH remotes.
     env = dict(os.environ, GIT_TERMINAL_PROMPT='0', GCM_INTERACTIVE='Never')
