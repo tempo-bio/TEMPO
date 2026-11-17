@@ -16,6 +16,7 @@ WINDOWS_SKIPS = {
     'test_missing_desktop_package_fails_requirements_check': 'Checks the non-Windows requirements path',
     'test_dangling_private_link_reports_failure_without_migration_or_recursion': 'Creating Windows symlinks may require administrator privileges.',
     'test_actual_sketch_watchdog_and_output_state_machine': 'Host C++ compiler unavailable; Arduino board compile remains a separate check.',
+    'test_development_capture_preserves_output_watchdog_and_raw_protocol': 'Host C++ compiler unavailable; Arduino board compile remains a separate check.',
 }
 
 

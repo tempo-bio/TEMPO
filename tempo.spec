@@ -171,6 +171,7 @@ elif sys.platform == 'darwin':
     hidden_imports += ['keyring.backends.macOS', 'keyring.backends.macOS.api']
 
 excludes = [
+    'stimulation_investigation_1',
     'pytest',
     'tkinter',
     'PyQt5', 'PySide2', 'PySide6',

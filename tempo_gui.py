@@ -13,7 +13,6 @@ if __name__ == '__main__':
             import ctypes
             ctypes.windll.user32.MessageBoxW(None, str(error), 'TEMPO could not start', 0x10)
         raise
-
 if __name__ == '__main__' and len(sys.argv) > 1 and sys.argv[1] in ('--assist-model', '--assist-model-cuda'):
     if len(sys.argv) != 8:
         sys.exit(2)
@@ -1407,11 +1406,19 @@ class CaptureTab(QWidget):
         self.video_writer = None
         self.acq_worker = None
         self.scout_worker = None
+        self.investigation_mode = False
+        self.investigation_workspace = None
         self.setup_ui()
 
     def setup_ui(self):
-        layout = QHBoxLayout(self)
+        layout = QVBoxLayout(self)
         layout.setSizeConstraint(QLayout.SizeConstraint.SetNoConstraint)
+        from tempo_ui import SlidingChoice
+        from tempo_optional_packages import INVESTIGATION, is_installed
+        self.capture_mode = SlidingChoice(('Imaging', 'Stimulation Investigation 1'), ('imaging', 'investigation'))
+        self.capture_mode.setAccessibleName('Acquisition mode')
+        layout.addWidget(self.capture_mode, 0, Qt.AlignmentFlag.AlignLeft)
+        self.capture_mode.setVisible(is_installed(INVESTIGATION))
         self.capture_splitter = QSplitter(Qt.Orientation.Horizontal)
         self.capture_splitter.setChildrenCollapsible(False)
         layout.addWidget(self.capture_splitter)
@@ -1612,7 +1619,7 @@ class CaptureTab(QWidget):
         sidebar_layout.addWidget(capture_actions)
         self.capture_splitter.addWidget(camera_sidebar)
 
-        center = QWidget()
+        center = self.imaging_center = QWidget()
         feed_panel = QVBoxLayout(center)
         feed_panel.setContentsMargins(0, 0, 0, 0)
         self.feed_label = QLabel("No camera connected.\nLoad a hardware configuration or connect a USB camera.")
@@ -1660,14 +1667,60 @@ class CaptureTab(QWidget):
             saved_sizes = [300, 650, 320]
         self.capture_splitter.setSizes(saved_sizes)
         self.capture_splitter.splitterMoved.connect(self.capture_panels_resized)
+        self.capture_mode.currentIndexChanged.connect(self.set_capture_mode)
         QTimer.singleShot(0, self.align_capture_forms)
 
     @property
     def firmware_notice(self):
         return getattr(self.capture_controls, 'firmware_notice', None)
 
+    def set_capture_mode(self, *_):
+        requested = self.capture_mode.currentData() == 'investigation'
+        if requested == self.investigation_mode: return
+        tools = self.capture_controls
+        status = tools.service.status if tools.service and tools.service.connected else None
+        workspace = self.investigation_workspace
+        if (self.is_recording or self.timer.isActive() or self._preview_pending or getattr(self, '_camera_setup_busy', False) or
+                getattr(self, '_feed_stop_pending', False) or tools.camera_busy() or tools.busy() or
+                tools.automatic_running() or tools._starting_output or tools._finish_pending or tools.firmware_busy() or
+                tools.diagnostics_open() or (tools.session and tools.session.active) or
+                (workspace and workspace.capturing) or
+                (status and status.mode not in ('REST_DISCHARGE', 'DISCONNECTED_HIZ'))):
+            self.capture_mode.blockSignals(True)
+            self.capture_mode.setCurrentIndex(1 if self.investigation_mode else 0)
+            self.capture_mode.blockSignals(False)
+            tools.show_error(ValueError('Stop imaging, stimulation, and Arduino capture before switching Acquisition modes.'))
+            return
+        if requested and workspace is None:
+            from tempo_optional_packages import INVESTIGATION, load
+            try:
+                workspace = load(INVESTIGATION, 'ui').InvestigationWorkspace(tools)
+            except (ImportError, OSError, ValueError) as error:
+                self.capture_mode.setCurrentIndex(0)
+                tools.show_error(error)
+                return
+            self.investigation_workspace = workspace
+            workspace.capture_changed.connect(tools.refresh_controls)
+        if requested:
+            self._imaging_panel_sizes = self.capture_splitter.sizes()
+            left, center = workspace.sidebar, workspace
+        else:
+            self._investigation_panel_sizes = self.capture_splitter.sizes()
+            left, center = self.camera_panel, self.imaging_center
+        for index, widget in enumerate((left, center)):
+            old = self.capture_splitter.replaceWidget(index, widget)
+            old.setParent(self); old.hide(); widget.show()
+        self.investigation_mode = requested
+        sizes = (getattr(self, '_investigation_panel_sizes', [280, 650, 320]) if requested
+                 else getattr(self, '_imaging_panel_sizes', [300, 650, 320]))
+        self.capture_splitter.setSizes(sizes)
+        self.align_capture_forms(); tools.refresh_controls()
+
     def capture_panels_resized(self, *args):
         self.align_capture_forms()
+        if self.investigation_mode:
+            self._investigation_panel_sizes = self.capture_splitter.sizes()
+            return
         tempo_preferences.set('capture', 'panel_widths', self.capture_splitter.sizes())
         if not hasattr(self, '_panel_save_timer'):
             self._panel_save_timer = QTimer(self)
@@ -1677,6 +1730,10 @@ class CaptureTab(QWidget):
 
     def align_capture_forms(self):
         if not hasattr(self, '_capture_forms'):
+            return
+        if self.investigation_mode:
+            desired = self.capture_controls.minimum_stimulation_width()
+            self.capture_inspector.setMinimumWidth(min(max(270, desired), max(270, self.width() - 560)))
             return
         if hasattr(self, 'capture_inspector'):
             available = self.width() - self.capture_inspector.minimumWidth() - 240
@@ -6777,6 +6834,7 @@ class SettingsTab(QWidget):
             ('About TEMPO', self.show_application_details),
             ('Account Setup', self.run_account_setup),
             ('Guided Setup', self.run_guided_setup),
+            ('Optional Packages…', self.open_optional_packages),
             ('Uninstall TEMPO...', lambda: self.run_uninstall())])
         self.btn_tools.clicked.connect(self.tools_menu.toggle)
         if getattr(tempo_preferences, 'load_error', ''):
@@ -6785,6 +6843,10 @@ class SettingsTab(QWidget):
         btn_bar.addWidget(self.btn_save)
         btn_bar.addWidget(self.btn_reset)
         main_layout.addWidget(button_row)
+
+    def open_optional_packages(self):
+        from tempo_optional_packages import show_package_manager
+        show_package_manager(self).exec()
 
     def preference_values(self):
         values = {}
@@ -7944,6 +8006,10 @@ class TempoDashboard(QMainWindow):
             self._quit_annotation_confirmation=confirmation
         # Capture includes a persistent serial service. Request its stop before
         # the generic thread guard; otherwise collection can keep that guard busy.
+        investigation = getattr(self.tab_capture, 'investigation_workspace', None)
+        if investigation is not None and not investigation.prepare_close(confirm_once=True):
+            self.tabs.setCurrentWidget(self.tab_capture)
+            event.ignore(); return
         capture_tools = getattr(self.tab_capture, 'capture_controls', None)
         if capture_tools is not None and not capture_tools.shutdown():
             self.statusBar().showMessage('Stopping capture and stimulation before closing…')

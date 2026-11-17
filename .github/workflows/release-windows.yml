@@ -54,9 +54,13 @@ jobs:
     needs: preflight
     uses: ./.github/workflows/velopack-adoption.yml
 
+  stimulation-firmware:
+    needs: preflight
+    uses: ./.github/workflows/stimulation-firmware.yml
+
   validate-source:
     name: Validate Windows source before packaging
-    needs: [preflight, velopack-native]
+    needs: [preflight, velopack-native, stimulation-firmware]
     runs-on: windows-2025
     timeout-minutes: 40
     steps:
@@ -310,6 +314,21 @@ jobs:
         run: |
           & .\.venv_build\Scripts\python.exe -m scripts.windows_release_checks verify --executable dist/TEMPO/TEMPO.exe --report Output/portable-verification.json
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Build and verify the separate Stimulation Investigation package
+        id: optional_package
+        if: ${{ !cancelled() && steps.portable.outcome == 'success' }}
+        timeout-minutes: 4
+        run: |
+          & .\.venv_build\Scripts\python.exe -m scripts.build_optional_package --output Output/optional-packages --verify-executable dist/TEMPO/TEMPO.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Retain the verified optional package separately
+        if: ${{ steps.optional_package.outcome == 'success' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: Stimulation_Investigation_Optional_Package
+          retention-days: 7
+          path: Output/optional-packages/
+          if-no-files-found: error
       - name: Retain bundle diagnostics before installer compilation
         id: bundle_evidence
         if: ${{ !cancelled() && steps.runtime.outcome == 'success' }}
@@ -416,7 +435,7 @@ jobs:
         env:
           GATE_OUTCOMES: ${{ toJSON(steps) }}
         run: |
-          & .\.venv_build\Scripts\python.exe -m scripts.windows_gates --output Output/build-gates.json runtime repository_checks notebook notebook_artifact installer_tests presentation source prebuild_evidence portable payload_privacy dependency_sources portable_check bundle_evidence inno installer payload velopack velopack_payload release_bundle
+          & .\.venv_build\Scripts\python.exe -m scripts.windows_gates --output Output/build-gates.json runtime repository_checks notebook notebook_artifact installer_tests presentation source prebuild_evidence portable payload_privacy dependency_sources portable_check optional_package bundle_evidence inno installer payload velopack velopack_payload release_bundle
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Retain all build evidence
         if: ${{ always() }}

@@ -272,6 +272,8 @@ class PackagingCommandTests(unittest.TestCase):
                          'WORKSPACE_ADMINISTRATION.md', 'CAPTURE_QUALITY.md'):
                 self.assertEqual(declared['docs/' + name], 'docs')
             self.assertEqual(declared['README.md'], '.')
+            self.assertNotIn('stimulation_investigation_1/guide.md', declared)
+            self.assertNotIn('stimulation_investigation_1/investigation_1.h', declared)
             for source, destination in declarations['datas']:
                 self.assertTrue(Path(source).exists(), source)
 

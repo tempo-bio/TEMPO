@@ -18,6 +18,30 @@ The build requires repository privacy/file checks, dependency consistency checks
 
 The actual packaged executable repeats the runtime checks. These include native model imports, credential-store write/read/delete with an isolated synthetic entry, offscreen startup and shutdown, plot lifecycle, scientific processing and export, and combined native-library initialization.
 
+The Windows workflow produces a separate **Stimulation Investigation** ZIP. The
+base executable excludes the toolkit. The release check installs the approved ZIP
+into an isolated profile, starts the Investigation mode in the built executable,
+stages the firmware, checks simulated records and export, and removes the package.
+The required [firmware workflow](../.github/workflows/stimulation-firmware.yml)
+compiles standard pacing and investigation firmware for the Uno R4 Minima using
+TEMPO's pinned toolchain.
+
+### Optional package compatibility
+
+Packages use a versioned host interface and live in the user profile across
+application updates. Preserve support for existing package API versions and their
+approved archive hashes when shipping a new TEMPO version. Changes to Acquisition,
+serial transport, and the pacing sketch must pass the same package verification
+before release. Keep existing investigation JSON and attachment folders readable.
+
+Build the reproducible ZIP with
+`python -m scripts.build_optional_package --output Output/optional-packages`.
+If the package source changes, review the diff, increment its release version,
+and use `--print-hash` to obtain the hash for the new version's catalog entry in
+`tempo_optional_packages.py`. Retain prior entries and test an installed earlier
+package before changing the host interface. Distribute the verified ZIP as a
+separate download with its [installation guide](../stimulation_investigation_1/guide.md).
+
 A separate Windows runner downloads the exact Inno installer without a source checkout or Python setup. It verifies the checksum, installs in a path containing spaces, checks the installed app offline with an isolated user environment, and uninstalls it.
 
 The release workflow also requires the [disabled full-app Velopack candidate checks](../installer/velopack/README.md#full-application-candidate-automation). It packages the complete tested CPU folder, verifies native delta reconstruction against full inventories, and transfers the exact artifacts to another fresh runner. That runner checks installation, same-source replacements, simulated independent recovery, published v1.0.1 CPU migration, component refusal and uninstall. Its report binds the accepted artifact hashes. All existing build gates and both installer paths must succeed for the final build check. This is not Velopack release-adoption certification: signing/trust, distinct releases, component compatibility, the complete update transaction matrix and hardware acceptance still apply, and in-app updates remain disabled.
@@ -30,6 +54,7 @@ These checks do not connect to microscope hardware, use real collaborator accoun
 | --- | --- | --- |
 | `Windows_install_payload` | Installer, SHA-256 checksum, source/dependency provenance, dependency source index, verification contract, and installation-check scripts | 3 days |
 | `Windows_NVIDIA_runtime` | Optional CUDA 12.6 runtime parts and the descriptor pinned into the installer | 7 days |
+| `Stimulation_Investigation_Optional_Package` | Installable Stimulation Investigation ZIP and its packaged-executable verification report | 7 days |
 | `TEMPO_Colab_Trainer` | Notebook regenerated from tested training sources | 7 days |
 | `Windows_test_evidence` | Regression output and machine-readable results | 7 days |
 | `Windows_prebuild_evidence` | Source checks and interface captures | 3 days |
