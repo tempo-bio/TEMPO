@@ -931,12 +931,13 @@ jobs:
               throw 'Packager checksum mismatch'
           }
       - name: Retrieve the exact published update base and installer
-        if: ${{ inputs.release_tag == 'v1.0.4' }}
+        if: ${{ inputs.release_tag == 'v1.0.4' || inputs.release_tag == 'v1.0.5' }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          $baseVersion = if ($env:RELEASE_TAG -ceq 'v1.0.5') { '1.0.4' } else { '1.0.3' }
           for ($attempt = 1; $attempt -le 3; $attempt++) {
-              gh release download v1.0.3 --repo $env:GITHUB_REPOSITORY --pattern 'TEMPO.Bio.Desktop-1.0.3-full.nupkg' --dir delta-base --clobber
+              gh release download "v$baseVersion" --repo $env:GITHUB_REPOSITORY --pattern "TEMPO.Bio.Desktop-$baseVersion-full.nupkg" --dir delta-base --clobber
               if ($LASTEXITCODE -eq 0) { break }
               if ($attempt -eq 3) { exit $LASTEXITCODE }
               Start-Sleep -Seconds 5
@@ -1013,9 +1014,14 @@ jobs:
           public.write_bytes(b'{"tempo-stable-1": "4G5Gdmfrxu5bbK14sLuFla3XOGsimiEtFPtQcHqJ28Q="}\n')
           require(digest(public) == "92f5a51b932c66d4b3fc0a4b88491405ea231e83e5167219666433bb0e8d91d7",
                   "Public key file differs from the reviewed release trust map")
-          if VERSION == "1.0.4":
-              base = Path("delta-base/TEMPO.Bio.Desktop-1.0.3-full.nupkg")
-              require(digest(base) == "77a72a70fef37bbd8c5b7748da74b2076870877b38280a09e70dd6a565e79ec4"
+          previous = {
+              "1.0.4": ("1.0.3", "77a72a70fef37bbd8c5b7748da74b2076870877b38280a09e70dd6a565e79ec4"),
+              "1.0.5": ("1.0.4", "d763ff116be380b2d14d910645a32f94a9ca043324fa1e223efc0c3e0a70ff77"),
+          }.get(VERSION)
+          if previous:
+              base_version, base_sha256 = previous
+              base = Path(f"delta-base/TEMPO.Bio.Desktop-{base_version}-full.nupkg")
+              require(digest(base) == base_sha256
                       and pin["patch_sha256"] == "527806cab5adb9b752209ac109921954e447226958d9f344cae085ab85004026"
                       and pin["upstream_commit"] == "92d6a1c91716729d449034df5c50307dcce39493",
                       "The retained updater requires the exact published base and unchanged native implementation")
@@ -1023,7 +1029,7 @@ jobs:
               with zipfile.ZipFile(base) as archive:
                   updater.write_bytes(archive.read("lib/app/Squirrel.exe"))
               require(digest(updater) == "07a4d27e8c365201e0f3429bd24fca296c7e15ea4bff6ac2c51494b130b070b2",
-                      "The retained v1.0.3 updater is not the reviewed production binary")
+                      "The retained updater is not the reviewed production binary")
           subprocess.run([sys.executable, "-m", "scripts.build_update_repair", "--public-keys", str(public),
                           "--native-updater", str(updater), "--dist", "tools", "--work", "repair-work"], check=True)
           repair = Path("tools/TEMPORepair.exe")
@@ -1041,8 +1047,8 @@ jobs:
                   "source_regressions": digest(source_report),
               },
           }
-          if VERSION == "1.0.4":
-              evidence["retained_updater_from"] = "v1.0.3"
+          if previous:
+              evidence["retained_updater_from"] = f"v{base_version}"
               evidence["native_test_updater_sha256"] = identity["updater_sha256"]
           Path("native-evidence.json").write_text(json.dumps(evidence, sort_keys=True), encoding="utf-8")
           '@ | python -
@@ -1054,7 +1060,7 @@ jobs:
           $tools = 'inputs/velopack-production-feature-candidate/production-target/x86_64-pc-windows-msvc/release'
           $updater = "$tools/update.exe"
           $tested = @()
-          if ($env:RELEASE_TAG -ceq 'v1.0.4') {
+          if ($env:RELEASE_TAG -cin @('v1.0.4','v1.0.5')) {
               # Run the reviewed assembly script from the workflow revision.
               # The source checkout and built payload stay at BUILD_COMMIT.
               git show "${env:GITHUB_SHA}:scripts/build_velopack_release.py" | Set-Content scripts/build_velopack_release.py -Encoding utf8NoBOM
@@ -1065,8 +1071,8 @@ jobs:
           python -m scripts.build_velopack_release --bundle "$bundle/dist/TEMPO" --build-contract $contract --verification "$bundle/Output/verification-contract.json" --runtime-report "$bundle/Output/portable-verification.json" --vpk-archive vpk.nupkg --native-updater $updater --setup "$tools/setup.exe" --public-keys stable-public-keys.json --repair-executable tools/TEMPORepair.exe --certification native-evidence.json --native-pin reviewed-pin.json --output assembled @tested
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Copy-Item stable-public-keys.json,reviewed-pin.json,native-evidence.json,$updater,"$tools/setup.exe" assembled/
-      - name: Generate and verify the delta from the published v1.0.3 package
-        if: ${{ inputs.release_tag == 'v1.0.4' }}
+      - name: Generate and verify the delta using the installed updater
+        if: ${{ inputs.release_tag == 'v1.0.4' || inputs.release_tag == 'v1.0.5' }}
         run: |
           @'
           import json
@@ -1075,15 +1081,20 @@ jobs:
           from scripts.build_velopack_candidate import file_record
           from scripts.package_windows_updates import inventory_package
           from scripts.windows_release_checks import run_logged
+          from tempo_release import VERSION
           from tempo_update_manifest import FileRecord, verify_zip
 
-          base = Path('delta-base/TEMPO.Bio.Desktop-1.0.3-full.nupkg').resolve()
+          base, = Path('delta-base').resolve().glob('*-full.nupkg')
           base_record = file_record(base)
-          if base_record['sha256'] != '77a72a70fef37bbd8c5b7748da74b2076870877b38280a09e70dd6a565e79ec4':
-              raise SystemExit('Published v1.0.3 base checksum changed')
+          expected = {
+              '1.0.4': '77a72a70fef37bbd8c5b7748da74b2076870877b38280a09e70dd6a565e79ec4',
+              '1.0.5': 'd763ff116be380b2d14d910645a32f94a9ca043324fa1e223efc0c3e0a70ff77',
+          }[VERSION]
+          if base_record['sha256'] != expected:
+              raise SystemExit('Published base checksum changed')
           output = Path('assembled').resolve()
-          target, = output.glob('*-1.0.4-full.nupkg')
-          delta = output / 'TEMPO.Bio.Desktop-1.0.4-delta.nupkg'
+          target, = output.glob(f'*-{VERSION}-full.nupkg')
+          delta = output / f'TEMPO.Bio.Desktop-{VERSION}-delta.nupkg'
           patcher = base.with_name('update.exe')
           vpk = base.parent / 'vpk'
           with zipfile.ZipFile('vpk.nupkg') as archive:
@@ -1095,7 +1106,7 @@ jobs:
           reconstructed = base.with_name('reconstructed.nupkg')
           if run_logged([str(patcher), 'patch', '--old', str(base), '--delta', str(delta),
                          '--output', str(reconstructed)], output / 'delta-reconstruct.log', 900):
-              raise SystemExit('The v1.0.3 updater could not reconstruct the target')
+              raise SystemExit('The installed updater could not reconstruct the target')
           verify_zip(reconstructed, tuple(FileRecord(**row) for row in inventory_package(target)))
           if delta.stat().st_size * 4 >= target.stat().st_size * 3:
               raise SystemExit('The delta does not meet the installed updater’s download threshold')
@@ -1114,9 +1125,9 @@ jobs:
           if-no-files-found: error
 
   verify-release-delta:
-    name: Test the v1.0.3 to v1.0.4 update with the published installer
+    name: Test the Windows update from the published base installer
     needs: assemble
-    if: ${{ inputs.release_tag == 'v1.0.4' && needs.assemble.result == 'success' }}
+    if: ${{ (inputs.release_tag == 'v1.0.4' || inputs.release_tag == 'v1.0.5') && needs.assemble.result == 'success' }}
     runs-on: windows-2025
     timeout-minutes: 40
     steps:
@@ -1129,16 +1140,18 @@ jobs:
           architecture: x64
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
-          name: TEMPO_v1.0.4_stable_channel
+          name: TEMPO_${{ inputs.release_tag }}_stable_channel
           path: target
       - name: Install pinned test dependencies and retrieve the published base
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
         run: |
           python -m pip install --require-hashes --no-deps -r tests/fixtures/velopack/requirements-windows.lock
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $baseVersion = if ($env:RELEASE_TAG -ceq 'v1.0.5') { '1.0.4' } else { '1.0.3' }
           for ($attempt = 1; $attempt -le 3; $attempt++) {
-              gh release download v1.0.3 --repo $env:GITHUB_REPOSITORY --pattern 'TEMPO.Bio.Desktop-1.0.3-full.nupkg' --pattern 'TEMPO_Setup_v1.0.3.exe' --pattern 'tempo-update-v1.0.3.json' --dir base --clobber
+              gh release download "v$baseVersion" --repo $env:GITHUB_REPOSITORY --pattern "TEMPO.Bio.Desktop-$baseVersion-full.nupkg" --pattern "TEMPO_Setup_v$baseVersion.exe" --pattern "tempo-update-v$baseVersion.json" --dir base --clobber
               if ($LASTEXITCODE -eq 0) { break }
               if ($attempt -eq 3) { exit $LASTEXITCODE }
               Start-Sleep -Seconds 5
@@ -1149,7 +1162,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
-          name: TEMPO_v1.0.4_delta_upgrade
+          name: TEMPO_${{ inputs.release_tag }}_delta_upgrade
           path: evidence/
           retention-days: 7
           if-no-files-found: warn
