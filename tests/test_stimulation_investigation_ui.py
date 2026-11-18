@@ -66,22 +66,29 @@ class InvestigationUiTests(unittest.TestCase):
             field = workspace.condition_widgets['commanded_voltage_v']
             group = field.parentWidget()
             label = next(label for label, edit in group.rows if edit is field)
-            for width, panels, aligned in (
-                (1160, [320, 500, 310], True),
-                (980, [195, 445, 310], False),
-                (1160, [320, 500, 310], True),
-            ):
-                view.resize(width, 740)
-                view.capture_splitter.setSizes(panels)
-                APP.processEvents()
-                self.assertTrue(group.rect().contains(label.geometry()))
-                self.assertTrue(group.rect().contains(field.geometry()))
-                self.assertGreaterEqual(label.height(), label.heightForWidth(label.width()))
-                if aligned:
-                    self.assertLess(label.geometry().right(), field.geometry().left())
-                else:
-                    self.assertLess(label.geometry().bottom(), field.geometry().top())
-                self.assertEqual(field.text(), '0.6')
+            margins = group.layout().contentsMargins()
+            font = group.fontMetrics()
+            # Splitter requests and font metrics vary by platform. Set the
+            # actual group width on both sides of its reflow threshold.
+            threshold = margins.left() + font.horizontalAdvance('0' * 24) + margins.right()
+            margin = font.horizontalAdvance('00')
+            wide = threshold + margin
+            narrow = threshold - margin
+            view.resize(1160, 740)
+            view.capture_splitter.setSizes([wide + 64, 500, 310])
+            for width, aligned in ((wide, True), (narrow, False), (wide, True)):
+                with self.subTest(width=width, aligned=aligned):
+                    group.setFixedWidth(width)
+                    APP.processEvents()
+                    self.assertEqual(group.width(), width)
+                    self.assertTrue(group.rect().contains(label.geometry()))
+                    self.assertTrue(group.rect().contains(field.geometry()))
+                    self.assertGreaterEqual(label.height(), label.heightForWidth(label.width()))
+                    if aligned:
+                        self.assertLess(label.geometry().right(), field.geometry().left())
+                    else:
+                        self.assertLess(label.geometry().bottom(), field.geometry().top())
+                    self.assertEqual(field.text(), '0.6')
 
     def test_scope_data_save_reload_and_separate_empty_arduino_records(self):
         with tempfile.TemporaryDirectory() as directory, investigation_view() as view:
