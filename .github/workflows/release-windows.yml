@@ -30,6 +30,9 @@ on:
       signed_trial_contract_sha256:
         description: 'SHA-256 of trial-contract.json when reusing signed trial packages'
         type: string
+      staged_index_sha256:
+        description: 'Test the signed v1.0.5 prerelease index at this SHA-256 before stable activation'
+        type: string
 
 permissions:
   contents: read
@@ -47,7 +50,7 @@ env:
 
 jobs:
   preflight:
-    if: ${{ inputs.assemble_build_run == '' && !inputs.test_published_migration && !inputs.test_signed_updates }}
+    if: ${{ inputs.assemble_build_run == '' && inputs.staged_index_sha256 == '' && !inputs.test_published_migration && !inputs.test_signed_updates }}
     uses: ./.github/workflows/windows-preflight.yml
 
   velopack-native:
@@ -589,7 +592,7 @@ jobs:
   certify:
     name: Certify every required Windows gate
     needs: [preflight, validate-source, build-windows, verify-installed, velopack-native, verify-velopack, replay-velopack]
-    if: ${{ always() && inputs.assemble_build_run == '' && !inputs.test_published_migration && !inputs.test_signed_updates }}
+    if: ${{ always() && inputs.assemble_build_run == '' && inputs.staged_index_sha256 == '' && !inputs.test_published_migration && !inputs.test_signed_updates }}
     runs-on: windows-2025
     steps:
       - name: Require complete build and clean installation success
@@ -1165,6 +1168,62 @@ jobs:
           name: TEMPO_${{ inputs.release_tag }}_delta_upgrade
           path: evidence/
           retention-days: 7
+          if-no-files-found: warn
+
+  verify-staged-update:
+    name: Verify the signed v1.0.4 to v1.0.5 update (${{ matrix.route }})
+    if: ${{ inputs.staged_index_sha256 != '' }}
+    runs-on: windows-2025
+    timeout-minutes: 55
+    strategy:
+      fail-fast: false
+      matrix:
+        route: [delta, full-fallback]
+    env:
+      RELEASE_TAG: ${{ inputs.release_tag }}
+      TARGET_COMMIT: ${{ inputs.assemble_source_commit }}
+      INDEX_SHA256: ${{ inputs.staged_index_sha256 }}
+      ROUTE: ${{ matrix.route }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.13.16'
+          architecture: x64
+      - name: Check the exact versioned prerelease and retrieve its signed index
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if ($env:RELEASE_TAG -cne 'v1.0.5' -or $env:INDEX_SHA256 -cnotmatch '^[0-9a-f]{64}$' -or
+              $env:TARGET_COMMIT -cnotmatch '^[0-9a-f]{40}$') { throw 'Specify v1.0.5, its exact commit and staged index SHA-256' }
+          $target = git rev-parse 'v1.0.5^{commit}'
+          if ($LASTEXITCODE -ne 0 -or $target -cne $env:TARGET_COMMIT) { throw 'The prerelease tag points at a different commit' }
+          $state = gh release view v1.0.5 --repo $env:GITHUB_REPOSITORY --json isDraft,isPrerelease | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or $state.isDraft -ne $false -or $state.isPrerelease -ne $true) { throw 'Expected the versioned public prerelease before stable activation' }
+          gh release download v1.0.5 --repo $env:GITHUB_REPOSITORY --pattern 'tempo-update-index.json' --pattern 'TEMPORepair.exe' --dir staged
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          gh release download v1.0.4 --repo $env:GITHUB_REPOSITORY --pattern 'TEMPO_Setup_v1.0.4.exe' --pattern 'TEMPO.Bio.Desktop-1.0.4-full.nupkg' --dir staged
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          git show '31f0f1192a0810c4aa0a0e8af00009ce2387b166:tempo_update_service.py' | Set-Content staged/base-update-service.py -Encoding utf8NoBOM
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Use the released updater and wait for the upgraded desktop to confirm
+        run: |
+          python -m venv .venv_update
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & .\.venv_update\Scripts\python.exe -m pip install --require-hashes --no-deps -r tests/fixtures/velopack/requirements-windows.lock
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & .\.venv_update\Scripts\python.exe -m scripts.verify_staged_windows_update --files staged --evidence evidence --old-service staged/base-update-service.py --commit "$env:TARGET_COMMIT" --index-hash "$env:INDEX_SHA256" --route "$env:ROUTE"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Retain the signed update evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: TEMPO_v1.0.5_signed_update_${{ matrix.route }}
+          path: evidence/
+          retention-days: 14
           if-no-files-found: warn
 
   smoke:
