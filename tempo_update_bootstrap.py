@@ -34,13 +34,14 @@ def find_registered_legacy(registry=None):
                             (registry.KEY_WOW64_64KEY, '64-bit')):
             try:
                 with registry.OpenKey(hive, _INNO_KEY, 0, registry.KEY_READ | view) as key:
-                    try:
-                        location, value_type = registry.QueryValueEx(key, 'InstallLocation')
-                    except FileNotFoundError:
-                        location = ''
-                    if not isinstance(location, str):
-                        location = ''
-                    found.append({'scope': name, 'view': label, 'location': location})
+                    entry = {'scope': name, 'view': label}
+                    for field, value in (('location', 'InstallLocation'), ('version', 'DisplayVersion')):
+                        try:
+                            data, _ = registry.QueryValueEx(key, value)
+                        except FileNotFoundError:
+                            data = ''
+                        entry[field] = data if isinstance(data, str) else ''
+                    found.append(entry)
             except FileNotFoundError:
                 continue
             except OSError as error:

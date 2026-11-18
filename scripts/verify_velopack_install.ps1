@@ -4,6 +4,7 @@ param(
     [Parameter(Mandatory)][string]$Evidence,
     [ValidatePattern('^[0-9a-f]{40}$')][string]$SourceCommit = $env:GITHUB_SHA,
     [ValidatePattern('^[0-9a-f]{64}$')][string]$ReleaseManifestSha256,
+    [ValidateSet('1.0.0','1.0.1')][string]$LegacyVersion,
     [switch]$LegacyBridge,
     [switch]$LegacyUninstallLeftovers
 )
@@ -12,11 +13,15 @@ New-Item -ItemType Directory -Force $Evidence | Out-Null
 $Payload = (Resolve-Path $Payload).Path
 $Evidence = (Resolve-Path $Evidence).Path
 . (Join-Path $PSScriptRoot 'windows_installer_helpers.ps1')
+$reportName = if ($LegacyVersion) { "migration-v$LegacyVersion" } else { $Mode }
 $result = @{schema_version=1;source_commit=$SourceCommit;fixture_commit=$env:GITHUB_SHA;fixture_sha256=(Get-FileHash $PSCommandPath -Algorithm SHA256).Hash.ToLowerInvariant();helper_sha256=(Get-FileHash (Join-Path $PSScriptRoot 'windows_installer_helpers.ps1') -Algorithm SHA256).Hash.ToLowerInvariant();release_certified=$false;mode=$Mode;success=$false;scenarios=@{};measurements=@()}
 try {
 $releaseSmoke = $Mode -eq 'release-smoke'
 $releaseMigration = $Mode -eq 'release-migration'
 $releasePayload = $releaseSmoke -or $releaseMigration
+if (($Mode -eq 'migration') -ne [bool]$LegacyVersion) {
+    throw 'Candidate migration requires a legacy fixture version'
+}
 if (($LegacyBridge -or $ReleaseManifestSha256) -and -not $releaseMigration) {
     throw 'Release migration options require release-migration mode'
 }
@@ -68,7 +73,7 @@ $shellFolders = $folderJson | ConvertFrom-Json
 foreach ($folder in @($shellFolders.desktop, $shellFolders.programs)) {
     if (-not $folder -or -not (Test-Path -LiteralPath $folder -PathType Container)) { throw 'Isolated shell folder is unavailable' }
 }
-$shellFolders | ConvertTo-Json | Set-Content (Join-Path $Evidence "$Mode-shell-folders.json") -Encoding utf8NoBOM
+$shellFolders | ConvertTo-Json | Set-Content (Join-Path $Evidence "$reportName-shell-folders.json") -Encoding utf8NoBOM
 $desktop = $shellFolders.desktop
 $startPrograms = $shellFolders.programs
 $links = @((Join-Path $desktop "$($contract.title).lnk"), (Join-Path $startPrograms "$($contract.title).lnk"))
@@ -212,8 +217,8 @@ function Assert-MigrationRefused([string]$Reason, [string[]]$Arguments, [bool]$P
     $preparedPath=Join-Path $state 'updates\legacy-migration\prepared.json'
     if ((Test-Path -LiteralPath $preparedPath) -ne $Prepared) { throw 'Unexpected migration state before refusal check' }
     $before=if ($Prepared) { (Get-FileHash -LiteralPath $preparedPath -Algorithm SHA256).Hash } else { $null }
-    $stdout=Join-Path $Evidence "refused-$Reason.log"
-    $stderr=Join-Path $Evidence "refused-$Reason-error.log"
+    $stdout=Join-Path $Evidence "$reportName-refused-$Reason.log"
+    $stderr=Join-Path $Evidence "$reportName-refused-$Reason-error.log"
     $process=Start-Process -FilePath $repair -ArgumentList $Arguments -WorkingDirectory $Evidence -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr
     $null=$process.Handle
     try {
@@ -265,7 +270,7 @@ function Apply-Revision($Base, $Target, [string]$Label) {
     Assert-File $repair $contract.repair
     if ($Mode -eq 'gate') {
         $reports=@{}
-        foreach ($stage in @('matrix','migration','uninstall')) {
+        foreach ($stage in @('matrix','migration-v1.0.0','migration-v1.0.1','uninstall')) {
             $path=Join-Path $Evidence "$stage-result.json"
             if (-not (Test-Path -LiteralPath $path)) { throw "Candidate $stage evidence is missing" }
             $report=Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
@@ -276,22 +281,30 @@ function Apply-Revision($Base, $Target, [string]$Label) {
                 $report.release_certified -ne $false) { throw "Candidate $stage acceptance failed or has a different identity: $($report.error)" }
             $reports[$stage]=$report
         }
-        $matrix=$reports.matrix; $migration=$reports.migration; $uninstall=$reports.uninstall
+        $matrix=$reports.matrix; $uninstall=$reports.uninstall
         foreach ($name in @('full_app_fresh_install','same_source_two_replacements','same_source_skipped_replacement','simulated_missing_current_independent_repair','independent_native_owner_repair','repaired_owner_next_update','immediate_reinstall_preserves_owner','external_state_bytes_preserved','shortcuts_and_registration')) {
             if ($matrix.scenarios.$name -ne $true) { throw "Candidate scenario is missing: $name" }
         }
         if ($uninstall.scenarios.uninstall_preserves_external_state -ne $true) { throw 'Uninstall preservation evidence is missing' }
-        foreach ($name in @('published_legacy_cpu_installer','legacy_data_and_models_preserved','legacy_shortcuts_and_registration_retired','unsupported_components_refused','finish_before_legacy_retirement_refused')) {
-            if ($migration.scenarios.$name -ne $true) { throw "Legacy migration scenario is missing: $name" }
+        $result.legacy_migrations=@{}
+        foreach ($version in @('1.0.0','1.0.1')) {
+            $migration=$reports["migration-v$version"]
+            foreach ($name in @('legacy_data_only','legacy_data_and_models_preserved','legacy_shortcuts_and_registration_retired','unsupported_components_refused','finish_before_legacy_retirement_refused')) {
+                if ($migration.scenarios.$name -ne $true) { throw "Legacy v$version migration scenario is missing: $name" }
+            }
+            if ($migration.legacy_version -cne $version -or
+                $migration.legacy_fixture_sha256 -cne $contract.legacy_fixtures.$version.installer.sha256) {
+                throw "Legacy acceptance used a different v$version Inno fixture"
+            }
+            $result.legacy_migrations[$version]=@{fixture_sha256=$migration.legacy_fixture_sha256;scenarios=$migration.scenarios}
         }
-        if ($migration.legacy_installer_sha256 -ne $contract.legacy_source.installer_sha256) { throw 'Legacy acceptance used a different old installer' }
         if (@($matrix.artifacts).Count -ne 3) { throw 'Exact package acceptance identities are missing' }
         for ($index=0; $index -lt 3; $index++) {
             $observed=$matrix.artifacts[$index]; $expected=$contract.revisions[$index]
             if ($observed.version -ne $expected.version -or $observed.installer_sha256 -ne $expected.installer.sha256 -or
                 $observed.full_package_sha256 -ne $expected.full.sha256) { throw 'Acceptance describes different package bytes' }
         }
-        foreach ($label in @('fresh','replacement-1','replacement-2','skipped-packaging-revision','offline-repaired','after-repair-next-update','migrated')) {
+        foreach ($label in @('fresh','replacement-1','replacement-2','skipped-packaging-revision','offline-repaired','after-repair-next-update','migrated-v1.0.0','migrated-v1.0.1')) {
             Assert-Verification (Get-Content (Join-Path $Evidence "$label-verification.json") -Raw | ConvertFrom-Json) $verification
         }
         Assert-State
@@ -300,9 +313,7 @@ function Apply-Revision($Base, $Target, [string]$Label) {
         $result.limits=$matrix.limits
         $result.scenarios=@{}
         foreach ($property in $matrix.scenarios.PSObject.Properties) { $result.scenarios[$property.Name]=$property.Value }
-        foreach ($property in $migration.scenarios.PSObject.Properties) { $result.scenarios[$property.Name]=$property.Value }
         $result.scenarios.uninstall_preserves_external_state=$true
-        $result.legacy_installer_sha256=$migration.legacy_installer_sha256
     } elseif ($releaseSmoke) {
         foreach ($path in @($root,$registry) + $links) {
             if (Test-Path -LiteralPath $path) { throw "Use a clean Windows profile for release verification: $path" }
@@ -369,19 +380,30 @@ function Apply-Revision($Base, $Target, [string]$Label) {
             Invoke-Bounded (Join-Path $Payload $target.installer.path) @('--silent','--log',"`"$(Join-Path $Evidence 'release-setup.log')`"",'--installto',"`"$root`"") 600
         } else {
             $target = $contract.revisions[2]
-            $legacySource = $contract.legacy_source
+            $legacySource = $contract.legacy_fixtures.$LegacyVersion
+            if (-not $legacySource) { throw "Missing Inno fixture for v$LegacyVersion" }
             $manifestPath = Join-Path $Payload $target.manifest.path
+            if ($LegacyVersion -eq '1.0.1') {
+                $previous = Get-Content (Join-Path $Evidence 'migration-v1.0.0-result.json') -Raw | ConvertFrom-Json
+                if ($previous.success -ne $true -or $previous.contract_sha256 -cne $result.contract_sha256) {
+                    throw 'Expected completed v1.0.0 fixture before creating a clean v1.0.1 state'
+                }
+                Move-Item -LiteralPath $state -Destination (Join-Path $profile 'retained-v1.0.0-fixture-state')
+                New-StateFixture
+            }
         }
         Assert-Installed $target
-        $legacy=Join-Path $profile 'old custom installation é'
+        $legacy=Join-Path $profile "old custom installation é $LegacyVersion"
         if ($releaseMigration) {
+            $legacy=Join-Path $profile 'old custom installation é'
             $oldInstaller = Join-Path $Payload 'TEMPO_Setup_v1.0.1.exe'
+            if ((Get-FileHash $oldInstaller -Algorithm SHA256).Hash.ToLowerInvariant() -ne $legacySource.installer_sha256) { throw 'Published legacy installer checksum mismatch' }
         } else {
-            $oldInstaller = Join-Path $Evidence 'published-v1.0.1-Setup.exe'
-            $ProgressPreference = 'SilentlyContinue'
-            Invoke-WebRequest $legacySource.url -OutFile $oldInstaller -MaximumRetryCount 3 -RetryIntervalSec 5
+            $oldInstaller = Join-Path $Payload $legacySource.installer.path
+            Assert-File $oldInstaller $legacySource.installer
+            $result.legacy_fixture_sha256=(Get-FileHash -LiteralPath $oldInstaller -Algorithm SHA256).Hash.ToLowerInvariant()
+            $result.legacy_version=$LegacyVersion
         }
-        if ((Get-FileHash $oldInstaller -Algorithm SHA256).Hash.ToLowerInvariant() -ne $legacySource.installer_sha256) { throw 'Published legacy installer checksum mismatch' }
         $legacySetupArgs = @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/SP-', '/TASKS=desktopicon',"/DIR=`"$legacy`"")
         if ($LegacyBridge) {
             $bridgeInstaller = Join-Path $Payload 'TEMPO_Setup_v1.0.0.exe'
@@ -395,7 +417,7 @@ function Apply-Revision($Base, $Target, [string]$Label) {
             Set-Content -LiteralPath $bridgeFile -Value 'v1.0.0 test data' -Encoding utf8NoBOM
             $bridgeHash = (Get-FileHash $bridgeFile -Algorithm SHA256).Hash
         }
-        Invoke-Bounded $oldInstaller ($legacySetupArgs + "/LOG=`"$(Join-Path $Evidence 'legacy-installation.log')`"") 600
+        Invoke-Bounded $oldInstaller ($legacySetupArgs + "/LOG=`"$(Join-Path $Evidence "$reportName-legacy-installation.log")`"") 600
         if ((Get-FileHash (Join-Path $legacy 'TEMPO.exe') -Algorithm SHA256).Hash.ToLowerInvariant() -ne $legacySource.executable_sha256) { throw 'Actual installed old executable differs from reviewed migration source' }
         if ($LegacyBridge -and (Get-FileHash $bridgeFile -Algorithm SHA256).Hash -ne $bridgeHash) { throw 'v1.0.1 did not preserve the v1.0.0 test data' }
         $oldLinks=@((Join-Path $desktop 'TEMPO.lnk'),(Join-Path $startPrograms 'TEMPO\TEMPO.lnk'))
@@ -405,12 +427,19 @@ function Apply-Revision($Base, $Target, [string]$Label) {
         Copy-Item (Join-Path $state 'collaboration\fixture\draft.json') (Join-Path $data 'fixture\draft.json')
         $image=Join-Path $data 'migration-fixture\image.png'
         [IO.File]::WriteAllBytes($image,[byte[]]@(137,80,78,71))
-        @{image_path=$image;annotations=@(@{label='cell';points=@(@(1,1),@(2,2),@(1,2))})} | ConvertTo-Json -Depth 8 | Set-Content (Join-Path $data 'migration-fixture\draft.json') -Encoding utf8NoBOM
+        $legacyDraft=Join-Path $data 'migration-fixture\draft.json'
+        @{image_path=$image;annotations=@(@{label='cell';points=@(@(1,1),@(2,2),@(1,2))})} | ConvertTo-Json -Depth 8 | Set-Content $legacyDraft -Encoding utf8NoBOM
+        $draftHash=(Get-FileHash -LiteralPath $legacyDraft -Algorithm SHA256).Hash
+        $imageHash=(Get-FileHash -LiteralPath $image -Algorithm SHA256).Hash
         $model=Join-Path $legacy '_internal\yolo26s-seg.pt'
-        if (Test-Path $model) { throw 'Synthetic fixture would overwrite a bundled legacy model' }
-        [IO.File]::WriteAllText($model,'synthetic legacy model',[Text.UTF8Encoding]::new($false))
+        if ($releaseMigration) {
+            if (Test-Path $model) { throw 'Synthetic fixture would overwrite a bundled legacy model' }
+            [IO.File]::WriteAllText($model,'synthetic legacy model',[Text.UTF8Encoding]::new($false))
+        }
         $modelHash=(Get-FileHash $model -Algorithm SHA256).Hash.ToLowerInvariant()
-        $arguments=@('--mode','prepare-migration','--legacy-root',"`"$legacy`"",'--legacy-installer',"`"$oldInstaller`"",'--target-manifest',"`"$manifestPath`"",'--target-package',"`"$(Join-Path $Payload $target.full.path)`"")
+        $arguments=@('--mode','prepare-migration','--legacy-root',"`"$legacy`"",'--target-manifest',"`"$manifestPath`"",'--target-package',"`"$(Join-Path $Payload $target.full.path)`"")
+        if ($releaseMigration) { $arguments += @('--legacy-installer',"`"$oldInstaller`"") }
+        else { $arguments += '--legacy-data-only' }
         $packageRoot=Join-Path $legacy '_internal\.tempo-packages'
         if (Test-Path -LiteralPath $packageRoot) { throw 'Synthetic package fixture would overlap existing package recovery material' }
         $receipt=Join-Path $packageRoot 'fixture\receipt.json'
@@ -433,24 +462,41 @@ function Apply-Revision($Base, $Target, [string]$Label) {
         if (-not (Test-Path (Join-Path $migrationRoot 'prepared.json'))) { throw 'Legacy migration was not prepared' }
         if (Test-Path (Join-Path $state 'config\collaboration-location.json')) { throw 'Preparation prematurely published collaboration storage' }
         Assert-MigrationRefused 'still registered' @('--mode','finish-migration') $true
-        Invoke-Bounded (Join-Path $legacy 'unins000.exe') @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',"/LOG=`"$(Join-Path $Evidence 'legacy-uninstallation.log')`"") 600
+        Invoke-Bounded (Join-Path $legacy 'unins000.exe') @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',"/LOG=`"$(Join-Path $Evidence "$reportName-legacy-uninstallation.log")`"") 600
         if (Test-Path (Join-Path $legacy 'TEMPO.exe')) { throw 'Old uninstall left its executable behind' }
+        if (-not $releaseMigration -and (Test-Path -LiteralPath $model)) { throw 'Inno did not remove its installed fixture model' }
         foreach ($link in $oldLinks) { if (Test-Path -LiteralPath $link) { throw "Old uninstall left its shortcut: $link" } }
         # Re-running the exact candidate setup also restores any shared shortcuts.
-        Invoke-Bounded (Join-Path $Payload $target.installer.path) @('--silent','--log',"`"$(Join-Path $Evidence 'migration-setup.log')`"",'--installto',"`"$root`"") 600
+        Invoke-Bounded (Join-Path $Payload $target.installer.path) @('--silent','--log',"`"$(Join-Path $Evidence "$reportName-setup.log")`"",'--installto',"`"$root`"") 600
         Invoke-Bounded $repair @('--mode','finish-migration') 600
         $draft=Get-Content (Join-Path $state 'collaboration\migration-fixture\draft.json') -Raw | ConvertFrom-Json
         if ($draft.image_path -ne (Join-Path $state 'collaboration\migration-fixture\image.png')) { throw 'Saved image reference was not relocated' }
+        if ((Get-FileHash (Join-Path $migrationRoot 'internal\datasets\migration-fixture\draft.json') -Algorithm SHA256).Hash -cne $draftHash -or
+            (Get-FileHash -LiteralPath $draft.image_path -Algorithm SHA256).Hash -cne $imageHash) {
+            throw 'Original draft or migrated image bytes differ'
+        }
         $models=@(Get-ChildItem (Join-Path $state 'models') -Recurse -File -Filter 'yolo26s-seg.pt')
         if ($models.Count -ne 1 -or $models[0].Directory.Name -ne $modelRepositoryId -or
             (Get-FileHash $models[0].FullName -Algorithm SHA256).Hash.ToLowerInvariant() -ne $modelHash) { throw 'Legacy model bytes or saved repository selection were not preserved' }
-        if ((Get-FileHash (Join-Path $migrationRoot 'legacy-installer.exe') -Algorithm SHA256).Hash.ToLowerInvariant() -ne $legacySource.installer_sha256) { throw 'Retained offline legacy installer differs' }
+        if ($releaseMigration) {
+            if ((Get-FileHash (Join-Path $migrationRoot 'legacy-installer.exe') -Algorithm SHA256).Hash.ToLowerInvariant() -ne $legacySource.installer_sha256) { throw 'Retained offline legacy installer differs' }
+        } else {
+            $journal=Get-Content (Join-Path $migrationRoot 'migration.json') -Raw | ConvertFrom-Json
+            if ($journal.data_only -ne $true -or $journal.version -cne $LegacyVersion -or
+                (Test-Path (Join-Path $migrationRoot 'legacy-installer.exe'))) { throw 'Unexpected data-only migration journal' }
+        }
         if (-not (Test-Path (Join-Path $migrationRoot 'completed.json'))) { throw 'Legacy migration did not complete' }
         Assert-Installed $target
-        Invoke-Diagnostics 'migrated'
+        $migrationLabel=if ($releaseMigration) { 'migrated' } else { "migrated-v$LegacyVersion" }
+        Invoke-Diagnostics $migrationLabel
         Assert-State
-        $result.legacy_installer_sha256=$legacySource.installer_sha256
-        $result.scenarios=@{published_legacy_cpu_installer=$true;legacy_data_and_models_preserved=$true;legacy_shortcuts_and_registration_retired=$true;unsupported_components_refused=$true;finish_before_legacy_retirement_refused=$true}
+        $result.scenarios=@{legacy_data_and_models_preserved=$true;legacy_shortcuts_and_registration_retired=$true;unsupported_components_refused=$true;finish_before_legacy_retirement_refused=$true}
+        if ($releaseMigration) {
+            $result.legacy_installer_sha256=$legacySource.installer_sha256
+            $result.scenarios.published_legacy_cpu_installer=$true
+        } else {
+            $result.scenarios.legacy_data_only=$true
+        }
         if ($LegacyBridge) {
             $migratedBridgeFile = Join-Path $state 'collaboration\bridge-fixture\sample.txt'
             if ((Get-FileHash $migratedBridgeFile -Algorithm SHA256).Hash -ne $bridgeHash) { throw 'v1.0.2 did not preserve the v1.0.0 test data' }
@@ -517,12 +563,12 @@ function Apply-Revision($Base, $Target, [string]$Label) {
         $result.scenarios.external_state_bytes_preserved=$true
         $result.scenarios.shortcuts_and_registration=$true
         $result.artifacts=@($contract.revisions | ForEach-Object { @{version=$_.version;installer_sha256=$_.installer.sha256;full_package_sha256=$_.full.sha256} })
-        $result.limits=@('same source in all packaging revisions','diagnostic entrypoints; interactive desktop not accepted','no physical camera, stimulation, or GPU acceptance','no HTTP update selection/download transaction','no power-loss injection','legacy migration limited to reviewed v1.0.1 CPU; NVIDIA and add-ons refused','fixture bytes preserved; saved state not loaded by desktop')
+        $result.limits=@('same source in all packaging revisions','diagnostic entrypoints; interactive desktop not accepted','no physical camera, stimulation, or GPU acceptance','no HTTP update selection/download transaction','no power-loss injection','legacy CPU migration uses Inno fixtures with non-executable app markers; NVIDIA and add-ons refused','fixture bytes preserved; saved state not loaded by desktop')
     }
     $result.success=$true
 } catch {
     $result.error=$_.Exception.Message
     throw
 } finally {
-    $result | ConvertTo-Json -Depth 12 | Set-Content (Join-Path $Evidence "$Mode-result.json") -Encoding utf8NoBOM
+    $result | ConvertTo-Json -Depth 12 | Set-Content (Join-Path $Evidence "$reportName-result.json") -Encoding utf8NoBOM
 }

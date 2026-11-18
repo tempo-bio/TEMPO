@@ -63,9 +63,11 @@ jobs:
       - name: Exercise installed full application and independent recovery
         id: matrix
         run: ./fixture/scripts/verify_velopack_install.ps1 -Mode matrix -Payload payload -Evidence evidence -SourceCommit $env:CANDIDATE_SOURCE_SHA
-      - name: Exercise published legacy CPU installer migration and component refusal
+      - name: Verify data migration from both legacy Inno versions
         if: ${{ !cancelled() && steps.matrix.outcome == 'success' }}
-        run: ./fixture/scripts/verify_velopack_install.ps1 -Mode migration -Payload payload -Evidence evidence -SourceCommit $env:CANDIDATE_SOURCE_SHA
+        run: |
+          ./fixture/scripts/verify_velopack_install.ps1 -Mode migration -LegacyVersion 1.0.0 -Payload payload -Evidence evidence -SourceCommit $env:CANDIDATE_SOURCE_SHA
+          ./fixture/scripts/verify_velopack_install.ps1 -Mode migration -LegacyVersion 1.0.1 -Payload payload -Evidence evidence -SourceCommit $env:CANDIDATE_SOURCE_SHA
       - name: Uninstall candidate and check retained state
         if: ${{ !cancelled() && steps.matrix.outcome != 'skipped' }}
         run: ./fixture/scripts/verify_velopack_install.ps1 -Mode uninstall -Payload payload -Evidence evidence -SourceCommit $env:CANDIDATE_SOURCE_SHA

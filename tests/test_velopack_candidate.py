@@ -180,6 +180,7 @@ class VelopackCandidateTests(unittest.TestCase):
         project = self.root / 'project'
         for name in ('installer/tempo-updates.json', 'installer/velopack/pin.json',
                      'installer/velopack/0001-tempo-recovery.patch',
+                     'installer/tempo_setup.iss', 'installer/prerequisites_notice.txt', 'assets/tempo_icon.ico',
                      'scripts/verify_velopack_install.ps1', 'scripts/windows_installer_helpers.ps1'):
             target = project / name
             target.parent.mkdir(parents=True, exist_ok=True)
@@ -214,6 +215,13 @@ class VelopackCandidateTests(unittest.TestCase):
             if command[1].startswith('--veloapp-'):
                 self.assertEqual(command[0], str(self.bundle.resolve() / 'TEMPO.exe'))
                 self.assertEqual(kwargs['env']['QT_QPA_PLATFORM'], 'offscreen')
+            elif command[0] == 'iscc':
+                version = command[1].removeprefix('/DMyAppVersion=')
+                fixture = Path(command[-1]).parents[1]
+                provenance = fixture / 'dist/TEMPO' / candidate.LEGACY_PROVENANCE
+                self.assertEqual(json.loads(provenance.read_bytes())['commit'], candidate.LEGACY_DATA_COMMITS[version])
+                (fixture / 'Output').mkdir(exist_ok=True)
+                (fixture / 'Output' / (command[2].removeprefix('/F') + '.exe')).write_bytes(version.encode())
             elif 'pack' in command:
                 self.assertNotIn('--skipVeloAppCheck', command)
                 self.assertIn('--noDefaultExclude', command)
@@ -239,8 +247,12 @@ class VelopackCandidateTests(unittest.TestCase):
         self.assertTrue((options['output'] / 'candidate-contract.json').is_file())
         self.assertFalse(contract['release_certified'])
         self.assertTrue(contract['same_source_packaging_revisions'])
-        self.assertEqual(len(commands), 9)
+        self.assertEqual(len(commands), 11)
         self.assertEqual(len(contract['frozen_lifecycle_probes']), 4)
+        self.assertEqual(set(contract['legacy_fixtures']), {'1.0.0', '1.0.1'})
+        for fixture in contract['legacy_fixtures'].values():
+            installer = fixture['installer']
+            self.assertEqual(installer['sha256'], _digest(options['output'] / installer['path']))
         for index, row in enumerate(contract['revisions']):
             self.assertEqual(row['version'], VERSIONS[index])
             self.assertEqual(row['full']['sha256'], _digest(options['output'] / row['full']['path']))

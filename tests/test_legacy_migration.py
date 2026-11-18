@@ -70,9 +70,10 @@ class LegacyMigrationTests(unittest.TestCase):
         return path
 
     def prepare(self, **kwargs):
+        installer = kwargs.pop('installer', self.installer)
         options = dict(trusted_keys=self.keys, registry=self.old_registry, supported=self.supported)
         options.update(kwargs)
-        return migration.prepare_legacy_migration(self.legacy, self.profile, self.installer,
+        return migration.prepare_legacy_migration(self.legacy, self.profile, installer,
             self.release, self.package, self.target, **options)
 
     def finish(self, **kwargs):
@@ -235,6 +236,35 @@ class LegacyMigrationTests(unittest.TestCase):
         result = bootstrap_packaged_storage(self.bundle, self.profile, registry=self.empty_registry,
             legacy_default_root=self.legacy, model_root=self.profile / 'models/repository')
         self.assertTrue(result['already_published'])
+
+    def test_data_only_migration_reuses_verified_snapshots_without_an_old_installer(self):
+        self.put(self.legacy, '_internal/assets/build-provenance.json',
+                 json.dumps({'commit': migration.LEGACY_DATA_COMMITS['1.0.0']}).encode())
+        registry = Registry({('user', 2): {'InstallLocation': str(self.legacy), 'DisplayVersion': '1.0.0'}})
+        self.installer.unlink()
+        options = dict(installer=None, data_only=True, registry=registry)
+        prepared = self.prepare(**options)
+        self.assertEqual(prepared['status'], 'prepared')
+        self.assertEqual(self.prepare(**options), prepared)
+        with self.assertRaisesRegex(ValueError, 'still registered'):
+            self.finish(registry=registry)
+        self.retire()
+        self.assertEqual(self.finish()['status'], 'complete')
+        folder = migration._transaction(self.profile)
+        self.assertTrue(json.loads((folder / 'migration.json').read_bytes())['data_only'])
+        self.assertFalse((folder / 'legacy-installer.exe').exists())
+        self.assertTrue((folder / 'target.nupkg').is_file())
+        self.assertEqual((self.profile / 'collaboration/workspaces/one/draft.json').read_bytes(), self.draft.read_bytes())
+        self.assertEqual((self.profile / 'models/repository/yolo26n-scout.pt').read_bytes(), b'legacy model')
+
+    def test_data_only_migration_rejects_unreviewed_versions_and_mismatched_provenance(self):
+        self.put(self.legacy, '_internal/assets/build-provenance.json',
+                 json.dumps({'commit': migration.LEGACY_DATA_COMMITS['1.0.1']}).encode())
+        for version, message in [('1.0.1-preview.1', 'registered TEMPO'), ('1.0.0', 'build provenance')]:
+            with self.subTest(version=version), self.assertRaisesRegex(ValueError, message):
+                registry = Registry({('user', 2): {'InstallLocation': str(self.legacy), 'DisplayVersion': version}})
+                self.prepare(installer=None, data_only=True, registry=registry)
+        self.assertFalse((migration._transaction(self.profile) / 'prepared.json').exists())
 
     def test_new_executable_or_registration_still_blocks_finish(self):
         self.prepare()

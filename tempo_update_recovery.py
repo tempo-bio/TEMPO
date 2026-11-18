@@ -536,6 +536,8 @@ def _main():
     parser.add_argument('--commit')
     parser.add_argument('--legacy-root', type=Path)
     parser.add_argument('--legacy-installer', type=Path)
+    parser.add_argument('--legacy-data-only', action='store_true',
+                        help='preserve data from registered TEMPO 1.0.0 or 1.0.1 when the old installer is unavailable')
     parser.add_argument('--target-manifest', type=Path)
     parser.add_argument('--target-package', type=Path)
     parser.add_argument('--prepare-nvidia', action='store_true',
@@ -544,11 +546,15 @@ def _main():
     args = parser.parse_args()
     if args.prepare_nvidia and args.mode != 'prepare-migration':
         parser.error('--prepare-nvidia applies only to prepare-migration')
+    if args.legacy_data_only and args.mode != 'prepare-migration':
+        parser.error('--legacy-data-only applies only to prepare-migration')
     if args.mode == 'snapshot-packages' and args.legacy_root is None:
         parser.error('snapshot-packages requires --legacy-root')
-    if args.mode == 'prepare-migration' and any(getattr(args, name) is None for name in
-            ('legacy_root', 'legacy_installer', 'target_manifest', 'target_package')):
-        parser.error('prepare-migration requires --legacy-root, --legacy-installer, --target-manifest and --target-package')
+    if args.mode == 'prepare-migration':
+        if any(getattr(args, name) is None for name in ('legacy_root', 'target_manifest', 'target_package')):
+            parser.error('prepare-migration requires --legacy-root, --target-manifest and --target-package')
+        if args.legacy_data_only == (args.legacy_installer is not None):
+            parser.error('prepare-migration requires exactly one of --legacy-data-only and --legacy-installer')
     if sys.platform != 'win32' or not EMBEDDED_TRUSTED_KEYS:
         raise SystemExit('Repair companion has no certified embedded trust keys.')
     local = Path(os.environ['LOCALAPPDATA'])
@@ -565,7 +571,7 @@ def _main():
             target_release = _validated_release(args.target_manifest.read_bytes(), EMBEDDED_TRUSTED_KEYS, channel)
             result = prepare_legacy_migration(args.legacy_root, local / 'TEMPO', args.legacy_installer,
                 target_release, args.target_package, root, trusted_keys=EMBEDDED_TRUSTED_KEYS,
-                prepare_nvidia=args.prepare_nvidia)
+                prepare_nvidia=args.prepare_nvidia, data_only=args.legacy_data_only)
         elif args.mode == 'finish-migration':
             from tempo_legacy_migration import finish_legacy_migration
             result = finish_legacy_migration(local / 'TEMPO', trusted_keys=EMBEDDED_TRUSTED_KEYS)

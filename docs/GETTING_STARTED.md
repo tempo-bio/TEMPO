@@ -5,7 +5,7 @@ This guide covers installation, workspace access, and your first shared annotati
 ## Install on Windows
 
 1. Download the `TEMPO_Setup_v*.exe` installer from the release you are installing. The installer includes Python and the application libraries. [Latest stable release](https://github.com/tempo-bio/TEMPO/releases/latest)
-2. Run the installer. TEMPO v1.0.2 uses `%LOCALAPPDATA%\TEMPO.Bio.Desktop`. The v1.0.1 default was `%LOCALAPPDATA%\Programs\TEMPO`.
+2. Run the installer. The default installation folder is `%LOCALAPPDATA%\TEMPO.Bio.Desktop`.
 3. Open TEMPO from the Start menu or desktop shortcut. Guided Setup opens automatically and resumes if you close it before finishing.
 
 For an existing installation, follow the [upgrade instructions](#upgrade-tempo) before running the installer.
@@ -24,11 +24,15 @@ If the values differ, do not run the file. A matching checksum confirms file int
 
 ## Upgrade TEMPO
 
-### Move from v1.0.1 to v1.0.2
+### Upgrade from Windows v1.0.0 or v1.0.1
 
-Back up your recordings, results, and local annotation drafts. Close TEMPO and keep v1.0.1 installed while preparing the move. Install v1.0.2 in its default separate location and follow the migration procedure with the original v1.0.1 installer, the v1.0.2 repair companion, the signed release manifest, and the full package. Remove the old installation through Windows Settings only after the repair companion reports `prepared`. Run the finish command before opening TEMPO. [Migration procedure](../installer/velopack/README.md#legacy-migration-candidate)
+You can migrate directly to v1.0.5 or later using the repair companion provided with that release. Back up your recordings, results, and local annotation drafts. Close TEMPO and keep the old version installed while you prepare the move.
 
-If you use NVIDIA acceleration, follow the NVIDIA preparation and finish steps. The migration can download both the old and new runtimes when the old archive is missing. If you have the Stimulation Investigation 1 add-on, follow the assessment and removal steps in the migration procedure before proceeding. If you use v1.0.0, install v1.0.1 first and confirm your work is accessible there. [v1.0.1 downloads](https://github.com/tempo-bio/TEMPO/releases/tag/v1.0.1)
+1. Install the new version in its default separate location. Keep it closed and follow the [migration procedure](../installer/velopack/README.md#legacy-migration-candidate) using the repair companion, signed release manifest, and full package for the new version.
+2. Wait until the repair companion reports `prepared`, then remove the old TEMPO installation through Windows Settings.
+3. Run the finish command before opening the new TEMPO. Confirm that your drafts and models are available.
+
+If you use NVIDIA acceleration or installed the original Stimulation Investigation 1 add-on, follow the component instructions in the migration procedure before removing the old installation.
 
 ### Update from within TEMPO v1.0.2 or later
 

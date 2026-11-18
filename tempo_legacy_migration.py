@@ -10,6 +10,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import uuid
 
@@ -28,6 +29,12 @@ SUPPORTED_LEGACY = {
         'provenance_sha256': 'afb218ece211f40c7bd644841e3db45806769a2ff28c595b8e074257ac048ebe',
     },
 }
+# Data migration reads the installed files as data and never runs the old app.
+LEGACY_DATA_COMMITS = {
+    '1.0.0': 'de6c58ec7cdc28ab53f5317ad35abbe4b4eab236',
+    '1.0.1': SUPPORTED_LEGACY['1.0.1']['commit'],
+}
+LEGACY_PROVENANCE = Path('_internal/assets/build-provenance.json')
 # Exact descriptor bytes extracted from the reviewed published CPU installer.
 # Keep this separate from the existing CPU identity to preserve pending journals.
 SUPPORTED_LEGACY_NVIDIA = {
@@ -74,7 +81,7 @@ def _mutable(root):
 
 def _identify(root, supported):
     exe = _safe(root / 'TEMPO.exe', missing_ok=False)
-    provenance = _safe(root / '_internal' / 'assets' / 'build-provenance.json', missing_ok=False)
+    provenance = _safe(root / LEGACY_PROVENANCE, missing_ok=False)
     identity = (_hash(exe), _hash(provenance))
     matches = [(version, item) for version, item in supported.items()
                if identity == (item['executable_sha256'], item['provenance_sha256'])]
@@ -184,6 +191,30 @@ def _registrations(root, registry, *, retired=False):
     canonical = lambda path: os.path.normcase(os.path.realpath(_safe(path)))
     if any(not item['location'] or canonical(item['location']) != canonical(root) for item in entries):
         raise ValueError('Multiple or unresolved old installations require review before migration.')
+    return entries
+
+
+def _identify_legacy_data(root, entries):
+    versions = {entry['version'] for entry in entries}
+    if len(versions) != 1 or not versions <= LEGACY_DATA_COMMITS.keys():
+        raise ValueError('Data migration requires a registered TEMPO v1.0.0 or v1.0.1 installation.')
+    version, = versions
+    provenance = _safe(root / LEGACY_PROVENANCE, missing_ok=False)
+    provenance_hash = _hash(provenance)
+    commit = LEGACY_DATA_COMMITS[version]
+    if _read(provenance).get('commit') != commit:
+        raise ValueError('Legacy build provenance does not match the registered TEMPO version.')
+    return version, dict(commit=commit, provenance_sha256=provenance_hash,
+                         executable_sha256=_hash(_safe(root / 'TEMPO.exe', missing_ok=False)))
+
+
+def _valid_legacy_identity(version, identity, supported, data_only):
+    if not data_only:
+        return supported.get(version) == identity
+    return (version in LEGACY_DATA_COMMITS and identity.get('commit') == LEGACY_DATA_COMMITS[version]
+            and set(identity) == {'commit', 'provenance_sha256', 'executable_sha256'}
+            and all(isinstance(identity[name], str) and re.fullmatch('[a-f0-9]{64}', identity[name])
+                    for name in ('provenance_sha256', 'executable_sha256')))
 
 
 def _validate_target(folder, keys, target_root, *, offline=False):
@@ -201,13 +232,15 @@ def _record(profile, supported):
     folder = _transaction(profile)
     record = _read(folder / 'migration.json')
     fields = {'format', 'legacy_root', 'target_root', 'version', 'identity', 'stores', 'selected', 'model_root'}
-    if (not isinstance(record, dict) or set(record) not in (fields, fields | {'nvidia'}) or record['format'] != FORMAT
+    if (not isinstance(record, dict) or not fields <= record.keys()
+            or record.keys() - fields - {'nvidia', 'data_only'} or record['format'] != FORMAT
             or not isinstance(record['version'], str) or not isinstance(record['identity'], dict)
             or not isinstance(record['stores'], dict)
             or not all(isinstance(store, dict) for store in record['stores'].values())
             or not isinstance(record['model_root'], str)
             or (record['selected'] is not None and not isinstance(record['selected'], dict))
-            or supported.get(record['version']) != record['identity']
+            or ('data_only' in record and record['data_only'] is not True)
+            or not _valid_legacy_identity(record['version'], record['identity'], supported, record.get('data_only'))
             or set(record['stores']) != {'flat', 'internal'}):
         raise ValueError('Invalid or unreviewed legacy migration record.')
     root, target = _safe(record['legacy_root']), _safe(record['target_root'])
@@ -442,8 +475,9 @@ def _relocate_dataset_references(selected, legacy_root, profile, footprint, mode
 
 def prepare_legacy_migration(root, profile, installer, release, package, target_root, *,
                              trusted_keys, registry=None, supported=SUPPORTED_LEGACY,
-                             prepare_nvidia=False, supported_nvidia=SUPPORTED_LEGACY_NVIDIA):
-    """Stage verified personal data and offline installers; never retire software."""
+                             prepare_nvidia=False, supported_nvidia=SUPPORTED_LEGACY_NVIDIA,
+                             data_only=False):
+    """Stage verified personal data and recovery files before legacy retirement."""
     from tempo_update_recovery import _store_copy, _validated_release, _verify_app
     from tempo_update_manifest import verify_zip
     root, profile, target = _safe(root), _safe(profile), _safe(target_root)
@@ -454,10 +488,15 @@ def prepare_legacy_migration(root, profile, installer, release, package, target_
         raise ValueError('Migration locations overlap.')
     if inventory_legacy(root)['addons']:
         raise ValueError('Remove the optional package using its verified procedure or defer migration. Its records were retained.')
-    version, identity = _identify(root, supported)
-    installer = _safe(installer, missing_ok=False)
-    if _hash(installer) != identity['installer_sha256']:
-        raise ValueError('Keep the exact reviewed old installer available for offline recovery.')
+    if data_only and installer is not None:
+        raise ValueError('Choose data migration or provide the original installer for offline recovery.')
+    if data_only:
+        version, identity = _identify_legacy_data(root, _registrations(root, registry))
+    else:
+        version, identity = _identify(root, supported)
+        installer = _safe(installer, missing_ok=False)
+        if _hash(installer) != identity['installer_sha256']:
+            raise ValueError('Keep the exact reviewed old installer available for offline recovery.')
     checked = _validated_release(release.envelope, trusted_keys, release.channel)
     if checked != release:
         raise ValueError('Target release differs from its signed envelope.')
@@ -469,7 +508,10 @@ def prepare_legacy_migration(root, profile, installer, release, package, target_
                             enabled=prepare_nvidia, supported_nvidia=supported_nvidia) as nvidia, \
             startup_guard(profile), application_lock(profile), installation_lock(target):
         _verify_app(target / 'current', release)
-        _registrations(root, registry)
+        entries = _registrations(root, registry)
+        if data_only and (any(entry['version'] != version for entry in entries) or
+                          _hash(_safe(root / LEGACY_PROVENANCE, missing_ok=False)) != identity['provenance_sha256']):
+            raise ValueError('The registered legacy version or build provenance changed before preparation.')
         inventory = inventory_legacy(root)
         if inventory['addons']:
             raise ValueError('Remove the optional package using its verified procedure or defer migration. Its records were retained.')
@@ -480,6 +522,8 @@ def prepare_legacy_migration(root, profile, installer, release, package, target_
         record = dict(format=FORMAT, legacy_root=str(root), target_root=str(target),
                       version=version, identity=identity, stores=stores, selected=None,
                       model_root=str(_model_destination(profile)))
+        if data_only:
+            record['data_only'] = True
         if nvidia is not None:
             record['nvidia'] = nvidia
         if len(json.dumps(record).encode('utf-8')) > MAX_RECORD:
@@ -495,14 +539,16 @@ def prepare_legacy_migration(root, profile, installer, release, package, target_
                         all(_mutable(folder / label) == store for label, store in stores.items()) and
                         _footprint(folder / 'selected' / 'datasets') == previous['selected'] and
                         (folder / 'target.json').read_bytes() == release.envelope and
-                        _hash(folder / 'legacy-installer.exe') == identity['installer_sha256']):
+                        (data_only or _hash(folder / 'legacy-installer.exe') == identity['installer_sha256'])):
                     _validate_target(folder, trusted_keys, target)
                     if nvidia is not None:
                         _legacy_nvidia_descriptor(folder / 'legacy-nvidia-descriptor.json', version, identity, supported_nvidia)
                     _check_destination(profile, previous['selected'])
                     return {'status': 'prepared', 'record': str(folder / 'migration.json'),
                             'next_action': 'Remove the old installation through Windows Settings, then finish migration.'}
-        required = installer.stat().st_size + Path(package).stat().st_size
+        required = Path(package).stat().st_size
+        if installer is not None:
+            required += installer.stat().st_size
         for source in (root, root / '_internal'):
             for name in _mutable(source):
                 path = source / name
@@ -511,7 +557,8 @@ def prepare_legacy_migration(root, profile, installer, release, package, target_
         if shutil.disk_usage(profile).free < required:
             raise OSError('Insufficient space for verified migration copies and offline recovery.')
         _atomic_json(folder / 'migration.json', record)
-        _store_copy(installer, folder / 'legacy-installer.exe')
+        if installer is not None:
+            _store_copy(installer, folder / 'legacy-installer.exe')
         _store_copy(package, folder / 'target.nupkg')
         if nvidia is not None:
             _store_copy(root / '_internal' / 'assets' / 'nvidia-runtime.json', folder / 'legacy-nvidia-descriptor.json')
@@ -576,7 +623,8 @@ def finish_legacy_migration(profile, *, trusted_keys, registry=None, supported=S
         prepared = _read(folder / 'prepared.json')
         if prepared != dict(format=FORMAT, legacy_root=str(root), record_sha256=_hash(folder / 'migration.json')):
             raise ValueError('Legacy preparation is incomplete or changed. Do not publish its data.')
-        if _hash(folder / 'legacy-installer.exe') != record['identity']['installer_sha256']:
+        if (not record.get('data_only') and
+                _hash(folder / 'legacy-installer.exe') != record['identity']['installer_sha256']):
             raise ValueError('Offline legacy installer failed verification.')
         release = _validate_target(folder, trusted_keys, target, offline=True)
         _expected_collaboration(record, target)

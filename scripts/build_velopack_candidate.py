@@ -28,7 +28,7 @@ from scripts.windows_release_checks import isolated_environment, run_logged
 from tempo_update_manifest import (ARCHITECTURE, PACKAGE_ID, FileRecord,
                                    load_verified_manifest, validate_path, verify_zip)
 from tempo_update_recovery import _application_inventory
-from tempo_legacy_migration import SUPPORTED_LEGACY
+from tempo_legacy_migration import LEGACY_DATA_COMMITS, LEGACY_PROVENANCE
 
 ROOT = Path(__file__).resolve().parents[1]
 VPK_SHA256 = '2b56ce117f803fc70c103cb423bd040e395e40370f6ff6e10818e9ff9c26a323'
@@ -106,6 +106,35 @@ def signed_fixture(package, inventory, version, commit, sequence, key, *, patche
     return release
 
 
+def build_legacy_fixtures(work, output):
+    """Use the Inno registration/uninstaller shared by both legacy releases."""
+    recipe = work / 'installer'
+    recipe.mkdir(parents=True)
+    (work / 'assets').mkdir()
+    for name in ('tempo_setup.iss', 'prerequisites_notice.txt'):
+        shutil.copyfile(ROOT / 'installer' / name, recipe / name)
+    shutil.copyfile(ROOT / 'assets/tempo_icon.ico', work / 'assets/tempo_icon.ico')
+    bundle = work / 'dist/TEMPO'
+    provenance = bundle / LEGACY_PROVENANCE
+    provenance.parent.mkdir(parents=True)
+    executable = bundle / 'TEMPO.exe'
+    executable.write_bytes(b'Non-executable marker for the legacy Inno migration fixture.\n')
+    # Real Inno uninstall removes this installed file. Migration must copy it
+    # before retirement even if the old directory still contains user files.
+    (bundle / '_internal/yolo26s-seg.pt').write_bytes(b'synthetic legacy model')
+    fixtures = {}
+    for version, commit in LEGACY_DATA_COMMITS.items():
+        provenance.write_bytes(_canonical({'commit': commit, 'fixture': True}))
+        name = f'legacy-inno-fixture-v{version}'
+        if run_logged(['iscc', f'/DMyAppVersion={version}', f'/F{name}', str(recipe / 'tempo_setup.iss')],
+                      output / f'{name}.log', 120):
+            raise RuntimeError(f'Could not compile the v{version} migration fixture.')
+        path = output / f'{name}.exe'
+        shutil.move(work / 'Output' / path.name, path)
+        fixtures[version] = {'installer': file_record(path), 'executable_sha256': _digest(executable)}
+    return fixtures
+
+
 def build(bundle, vpk_archive, updater, native_evidence, output, commit, *, setup):
     if sys.platform != 'win32':
         raise ValueError('Full-app acceptance candidates must be built on Windows.')
@@ -138,8 +167,6 @@ def build(bundle, vpk_archive, updater, native_evidence, output, commit, *, setu
                     setup_sha256=setup_hash,
                     packager_sha256=VPK_SHA256, native_evidence=evidence,
                     bundle_inventory=source_inventory, revisions=[])
-    contract['legacy_source'] = dict(SUPPORTED_LEGACY['1.0.1'], version='1.0.1',
-        url='https://github.com/tempo-bio/TEMPO/releases/download/v1.0.1/TEMPO_Setup_v1.0.1.exe')
     key = Ed25519PrivateKey.generate()  # Never saved or exported.
     public = key.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
     keys_path = output / 'acceptance-public-keys.json'
@@ -154,6 +181,7 @@ def build(bundle, vpk_archive, updater, native_evidence, output, commit, *, setu
                           cwd=work, env=environment):
                 raise RuntimeError('The real frozen lifecycle entrypoint failed: ' + hook)
         contract['frozen_lifecycle_probes'] = list(hooks)
+        contract['legacy_fixtures'] = build_legacy_fixtures(work / 'legacy-inno', output)
         vpk = work / 'vpk'
         with zipfile.ZipFile(vpk_archive) as archive:
             archive.extractall(vpk)  # Exact hash-pinned upstream archive only.

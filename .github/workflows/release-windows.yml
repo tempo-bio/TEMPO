@@ -17,7 +17,7 @@ on:
         description: 'Optional assembly run whose exact installer should be smoke-tested again'
         type: string
       test_published_migration:
-        description: 'Test upgrades to the published v1.0.2 installer'
+        description: 'Replay historical v1.0.2 upgrades (requires the original release assets)'
         type: boolean
         default: false
       test_signed_updates:
@@ -513,10 +513,12 @@ jobs:
       - name: Exercise installed full application and independent recovery
         id: matrix
         run: ./payload/verify_velopack_install.ps1 -Mode matrix -Payload payload -Evidence evidence
-      - name: Exercise published legacy CPU installer migration and component refusal
+      - name: Verify data migration from both legacy Inno versions
         id: migration
         if: ${{ !cancelled() && steps.matrix.outcome == 'success' }}
-        run: ./payload/verify_velopack_install.ps1 -Mode migration -Payload payload -Evidence evidence
+        run: |
+          ./payload/verify_velopack_install.ps1 -Mode migration -LegacyVersion 1.0.0 -Payload payload -Evidence evidence
+          ./payload/verify_velopack_install.ps1 -Mode migration -LegacyVersion 1.0.1 -Payload payload -Evidence evidence
       - name: Uninstall candidate and check retained state
         id: uninstall
         if: ${{ !cancelled() && steps.matrix.outcome != 'skipped' }}
@@ -555,10 +557,12 @@ jobs:
       - name: Exercise installed full application and independent recovery
         id: matrix
         run: ./payload/verify_velopack_install.ps1 -Mode matrix -Payload payload -Evidence evidence
-      - name: Exercise published legacy CPU installer migration and component refusal
+      - name: Verify data migration from both legacy Inno versions
         id: migration
         if: ${{ !cancelled() && steps.matrix.outcome == 'success' }}
-        run: ./payload/verify_velopack_install.ps1 -Mode migration -Payload payload -Evidence evidence
+        run: |
+          ./payload/verify_velopack_install.ps1 -Mode migration -LegacyVersion 1.0.0 -Payload payload -Evidence evidence
+          ./payload/verify_velopack_install.ps1 -Mode migration -LegacyVersion 1.0.1 -Payload payload -Evidence evidence
       - name: Uninstall candidate and check retained state
         id: uninstall
         if: ${{ !cancelled() && steps.matrix.outcome != 'skipped' }}
