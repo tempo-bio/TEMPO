@@ -8,13 +8,13 @@ from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QGr
     QListWidget, QListWidgetItem, QSpinBox, QTableWidget, QTableWidgetItem, QHeaderView,
     QAbstractItemView, QFileDialog, QMessageBox, QSizePolicy, QDialog, QTextBrowser)
 
-from tempo_ui import ErrorDetails, FlowRow, InformationButton
+from tempo_ui import ErrorDetails, FlowRow, InformationButton, MetricLabel
 from .storage import Investigation, CONDITION_FIELDS, SCOPE_FIELDS, now
 from .capture import RawCapture, MODE_NAMES
 
 
-def plain_label(text=''):
-    label = QLabel(text)
+def plain_label(text='', *, label_type=QLabel):
+    label = label_type(text)
     label.setTextFormat(Qt.TextFormat.PlainText)
     label.setWordWrap(True)
     label.setMinimumWidth(0)
@@ -133,7 +133,7 @@ class InvestigationWorkspace(QWidget):
                 edit.setAccessibleName(title + ' · ' + labels[key])
                 edit.textChanged.connect(lambda *_, key=key: self.condition_edited(key))
                 self.condition_widgets[key] = edit
-                label = plain_label(labels[key]) if key != 'notes' else None
+                label = plain_label(labels[key], label_type=MetricLabel) if key != 'notes' else None
                 if label is not None:
                     label.setAlignment(Qt.AlignmentFlag.AlignLeft | (Qt.AlignmentFlag.AlignTop if multiline else Qt.AlignmentFlag.AlignVCenter))
                     label.setBuddy(edit)

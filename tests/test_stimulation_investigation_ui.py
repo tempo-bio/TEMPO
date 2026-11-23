@@ -71,17 +71,19 @@ class InvestigationUiTests(unittest.TestCase):
                 (980, [195, 445, 310], False),
                 (1160, [320, 500, 310], True),
             ):
-                view.resize(width, 740)
-                view.capture_splitter.setSizes(panels)
-                APP.processEvents()
-                self.assertTrue(group.rect().contains(label.geometry()))
-                self.assertTrue(group.rect().contains(field.geometry()))
-                self.assertGreaterEqual(label.height(), label.heightForWidth(label.width()))
-                if aligned:
-                    self.assertLess(label.geometry().right(), field.geometry().left())
-                else:
-                    self.assertLess(label.geometry().bottom(), field.geometry().top())
-                self.assertEqual(field.text(), '0.6')
+                with self.subTest(window_width=width, panel_width=panels[0], aligned=aligned):
+                    view.resize(width, 740)
+                    view.capture_splitter.setSizes(panels)
+                    APP.processEvents()
+                    self.assertTrue(group.rect().contains(label.geometry()))
+                    self.assertTrue(group.rect().contains(field.geometry()))
+                    details = f'{label.font().toString()} at {label.width()} px in a {group.width()} px form'
+                    self.assertGreaterEqual(label.height(), label.heightForWidth(label.width()), details)
+                    if aligned:
+                        self.assertLess(label.geometry().right(), field.geometry().left())
+                    else:
+                        self.assertLess(label.geometry().bottom(), field.geometry().top())
+                    self.assertEqual(field.text(), '0.6')
 
     def test_scope_data_save_reload_and_separate_empty_arduino_records(self):
         with tempfile.TemporaryDirectory() as directory, investigation_view() as view:
