@@ -9,38 +9,41 @@ import unittest
 
 
 class PacerFirmwareTests(unittest.TestCase):
-    def test_actual_sketch_watchdog_and_output_state_machine(self):
-        compiler=shutil.which('clang++') or shutil.which('g++')
+    def compile_harness(self, source, directory, *include_dirs):
+        # MinGW supplies matching C++ headers on Windows runners.
+        preferred, alternate = ('g++', 'clang++') if os.name == 'nt' else ('clang++', 'g++')
+        compiler = shutil.which(preferred) or shutil.which(alternate)
         if compiler is None:
             self.skipTest('Host C++ compiler unavailable; Arduino board compile remains a separate check.')
-        fixture=Path(__file__).parent/'firmware'
+        binary = Path(directory) / source.stem
+        if os.name == 'nt':
+            binary = binary.with_suffix('.exe')
+        command = [compiler, '-std=c++17']
+        for path in (source.parent, *include_dirs):
+            command.extend(['-I', str(path)])
+        command.extend([str(source), '-o', str(binary)])
+        # Windows compiler startup and linking can exceed 30 s on a busy CI runner.
+        try:
+            subprocess.run(command, check=True, capture_output=True, text=True, timeout=120)
+        except subprocess.TimeoutExpired as exc:
+            self.fail(f'Firmware host compilation exceeded 120 seconds: {exc.cmd}\n'
+                      f'stdout: {exc.stdout!r}\nstderr: {exc.stderr!r}')
+        except subprocess.CalledProcessError as exc:
+            self.fail(f'Firmware host compilation failed ({exc.returncode}): {exc.cmd}\n'
+                      f'{exc.stdout}\n{exc.stderr}')
+        return binary
+
+    def test_actual_sketch_watchdog_and_output_state_machine(self):
+        source = Path(__file__).parent / 'firmware' / 'pacer_harness.cpp'
         with tempfile.TemporaryDirectory() as directory:
-            binary=Path(directory)/('pacer-harness.exe' if os.name=='nt' else 'pacer-harness')
-            # Windows compiler startup and linking can exceed 30 s on a busy CI runner.
-            # Keep compilation bounded separately from the firmware's execution deadline.
-            try:
-                subprocess.run([compiler,'-std=c++17','-I',str(fixture),str(fixture/'pacer_harness.cpp'),'-o',str(binary)],
-                               check=True,capture_output=True,text=True,timeout=120)
-            except subprocess.TimeoutExpired as exc:
-                self.fail(f'Firmware host compilation exceeded 120 seconds: {exc.cmd}\n'
-                          f'stdout: {exc.stdout!r}\nstderr: {exc.stderr!r}')
-            except subprocess.CalledProcessError as exc:
-                self.fail(f'Firmware host compilation failed ({exc.returncode}): {exc.cmd}\n'
-                          f'{exc.stdout}\n{exc.stderr}')
-            result=subprocess.run([str(binary)],check=True,capture_output=True,text=True,timeout=10)
-            self.assertIn('checks passed',result.stdout)
+            binary = self.compile_harness(source, directory)
+            result = subprocess.run([str(binary)], check=True, capture_output=True, text=True, timeout=10)
+            self.assertIn('checks passed', result.stdout)
 
     def test_development_capture_preserves_output_watchdog_and_raw_protocol(self):
-        compiler = shutil.which('clang++') or shutil.which('g++')
-        if compiler is None:
-            self.skipTest('Host C++ compiler unavailable; Arduino board compile remains a separate check.')
-        fixture = Path(__file__).parent / 'firmware'
+        source = Path(__file__).parent / 'firmware' / 'investigation_harness.cpp'
         with tempfile.TemporaryDirectory() as directory:
-            binary = Path(directory) / ('investigation.exe' if os.name == 'nt' else 'investigation')
-            subprocess.run([compiler, '-std=c++17', '-I', str(fixture),
-                '-I', str(fixture.parents[1] / 'stimulation_investigation_1'),
-                str(fixture / 'investigation_harness.cpp'), '-o', str(binary)],
-                check=True, capture_output=True, timeout=120)
+            binary = self.compile_harness(source, directory, source.parents[2] / 'stimulation_investigation_1')
             result = subprocess.run([str(binary)], check=True, capture_output=True, text=True, timeout=10)
             pages = [json.loads(line) for line in result.stdout.splitlines() if line.startswith('{')]
             self.assertEqual(len(pages), 2)

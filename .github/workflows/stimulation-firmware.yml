@@ -39,7 +39,8 @@ jobs:
           python-version: '3.13.16'
       - name: Check the firmware protocol and output state machine
         run: |
-          if (-not (Get-Command clang++,g++ -ErrorAction SilentlyContinue)) { throw 'C++ compiler unavailable' }
+          g++ --version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python -m unittest -v tests.test_pacer_firmware
       - name: Compile pacing and investigation with TEMPO's pinned Arduino toolchain
         run: |
