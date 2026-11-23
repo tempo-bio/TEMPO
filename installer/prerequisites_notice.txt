@@ -1,19 +1,19 @@
 ===================================================================
-TEMPO
+TEMPO-C
 Hardware & Driver Prerequisites
 ===================================================================
 
-TEMPO connects natively to standard USB/UVC webcams out of the box.
+TEMPO-C connects to standard USB/UVC cameras and compatible DirectShow capture devices.
 
 For high-speed scientific microscope cameras:
-1. Ensure your camera's vendor SDK/device driver is installed on Windows:
+1. Use the installed driver for your camera, or install the matching vendor driver:
    - Hamamatsu: DCAM-API
    - Teledyne FLIR: Spinnaker SDK
    - Photometrics: PVCAM
    - Basler: Pylon Camera Software Suite
-2. If using Micro-Manager hardware devices (shutters, filter wheels, stages),
-   ensure Micro-Manager 2.0 gamma is installed in standard paths:
-   (e.g., C:\Program Files\Micro-Manager-2.0gamma)
+2. For Micro-Manager devices such as shutters, filter wheels, and stages, use
+   your existing Micro-Manager installation and hardware configuration. On a
+   new computer, install Micro-Manager 2.0 and the adapters for your devices.
 
 After installation, open Camera Settings in Acquisition to configure
 your camera.

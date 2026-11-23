@@ -1,4 +1,4 @@
-"""Exercise the published v1.0.3 installer and the exact v1.0.4 Windows delta."""
+"""Exercise a published Windows installer and the exact next release delta."""
 
 import argparse
 from datetime import datetime, timezone
@@ -14,6 +14,11 @@ from scripts.verify_windows_update_trial import installed_trial, run_windows, tr
 from tempo_update_manifest import FileRecord, load_verified_manifest, verify_asset, verify_zip
 from tempo_update_recovery import _verify_app, _verify_owner
 
+BASES = {
+    '1.0.4': ('1.0.3', '7072d1ac82c9aa75f93bce3b8365944b24f51871aa991e0109e7c0e83c9d326b'),
+    '1.0.5': ('1.0.4', '36a4c591c8921fb9a4d45c7631b2cbaa72a58a5f1c9abeb7d8c82543e0391fcc'),
+}
+
 
 def verify(base_dir, target_dir, evidence):
     if sys.platform != 'win32' or os.environ.get('GITHUB_ACTIONS') != 'true':
@@ -21,16 +26,18 @@ def verify(base_dir, target_dir, evidence):
     base_dir, target_dir, evidence = (path.resolve() for path in (base_dir, target_dir, evidence))
     evidence.mkdir(parents=True, exist_ok=True)
     keys = read_keys(target_dir / 'stable-public-keys.json')
-    previous = load_verified_manifest((base_dir / 'tempo-update-v1.0.3.json').read_bytes(), keys,
+    contract = json.loads((target_dir / 'release-contract.json').read_bytes())
+    revision, = contract['revisions']
+    version = revision['version']
+    base_version, base_installer_sha256 = BASES[version]
+    previous = load_verified_manifest((base_dir / f'tempo-update-v{base_version}.json').read_bytes(), keys,
         now=datetime.now(timezone.utc), expected_channel='stable', min_sequence=0)
     base = base_dir / previous.full.name
     verify_asset(base, previous.full)
-    contract = json.loads((target_dir / 'release-contract.json').read_bytes())
-    revision, = contract['revisions']
     target = target_dir / revision['full']['path']
-    delta = target_dir / 'TEMPO.Bio.Desktop-1.0.4-delta.nupkg'
+    delta = target_dir / f'TEMPO.Bio.Desktop-{version}-delta.nupkg'
     verification = json.loads((target_dir / 'delta-verification.json').read_bytes())
-    if (previous.version != '1.0.3' or revision['version'] != '1.0.4'
+    if (previous.version != base_version
             or verification['reconstructed_inventory_matches'] is not True
             or verification['base'] != file_record(base)
             or verification['target'] != revision['full'] or verification['target'] != file_record(target)
@@ -38,10 +45,10 @@ def verify(base_dir, target_dir, evidence):
             or verification['patcher'] != file_record(target_dir / 'update.exe')):
         raise ValueError('The update inputs differ from the verified Windows delta.')
 
-    installer = base_dir / 'TEMPO_Setup_v1.0.3.exe'
+    installer = base_dir / f'TEMPO_Setup_v{base_version}.exe'
     installer_identity = file_record(installer)
-    if installer_identity['sha256'] != '7072d1ac82c9aa75f93bce3b8365944b24f51871aa991e0109e7c0e83c9d326b':
-        raise ValueError('Use the exact published v1.0.3 installer.')
+    if installer_identity['sha256'] != base_installer_sha256:
+        raise ValueError(f'Use the exact published v{base_version} installer.')
     repair = target_dir / 'TEMPORepair.exe'
     if file_record(repair) != contract['repair']:
         raise ValueError('Repair companion differs from the release contract.')

@@ -1,60 +1,45 @@
-# Windows update release retention and verification
+# Release Windows updates
 
-Use this procedure for a reviewed Windows Velopack release. The updater remains in development: the repository pin is unverified, installed trust keys are empty, and automatic updates are disabled. Candidate workflow success does not satisfy release acceptance.
-
-`python -m scripts.windows_update_release` prepares and verifies release material. It does not upload files, change a GitHub release, advertise an update, modify installed trust, or configure a storage service. Public distribution requires separate authorization. Run these commands in the reviewed release virtual environment.
-
-## Establish signing and acceptance
-
-Keep metadata-signing private keys outside the repository, build payload, release directory and retained source. Maintain an independently reviewed JSON map of key IDs to base64-encoded raw Ed25519 **public** keys. Use the same exact public-key file bytes when building the repair companion and certified application configuration; native evidence records its SHA-256. Review key IDs and fingerprints through a trusted channel before creating the first installer. The feed cannot introduce its own trust anchor.
-
-Windows executable signing and Ed25519 metadata signing are separate decisions. Retain the Windows signature verification report for the exact installer, updater and repair hashes, including the intended publisher and certificate/timestamp results. Resolve any unsigned-distribution decision explicitly before publication. The release-set verifier checks signed records, artifact hashes and evidence bindings; Windows Authenticode validation and actual application/hardware acceptance require their own reviewed evidence.
-
-The client accepts up to sixteen signatures over the same canonical release payload. `scripts.package_windows_updates` supports a primary signer and explicit additional signers:
-
-```powershell
-python -m scripts.package_windows_updates <existing release arguments> --trusted-keys <reviewed-public-keys.json> --additional-signing-key next-key=<next-private-key.pem>
-```
-
-Every co-signer, including the primary signer, must match that explicit public map. Additional signatures do not change the signed payload, asset identities or sequence. Private keys are read only for signing and are not copied into output.
-
-For rotation, first certify an application and companion that contain the reviewed overlap of old/new public keys. Co-sign metadata during the transition so clients with either trust map can authenticate it. The current client validates every record in an index: keep the keys needed by older records in the overlap map, or remove unsupported records from the active index while retaining their offline release sets. Test the complete old-client-to-bridge-to-new-client path before cutting over. Do not retire a signer while clients that depend on it must still update through the shared feed. A compromised key or unsupported old client may require a separately verified manual installer; metadata expiration or changing a GitHub flag does not replace installed trust.
-
-Native evidence and package evidence follow [the candidate packaging contract](../installer/velopack/README.md#prepare-a-candidate-bundle). A final acceptance record must describe the actual version/source and exact `installer`, `repair`, `updater` and `full_package` SHA-256 identities. Its `schema_version` is 1, and `release_certified` can be true only after review of the applicable gates.
-
-The `checks` map requires each of these names to be true, with retained raw evidence:
-
-- `fresh_install`, `legacy_cpu_migration`, `two_successive_releases`, `skipped_release`, `delta_full_fallback`.
-- `interrupted_replacement`, `offline_recovery`, `state_preservation`, `uninstall_repair`, `concurrent_process_refusal`.
-- `hardware_shutdown`, `optional_package_transition`, `code_signing_review`, `trust_bootstrap_and_rotation`.
-- `source_regressions`, `repository_privacy`, `dependency_sources`, `frozen_runtime`, `interface_review`.
-- For a release advertising NVIDIA support: `legacy_nvidia_migration` and `matching_worker_inference`.
-
-Each name has an `evidence` entry containing the raw report's `sha256`, and a corresponding `report_<name>` artifact input. The record also includes `version`, `source_commit`, `artifact_sha256` with the four identities above, and `code_signing` with a reviewed `mode` (`authenticode` or `unsigned-approved`) and `decision_reference`. Writing assertions does not establish that the tests occurred. The candidate contract's `release_certified: false`, same-source replacements, simulated damage and mocked GPU checks cannot substitute for these gates.
-
-For the published stable-channel v1.0.2 build at `4dc336fc8b655ed347a6a1e37a0ae944bf3502e3`, camera and stimulator validation is scheduled for v1.0.3. Record `"deferred_checks": {"hardware_shutdown": "v1.0.3"}` and submit `software_shutdown` evidence in place of `hardware_shutdown`. Exercise restart during processing and with unsaved work, check that active TEMPO processes prevent replacement, then verify that an ordinary shutdown completes the update. NVIDIA migration and inference still require their own evidence. The physical hardware check applies to other release builds.
+Use this procedure to turn a reviewed Windows build into an updater-enabled Velopack release. Start with the completed build run, access to the release signing environment, and access to the team's release evidence store. Use the project's release virtual environment for the command-line steps. [Build a Windows candidate](PACKAGING_AND_DISTRIBUTION.md)
 
 ## Assemble and smoke-test the stable-channel installer
 
-Run **Build & Package Windows Release** on the intended release commit with the application version as the release tag, including its leading `v`. Retrieve `Windows_release_bundle`, `Windows_velopack_candidate_payload`, `velopack-production-feature-candidate`, and `Windows_NVIDIA_runtime` from that successful run. Use the original `candidate-contract.json` to check the exported CPU folder, setup helper, and updater. Keep the reviewed native certification and repair companion with the matching public trust file.
+1. Run **Build & Package Windows Release** on the intended release branch with `release_tag` set to the application version, including its leading `v`. Record the successful build run ID and full source commit.
+2. Dispatch the same workflow on that branch with the same `release_tag`, the completed run ID in `assemble_build_run`, and its full SHA in `assemble_source_commit`. Leave `smoke_source_run` empty for a new assembly. The workflow uses the earlier run's build and native evidence, writes the reviewed pin and certification report, and smoke-tests the exact installer on a clean Windows runner.
+3. Retrieve `TEMPO_<tag>_stable_channel` and `TEMPO_<tag>_release_smoke`. Review the smoke results, including the startup test with files left by an old uninstall. For v1.0.5, also review `TEMPO_v1.0.5_delta_upgrade`, which tests replacement from the published v1.0.4 base. Keep the exact installer, full package, repair companion, matching public keys, reviewed pin, and certification report for signing and retention.
+4. Sign metadata for those exact packages. After approval, stage the binaries on the versioned prerelease and verify the served assets before advertising the update. [Sign the update metadata](#sign-the-update-metadata)
 
-After reviewing the native evidence, copy the source pin to a separate release pin and record the approved `updater_sha256` and `certification_status: certified`. The release pin retains the exact upstream revision, patch, and required checks from the tested commit. Use the same reviewed file for assembly, package signing, and release-set preparation so certification can follow the build without altering its source commit.
+## Sign the update metadata
 
-```powershell
-python -m scripts.build_velopack_release --bundle <bundle>/dist/TEMPO --build-contract <candidate>/candidate-contract.json --verification <bundle>/Output/verification-contract.json --runtime-report <bundle>/Output/portable-verification.json --vpk-archive <pinned-vpk.nupkg> --native-updater <update.exe> --setup <setup.exe> --public-keys <public-keys.json> --repair-executable <TEMPORepair.exe> --certification <native-evidence.json> --native-pin <reviewed-pin.json> --output <new-release-directory>
-```
+Use the reviewed public-key file from assembly. The map contains key IDs and base64-encoded raw Ed25519 public keys. The companion and application configuration must use the same file bytes recorded in the native verification report. Keep private keys in the signing environment, outside the repository and build artifacts. [Rotate an installed signing key](#rotate-an-installed-signing-key)
 
-Copy the resulting folder to a clean disposable Windows VM. Verify the exact installation and retained user state using the included script:
+In the signing environment, run `python -m scripts.package_windows_updates --help` from the matching source checkout. Supply the retained full package, its exact version and commit, the reviewed native pin and certification, and the intended channel. Use the signed previous index for a follow-on release. Choose a sequence above the last published sequence for the channel and an expiry that covers the trial and publication window. Use the release's storage schema and minimum updater version.
 
-```powershell
-pwsh -File <release>/verify_velopack_install.ps1 -Mode release-smoke -Payload <release> -Evidence <evidence> -SourceCommit <full-build-commit>
-```
+To advertise a delta, supply the patch specification, the exact base package, and the Windows delta verification report. For NVIDIA support, pass the descriptor from the same build as the runtime parts. Keep the resulting signed release record, index, package, and any deltas together for release-set preparation.
 
-Review the report and preserve the exact installer and full package. Follow the [package-signing procedure](../installer/velopack/README.md#prepare-a-candidate-bundle) to bind the verified package hash and create signed stable metadata, passing the same `--native-pin`. Stage those same binaries for prerelease testing after approval, with the stable index withheld. Complete the broader acceptance checks before promoting the existing versioned release.
+For the v1.0.5 upgrade trial, start from the published v1.0.4 Velopack installation. Exercise the signed update path with the exact candidate packages and verify that the desktop starts and still sees the saved workspace, drafts, recordings, and analysis outputs.
 
-## Build private versions for signed update testing
+## Review release acceptance
 
-In **Build & Package Windows Release**, enter `v1.0.2` and select **Test signed Windows updates and repair on isolated builds**. The workflow builds three complete CPU applications in isolated copies of the release source, with a different pinned version of tqdm in the first build. It signs their test feeds with a key generated for that run and retains the packages in Actions. The test reads signed assets from disk, exercises both delta failure paths and recovery-base download, and checks successive and skipped replacements with the native updater. A repair scenario restores an isolated installation from the retained packages after simulated damage. The restarted app runs bundled diagnostics offscreen. Review actual update dialog behavior, shutdown with active work, and NVIDIA behavior separately before release certification.
+Windows executable signing and Ed25519 metadata signing are separate decisions. Retain the Windows signature verification report for the exact installer, updater and repair hashes, including the intended publisher and certificate/timestamp results. Resolve any unsigned-distribution decision explicitly before publication. The release-set verifier checks signed records, artifact hashes and evidence bindings; Windows Authenticode validation and actual application/hardware acceptance require their own reviewed evidence.
+
+Use the candidate packaging contract in `installer/velopack/README.md` from the matching source checkout for native and package evidence. A final acceptance record must describe the actual version/source and exact `installer`, `repair`, `updater` and `full_package` SHA-256 identities. Its `schema_version` is 1, and `release_certified` can be true only after review of the applicable gates.
+
+The `checks` map requires each of these names to be true, with retained raw evidence:
+
+- `fresh_install`, `two_successive_releases`, `skipped_release`, `delta_full_fallback`.
+- `interrupted_replacement`, `offline_recovery`, `state_preservation`, `uninstall_repair`, `concurrent_process_refusal`.
+- `hardware_shutdown`, `optional_package_transition`, `code_signing_review`, `trust_bootstrap_and_rotation`.
+- `source_regressions`, `repository_privacy`, `dependency_sources`, `frozen_runtime`, `interface_review`.
+- For a release advertising NVIDIA support, include `matching_worker_inference`.
+
+Each name has an `evidence` entry containing the raw report's `sha256`, and a corresponding `report_<name>` artifact input. The record also includes `version`, `source_commit`, `artifact_sha256` with the four identities above, and `code_signing` with a reviewed `mode` (`authenticode` or `unsigned-approved`) and `decision_reference`. Writing assertions does not establish that the tests occurred. The candidate contract's `release_certified: false`, same-source replacements, simulated damage and mocked GPU checks cannot substitute for these gates.
+
+For retained releases through v1.0.4, verification still checks the original `legacy_cpu_migration` evidence and, for releases with NVIDIA support, `legacy_nvidia_migration`. For the historical stable-channel v1.0.2 build at `4dc336fc8b655ed347a6a1e37a0ae944bf3502e3`, the tool also expects the recorded deferral `"deferred_checks": {"hardware_shutdown": "v1.0.3"}` and `software_shutdown` evidence in place of `hardware_shutdown`. The software check covers restart during processing and with unsaved work, refusal while TEMPO processes remain active, and completion after ordinary shutdown.
+
+## Isolated signed update tests
+
+**Test signed Windows updates and repair on isolated builds** accepts the historical `v1.0.2` trial label. It builds three CPU applications from the selected source, with a different pinned version of tqdm in the first build, and signs an isolated test feed. The trials cover delta failure, recovery-base download, successive and skipped replacements, offline repair after simulated damage, and bundled diagnostics after restart.
 
 ## Prepare an immutable release set
 
@@ -95,7 +80,7 @@ The output directory must be absent. A failed preparation has no completed relea
 
 ## Verify retained material from durable storage
 
-Copy the complete set to approved storage whose retention does not depend on an Actions job or cache expiration. Retain previous release sets, their signed inventories, full update bases, native implementation, sources and matching evidence while they support installed users or recovery. Do not automatically prune them when an active feed drops an older version. Define ownership, access controls, retention/lifecycle policy and a second recovery location before rollout; the command does not infer those properties from a local folder or storage URL.
+Copy the complete set to the team's approved release evidence store. A new maintainer should ask the release owner for access and confirm they can retrieve a previous release set and its independently retained catalog digest. Keep earlier sets and full update bases while installed users need them for updates or recovery, including after a version leaves the active feed.
 
 Recover a separate copy from that storage and verify it using the independently retained digest and public map:
 
@@ -105,7 +90,7 @@ python -m scripts.windows_update_release verify --root <recovered-set> --public-
 
 Verification rejects altered signatures, changed/missing files, links and extra files. It rechecks native/package identities and acceptance bindings. Historical signed metadata remains usable for this archive check after feed expiry. This does not make it eligible to advertise a fresh update. Keep historical public keys available for offline verification without silently changing the installed application's active trust map.
 
-Actions artifacts remain temporary transport/evidence. A verified local copy alone does not establish durable retention; record the successful recovered-copy check together with the approved storage policy.
+Save the result of the recovered-copy check with the release approval record. Actions artifacts expire after seven days.
 
 ## Check served assets before and after feed activation
 
@@ -119,4 +104,18 @@ This is a read-only check. It requires the versioned public prerelease, verifies
 
 After all applicable acceptance and durable-retention reviews pass and activation is authorized, publish the exact retained index last. For stable delivery, upload the index to the versioned prerelease after its other assets have passed, then promote the approved release to stable/latest as the final eligibility change. Prerelease delivery uses the separately reserved `updates-prerelease` feed location. Preserve the signed channel in both cases.
 
+For v1.0.5, after uploading the staged index and before promoting the release, run **Build & Package Windows Release** with `release_tag=v1.0.5`, the certified build commit in `assemble_source_commit`, and the exact index SHA-256 in `staged_index_sha256`. Both Windows jobs must succeed. They use the published v1.0.4 installer and update service with the versioned index, exercise the delta and full-download fallback, and check that the updated desktop confirms the signed installation.
+
 Repeat the read-only check with `--include-feed`. It checks actual served assets first and the configured client feed URL last. Stable verification also requires the exact target to be stable/latest; prerelease verification requires the matching prerelease flag. Expired release metadata cannot pass publication checks. An index mismatch, stale source tag, unsafe redirect or corrupted asset blocks verification. These commands perform no public writes and never enable updates.
+
+## Rotate an installed signing key
+
+The client accepts up to sixteen signatures over the same canonical release payload. `scripts.package_windows_updates` supports a primary signer and explicit additional signers:
+
+```powershell
+python -m scripts.package_windows_updates <existing release arguments> --trusted-keys <reviewed-public-keys.json> --additional-signing-key next-key=<next-private-key.pem>
+```
+
+Every co-signer, including the primary signer, must match that explicit public map. Additional signatures do not change the signed payload, asset identities or sequence. Private keys are read only for signing and are not copied into output.
+
+For rotation, first certify an application and companion that contain the reviewed overlap of old/new public keys. Co-sign metadata during the transition so clients with either trust map can authenticate it. The current client validates every record in an index: keep the keys needed by older records in the overlap map, or remove unsupported records from the active index while retaining their offline release sets. Test the complete old-client-to-bridge-to-new-client path before cutting over. Do not retire a signer while clients that depend on it must still update through the shared feed. A compromised key or unsupported old client may require a separately verified manual installer; metadata expiration or changing a GitHub flag does not replace installed trust.

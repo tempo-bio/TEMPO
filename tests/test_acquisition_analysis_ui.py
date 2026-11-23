@@ -228,7 +228,9 @@ class AcquisitionAnalysisTests(unittest.TestCase):
         self.assertEqual(core.unloadAllDevices.call_count, 2)
 
     def test_camera_scan_runs_in_background_and_prevents_duplicate_scan(self):
-        view = gui.CameraIndexDialog(); self.addCleanup(close_and_dispose, view)
+        with patch.object(gui.platform, 'system', return_value='Darwin'):
+            view = gui.CameraIndexDialog()
+        self.addCleanup(close_and_dispose, view)
         missing = Mock(); missing.isOpened.return_value = False
         available = Mock(); available.isOpened.return_value = True
         with patch.object(gui, 'TaskThread') as worker:
@@ -239,21 +241,67 @@ class AcquisitionAnalysisTests(unittest.TestCase):
         self.assertFalse(view.btn_connect.isEnabled())
         action = worker.call_args.args[0]
         completed = view.on_camera_scan_finished
-        with patch.object(gui.cv2, 'VideoCapture', side_effect=[missing, available]):
+        with patch.object(gui.cv2, 'VideoCapture',
+                          side_effect=lambda index, _: available if index == 1 else missing):
             result = action()
-        missing.release.assert_called_once(); available.release.assert_called_once()
+        self.assertEqual(missing.release.call_count, 10)
+        available.release.assert_called_once()
         completed(result, None)
         self.assertEqual(view.cam_index.value(), 1)
         self.assertTrue(view.btn_connect.isEnabled())
 
+    def test_camera_scan_uses_numbered_fallback_when_windows_discovery_fails(self):
+        with patch.object(gui.platform, 'system', return_value='Windows'):
+            view = gui.CameraIndexDialog()
+        self.addCleanup(close_and_dispose, view)
+        view.cam_index.setValue(12)
+        probes = [Mock() for _ in range(gui.DIRECTSHOW_CAMERA_LIMIT)]
+        for index, probe in enumerate(probes):
+            probe.isOpened.return_value = index in (0, 12)
+        probes[1].isOpened.side_effect = RuntimeError('camera unavailable')
+        with patch.object(gui, 'TaskThread') as worker:
+            view.autodetect_cameras()
+        scan = worker.call_args.args[0]
+        with patch.object(gui, 'directshow_devices', side_effect=OSError('enumeration unavailable')), \
+             patch.object(gui.cv2, 'VideoCapture', side_effect=probes) as open_camera:
+            result = scan()
+        self.assertEqual([call.args for call in open_camera.call_args_list],
+                         [(index, gui.cv2.CAP_DSHOW) for index in range(gui.DIRECTSHOW_CAMERA_LIMIT)])
+        for probe in probes:
+            probe.release.assert_called_once()
+        view.on_camera_scan_finished(result, None)
+        self.assertEqual(view.cam_index.value(), 12)
+        self.assertIn('0, 12', view.status_lbl.text())
+
+    def test_directshow_lists_webcam_and_capture_adapter_without_opening_either(self):
+        from tempo_usb_camera import DirectShowDevice
+        with patch.object(gui.platform, 'system', return_value='Windows'):
+            view = gui.CameraIndexDialog()
+        self.addCleanup(close_and_dispose, view)
+        view.cam_index.setValue(1)
+        adapter = DirectShowDevice('Cam Link 4K', 'capture-adapter')
+        devices = {0: DirectShowDevice('Integrated Camera', 'webcam'), 1: adapter}
+        with patch.object(gui, 'directshow_devices', return_value=devices), \
+             patch.object(gui.cv2, 'VideoCapture') as open_camera:
+            view.autodetect_cameras()
+            self.assertTrue(wait_for_qt(lambda: not view._scan_busy))
+            open_camera.assert_not_called()
+        self.assertEqual(view.get_settings(), (1, None, adapter))
+        self.assertIn('0 · Integrated Camera', view.status_lbl.text())
+        self.assertIn('1 · Cam Link 4K', view.status_lbl.text())
+
     def test_camera_scan_releases_failed_probe_and_allows_retry(self):
-        view = gui.CameraIndexDialog(); self.addCleanup(close_and_dispose, view)
+        with patch.object(gui.platform, 'system', return_value='Darwin'):
+            view = gui.CameraIndexDialog()
+        self.addCleanup(close_and_dispose, view)
         camera = Mock(); camera.isOpened.side_effect = RuntimeError('driver unavailable')
         with patch.object(gui, 'TaskThread') as worker:
             view.autodetect_cameras()
         action = worker.call_args.args[0]
         completed = view.on_camera_scan_finished
-        with patch.object(gui.cv2, 'VideoCapture', return_value=camera):
+        missing = Mock(); missing.isOpened.return_value = False
+        with patch.object(gui.cv2, 'VideoCapture',
+                          side_effect=lambda index, _: camera if index == 0 else missing):
             with self.assertRaises(RuntimeError) as raised:
                 action()
         camera.release.assert_called_once()
@@ -264,7 +312,7 @@ class AcquisitionAnalysisTests(unittest.TestCase):
             view.autodetect_cameras()
         self.assertTrue(view.scan_error.isHidden())
         completed = view.on_camera_scan_finished
-        completed(-1, None)
+        completed([], None)
         self.assertIn('No camera found', view.status_lbl.text())
 
     def test_failed_pause_does_not_apply_exposure_or_restart_acquisition(self):

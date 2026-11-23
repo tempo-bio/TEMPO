@@ -8,11 +8,11 @@ account. New recordings use `Raw/`; new analyses use `Processed/`. A running
 analysis keeps the destination it started with. Changing this setting does not
 move existing recordings, results, or queued files.
 
-The queue and processing history live in the personal configuration directory,
-under `processing/`. On first use, TEMPO copies a legacy application-local queue
-and history if their replacements do not exist. Original metadata and recording
-paths remain intact. Keep the selected data folder backed up independently of
-application updates. Imported files remain in their existing locations.
+The queue and processing history live in `processing/` under the personal
+configuration directory. If an older installation has an application-local
+queue or history, TEMPO copies it when there is no personal copy yet. Keep the
+original recordings at their existing paths so the queue can still find them.
+Back up the data folder alongside other research files.
 
 ## Decide which videos to keep
 
@@ -52,16 +52,15 @@ Focus is assessed independently of whether Nano Scout can count cells. The
 display identifies this feature as **Beta**.
 
 Possible results are **Sharp**, **Out of focus**, **Mixed focus**, and
-**Unavailable**. A missing or incompatible reviewed profile produces Unavailable;
-TEMPO does not certify an image from edge sharpness alone. The integration ships
-without a calibrated focus profile. Its image features combine intracellular
-texture, periodic detail, edge response and exposure evidence. The current
-feature method must be evaluated against expert labels before using its focus
-classifications for scientific decisions.
+**Unavailable**. Use a reviewed profile that matches the current camera and
+microscope settings. Calibrate when TEMPO has no matching profile or the optical
+setup has changed. The classifier uses intracellular texture, periodic detail,
+edges, and exposure. Check its results against expert labels before relying on
+them for scientific decisions.
 
-Profiles are specific to optical configuration, exposure, gain and sensor depth.
-Changing these inputs invalidates matching guidance. A preview assessment
-describes its sampled frame, not an entire recording. Recordings preserve their
+Profiles are specific to optical configuration, exposure, gain, and sensor bit
+depth. TEMPO uses the settings the camera reports to select a profile. A preview
+assessment describes the sampled frame. Recordings preserve their
 sampled assessments, frame identities, times, method/profile identifiers and
 protocol flags. Saturation is evaluated against the active sensor bit depth
 when it is available.
@@ -69,6 +68,65 @@ when it is available.
 The existing **Z-index** remains operator-entered metadata. It is not a
 calibrated physical depth. Focus assistance does not move Z, recommend a
 direction, or establish a best depth.
+
+To create a profile for your microscope, follow [Calibrate Focus Beta](#calibrate-focus-beta).
+
+## Calibrate Focus Beta
+
+These steps require a build with **Focus Calibration…** in Acquisition. The
+published v1.0.4 and v1.0.5 installers predate this window. In a build with
+the window, choose **Acquisition → Focus Calibration…**. Calibrate for the camera and
+microscope settings you intend to use live. Keep the objective, illumination,
+exposure, gain, binning, and image size or ROI fixed while collecting planes.
+
+### Capture and label
+
+1. If the camera is connected and configured as it was for the images, choose
+   **Use Camera Settings**. For photos from an earlier session, you can also
+   choose **Use Recording Metadata…** and open a completed **Native lossless**
+   TEMPO recording or its `.tif.recording.json` sidecar from the same setup.
+2. Choose **New Field** at the first XY position. With the camera feed running,
+   adjust focus manually and select **Capture Plane** at each depth. Enter the
+   **Z-Index** in Acquisition if you want to record it. **Show Live Preview**
+   returns the viewer from a saved plane to the current camera image. You can
+   also choose **Import TIFFs…** to add original snapshots or a multipage
+   Z-stack from that field. Confirm the stack was captured at that position with
+   the same settings.
+3. Select a plane, inspect the intracellular detail, and set **Your label**.
+   Use **Sharp** when sarcomeres are clear, **Out of focus** when that detail
+   is visibly blurred, and **Skip** for ambiguous planes. **Actual Pixels**
+   helps inspect fine detail. Crisp cell edges can still surround blurred
+   intracellular detail.
+4. Move to a different XY position before choosing **New Field** again.
+   Use **Use to fit** for fields used to calibrate and **Hold back for checking**
+   for independent fields. TEMPO initially assigns the first field to fitting
+   and the second to checking. Include sharp and blurred planes in both sets
+   and sample representative cell densities. All planes in a field stay together.
+
+TEMPO saves the draft, labels, and native plane pixels under **Focus
+Calibration** in your selected data folder. To resume, reopen the calibration
+window and choose the same camera settings or reference metadata. Earlier
+TEMPO snapshots may have different **FOV ID** numbers for planes taken at
+the same XY position. Group those files using your acquisition notes.
+
+### Review and apply
+
+1. Choose **Fit and Check**. TEMPO fits on the assigned fields and opens **Review
+   Results** with predictions on the held-out fields.
+2. Select a result to inspect the original plane, your label, and TEMPO's
+   classification. Investigate disagreements, especially blurred planes marked
+   **Sharp**. Check any saturation or inadequate-signal flags. If you change the
+   fit after seeing the results, hold back fresh fields for the next check.
+3. Choose **Apply Profile** after reviewing the results. TEMPO uses the profile
+   immediately when the reported camera settings match. Check live preview on
+   a fresh field while moving through focus before using the profile during
+   automatic collection. If a previous profile exists for these settings, use
+   **Restore Previous Profile…** in **Review Results** to switch back.
+
+If **Focus** reads **Unavailable**, hover over the label for the reason. For a
+missing profile, calibrate or use a setup that already has one. Match the
+objective and any other settings you change by hand. For insufficient image
+detail, check that cells are visible in the live image.
 
 ## Focus review during automatic collection
 
@@ -166,15 +224,25 @@ Keep acquisition I/O in workers and keep assessment work bounded independently
 of camera acquisition. Do not silently substitute display-normalized frames for
 scientific pixel measurements.
 
-The optional profile is `focus_profile.json` in the personal configuration
-directory. `fit_profile` requires explicitly reviewed train/test fields with both
-focus labels in each partition; fields and identical source pixels cannot cross
-partitions. Its optical signature must match the capture quality signature.
-Keep the expert reference set and profile validation together. A fitted profile
-is not evidence of adequate accuracy by itself: review false-Sharp cases,
-concentration differences, weak sarcomeric texture, sharp edges with defocused
-interiors, saturation and live changes in focus. Calibrate and evaluate on
-separate fields before claiming reliable guidance.
+The desktop workflow and the offline fitter use `tempo_quality.fit_profile`
+with the recorded settings signature and active sensor bit depth. Keep fields
+and identical source pixels in one partition. Acquisition can read existing
+`focus_profile.json` files. Profiles applied in the window are stored separately
+by settings signature.
+
+Maintainers can fit on another computer from the TEMPO source checkout. In the
+project Python environment, use a CSV with columns `image,field,partition,label`.
+List native single-plane TIFFs relative to the CSV, use `train` or `test` for each
+field, and label each example `sharp` or `out_of_focus`. Run this command from the
+checkout with the recording or sidecar from the matching camera setup.
+
+```sh
+python -m scripts.calibrate_focus --manifest focus-labels.csv --reference reference.tif.recording.json --output focus_profile.json
+```
+
+Review the held-out results before handing off the candidate. An existing
+single-profile installation reads `focus_profile.json` from the personal
+configuration directory at startup.
 
 Offscreen tests and simulated stimulation acknowledgements establish software
 behavior only. Camera throughput/duration and recovery need the target camera;

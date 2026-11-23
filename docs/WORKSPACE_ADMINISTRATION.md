@@ -1,56 +1,54 @@
 # Workspace administration
 
-TEMPO uses private Hugging Face repositories for research data, models, and shared application settings. The settings repository is separate because annotators need to write annotations without gaining permission to change the workspace configuration.
+Use this guide to grant access, transfer responsibility for an existing workspace, and recover shared settings. Each collaborator signs in with their own Hugging Face account. Maintainers who run training or evaluations also need access to the shared notebook from their own Google account.
 
-## Settings access
+## Find the active repositories
 
-The trusted settings location is `tempo-bio-settings/workspace`, a private model repository containing `tempo_shared_settings.json`. Its address is fixed in `tempo_shared_settings.py`; an editable dataset or model destination cannot redirect this lookup.
+Open **Settings → Account and Shared Data → Refresh Shared Settings**. Record the displayed **Hugging Face Organization**, **Private Dataset Repository**, **Model Hub Repository**, and **Colab Notebook** in the team's private handoff record. Use the displayed values when inviting accounts and verifying the notebook. The defaults are listed below.
 
-Only administrators belong to this settings organization with the **admin** role. Collaborators have the **read** role. The organization must have no non-administrator accounts with **write** or **contributor** roles. Hugging Face enforces repository access even when someone bypasses TEMPO and calls its API directly. See [Hugging Face organization access control](https://huggingface.co/docs/hub/organizations-security).
+- **Private dataset** (`tempo-bio/cardiomyocyte-data`) holds shared images, annotations, reservations, submissions, and regular training status.
+- **Private model repository** (`tempo-bio-settings/tempo-models`) holds published weights, training results, and executable Model Evaluation code.
+- **Private shared settings repository** (`tempo-bio-settings/workspace`) holds the repository IDs and notebook URL in `tempo_shared_settings.json`. Installed clients use this fixed repository to discover the workspace. Keep it accessible at that address during the handoff.
 
-TEMPO checks the signed-in account's organization role before offering shared-setting edits. Publishing also requires a token with write access to the settings repository. Readers require an authenticated token with read access, and TEMPO rejects a public settings repository. Publisher identities are recorded in the private settings document.
+## Choose access by responsibility
 
-This protection depends on the organization's access rules. The `updated_by` field is an audit record, not proof of authorization. Granting a collaborator write access to the settings organization would allow them to replace its files outside TEMPO.
+- **Annotate and submit.** Grant read/write access to the dataset and read access to the models and shared settings.
+- **Review and approve.** Also grant the admin role in the dataset organization. The reviewer needs a credential that can write to the dataset.
+- **Train, evaluate, or publish models.** Grant reviewer access plus read/write access to the model repository.
+- **Publish shared settings.** Grant the admin role in the settings organization and write access to the settings repository. The publisher also needs dataset read/write and model read access for the configured destinations.
 
-## Initial setup
+Grant each person the combined permissions for their responsibilities. In the default workspace, a typical annotator has **write** in `tempo-bio` and **read** in `tempo-bio-settings`. Hugging Face's **contributor** role only grants write access to repositories that person created. [Hugging Face organization roles](https://huggingface.co/docs/hub/organizations-security)
 
-1. Create the settings organization and private **model** repository at the fixed address above. Do not put research images, weights, or tokens in it.
-2. Assign organization admins and invite collaborators with **read** access. Manage data and model repository permissions separately.
-3. Give the administrator's token read/write access to the settings repository and **Read access to organization settings** for **tempo-bio-settings**. Both are needed: repository access permits publishing, while organization access lets TEMPO verify the admin role. Give collaborators' tokens read access to the settings repository. Include this repository in fine-grained token scopes.
-4. Using a TEMPO build configured for this settings repository, sign in with an administrator account. Check the four shared fields in **Settings → Account and Shared Data**, then choose **Update Shared Settings** to publish them.
-5. In a collaborator account, choose **Refresh Shared Settings**. Confirm that the values arrive and that **Update Shared Settings** is unavailable. A collaborator's direct write to the settings repository must also be denied by Hugging Face.
+Reserve write access to `tempo-bio-settings/workspace` for workspace administrators. Hugging Face organization-wide **write** also allows edits to shared settings outside TEMPO-C. If a training maintainer needs write access only to the model repository, scope it with a Hugging Face resource group if your plan supports it. Check effective access to both repositories before changing a role. [Hugging Face resource groups](https://huggingface.co/docs/hub/enterprise-resource-groups) · [Credential and execution security](CREDENTIAL_SECURITY.md#executable-content-and-downloads)
 
-## Browser sign-in application
+An administrator using a fine-grained token needs settings-repository read/write access and **Read access to organization settings** for `tempo-bio-settings`. TEMPO checks both the account's admin role and the credential's write access before publishing settings.
 
-Register one public OAuth application for TEMPO in [Hugging Face developer settings](https://huggingface.co/settings/applications/new). Each collaborator still needs their own Hugging Face account and the repository access described above. The application is shared by TEMPO installations; collaborators do not register their own apps. Public-client sign-in does not require Enterprise.
+## Add a collaborator or maintainer
 
-Use these registration settings:
+1. Ask for the person's Hugging Face username and invite that account to the organizations they need. Have them accept the invitations and connect their account in TEMPO-C. [Connect your workspace](GETTING_STARTED.md#connect-your-workspace)
+2. Have them choose **Refresh Shared Settings**, then open **Segmentation Annotation → Shared Annotation Pool**. Verify that the pool shows the expected dataset. If they use a fine-grained token, check both the account's permissions and the token's selected resources.
+3. For reviewers and trainers, confirm **Maintainer** appears after sign-in. That tab confirms maintainer access to the dataset. Check model write access separately for the account and credential used to train, evaluate, or publish.
 
-| Setting | Value |
-| --- | --- |
-| Application name | TEMPO |
-| Application type | Public/native application, without a client secret |
-| Application URL | The project's public repository or homepage |
-| Redirect URI | `http://127.0.0.1/oauth/callback` |
-| OAuth scopes | `openid profile read-memberships write-repos` (`write-repos` includes reads) |
-| Authorization flow | Authorization code with PKCE (`S256`) |
+## Browser sign-in
 
-Put the application's public client ID in `PUBLIC_CLIENT_ID` in `tempo_oauth.py` before packaging. Source developers can use the `TEMPO_HF_OAUTH_CLIENT_ID` environment variable. The client ID is public and can be distributed in the application; never embed a client secret or an administrator token. The registered loopback URI omits the port because TEMPO selects an available local port for each attempt, as supported by [Hugging Face OAuth](https://huggingface.co/docs/hub/oauth#redirect-uris).
+On the Hugging Face consent screen, select the organizations that own the active dataset, models, and shared settings. If you missed one, sign in again and include it. Choose **Use an access token** for a credential scoped to specific repositories. [Browser credentials and storage](CREDENTIAL_SECURITY.md#browser-sign-in)
 
-The model repository may have a different owner from the dataset. The existing `tempo-bio-settings` organization can host a separate private `tempo-models` repository alongside `workspace`: admins publish models and settings, while collaborators read both. Keep model weights out of the `workspace` repository itself. Set the shared model-repository value to the actual location; the data organization continues to own the annotation dataset.
+If browser sign-in fails for several accounts, ask the OAuth registration owner to check its status and the client ID in `tempo_oauth.py`. If the registration must be replaced, register a public/native OAuth application with the loopback callback and scopes in the credential guide. Test the client ID in a source checkout with `TEMPO_HF_OAUTH_CLIENT_ID`. Verify sign-in with a collaborator and a settings administrator before packaging the new client ID. [Hugging Face OAuth registration](https://huggingface.co/docs/hub/oauth) · [Browser sign-in implementation](CREDENTIAL_SECURITY.md#browser-sign-in)
 
-The private model repository also holds executable Model Evaluation bundles, protocols, saved checkpoints, reports and approval records under `training/`. Reserve all writes to that repository for trusted maintainers, including Colab credentials used to run evaluations. Dataset write membership must not grant model-repository write access. Fine-grained annotator tokens need dataset writes plus model and workspace reads; evaluation-running credentials additionally need model writes. Dataset-only evaluations from older versions are not automatically imported into this trusted repository; see [credential and execution security](CREDENTIAL_SECURITY.md#executable-content-and-downloads).
+## Hand off workspace responsibilities
 
-Hugging Face's consent for `write-repos` includes personal repositories in addition to the selected organizations. TEMPO accesses its configured workspace, but this browser credential is broader than a repository-specific token. Users who need a narrower credential can use the fine-grained token fallback.
+1. Add the incoming administrators to the existing Hugging Face organizations before changing the outgoing team's access. Assign owners for dataset review, shared settings, model publication, and the shared notebook.
+2. Verify access with the incoming team's own accounts. A collaborator should see read-only shared fields and open the shared pool. A reviewer should be able to open **Maintainer → Review Submissions**. A settings administrator should be able to refresh the shared fields and edit them. Confirm the settings credential's write scope, too. The **Update Shared Settings** button becomes enabled when there are changes to publish.
+3. If the notebook depends on the departing owner's Drive access, export a matching copy and upload it from an account the incoming team controls. Share it with the trainers and have the incoming settings admin publish its URL. Have a second account refresh settings and open the notebook from TEMPO-C. If the current copy is already under team control and matches the installed build, keep using it. [Replace the notebook](TRAINING_WORKFLOW.md#replace-the-notebook-when-needed)
+4. Have the incoming trainer enable their own `HF_TOKEN` in Colab Secrets and run the notebook's **Settings** cell by itself. Confirm the intended GPU and repository IDs appear. A full regular run can replace current models even at one epoch. [Verify the notebook before starting](TRAINING_WORKFLOW.md#verify-the-notebook-before-starting)
+5. Before removing departing users, confirm their annotation drafts have synced and their active Colab runs have finished or stopped. Hand over pending work and any local evaluation protocol sources the team needs. Reservations belong to the original accounts. For work being left behind, let a new collaborator adopt it after expiry to preserve the last synced draft. Update membership in both Hugging Face organizations and remove departing users from notebook sharing when their access ends. [Shared drafts and reservations](COLLABORATION_WORKFLOW.md#collaborators)
 
-On the Hugging Face consent screen, collaborators select the workspace organizations. The scopes permit repository access within the user's granted accounts and organizations; they do not provide the repository-by-repository restriction of a manually created fine-grained token. On the free plan, organization write membership covers every repository in that organization, including published models if they share the dataset's owner. A manually restricted token cannot prevent that account from creating a broader token. Protect published models through a separate organization with read-only collaborator membership, or through the resource-group permissions available on Team and Enterprise plans. Keep the settings organization read-only for collaborators. `read-memberships` permits role verification; no email, billing, inference, or repository-management scope is requested.
+If the incoming team will maintain releases, also hand over control of GitHub Actions and Releases, the Hugging Face OAuth app registration, access to the approved signing environment, and the retained release sets and catalog checksums. Verify that the new release maintainer can recover a previous set. Keep personal tokens and private signing keys in their respective credential or signing stores. [Development and verification](DEVELOPMENT_AND_RELEASE_GUIDE.md) · [Verify a retained release set](WINDOWS_UPDATE_RELEASE.md#verify-retained-material-from-durable-storage)
 
-After registering the application, check sign-in with an invited collaborator and an administrator. Check dataset writes, model and private-settings reads, maintainer visibility, denied access when an organization is not selected, cancellation, and a fresh sign-in after expiry. Until the public client ID is configured, collaborators can use the personal-token method.
+## Change or recover shared settings
 
-## Changes and succession
+Before editing, choose **Refresh Shared Settings** to load the current values. Confirm the affected accounts can open the proposed destinations. The publisher needs write access to the destination dataset, which must be private and belong to the listed organization. Use an HTTPS Colab notebook URL with a `/drive/` or `/github/` path. Publish from **Settings → Account and Shared Data → Update Shared Settings**.
 
-Administrators publish changes with **Update Shared Settings**. Collaborators receive them at launch or through **Refresh Shared Settings**. Repository changes received during a session are saved for the next launch so that current edits stay with their original dataset.
+Collaborators receive the change at launch or through **Refresh Shared Settings**. Sync drafts before restarting to apply a repository change. Publishing new IDs changes where TEMPO-C connects. Plan any transfer of repository data separately, then export a fresh notebook from the active workspace or generate it with the intended repository IDs before starting a run.
 
-A successor needs admin membership in the settings organization, appropriate access to the data and model repositories, and a suitably scoped token. Training access is separate; see the [training workflow](TRAINING_WORKFLOW.md). Removing admin membership removes shared-setting edit authority without changing the application source.
-
-Unavailable or unreadable settings leave saved values in use. TEMPO does not fall back to a writable data/model repository as a configuration source.
+If refresh fails, open **Show Details** and check the signed-in account's access to the private settings repository. TEMPO-C keeps the last saved settings. If another administrator published while you were editing, refresh and reapply your intended changes. If publication succeeded but local saving failed, correct the local folder permissions and refresh again.

@@ -17,8 +17,9 @@ from PyQt6.QtGui import QKeySequence, QShortcut, QFont
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QLabel,
     QComboBox, QDoubleSpinBox, QSpinBox, QPushButton, QCheckBox, QGroupBox,
     QDialog, QDialogButtonBox, QListWidget, QAbstractItemView, QScrollArea, QSizePolicy, QMenu, QTextBrowser, QGridLayout)
+from tempo_release import APP_DISPLAY_NAME
 from tempo_capture import CaptureSession, FieldCalibration, search_grid, validate_capture_profile
-from tempo_config import tempo_preferences, get_config_dir
+from tempo_config import tempo_preferences, get_config_dir, get_data_dir
 from tempo_processing import atomic_write
 from tempo_regions import region_counts
 from tempo_stimulation import PacerService, StimulusParameters
@@ -149,14 +150,19 @@ def check_field(frame, model, confidence, signature, profile, sensor_bits=None):
     return dict(counts=counts,quality=quality,counting_error=error,signature=signature)
 
 
+def recording_focus_profile(options, signature):
+    return options.get('focus_profiles', {}).get(signature) or options.get('focus_profile')
+
+
 class FirmwareWorker(QThread):
     progress = pyqtSignal(str)
     outcome = pyqtSignal(object)
 
-    def __init__(self, service, port, parent=None):
+    def __init__(self, service, port, parent=None, investigation=False):
         super().__init__(parent)
         from tempo_firmware import FirmwareInstaller
         self.service, self.port = service, port
+        self.investigation = investigation
         self.verified_port = None
         self.installer = FirmwareInstaller(Path(get_config_dir()).parent/'arduino', self.progress.emit)
 
@@ -165,21 +171,30 @@ class FirmwareWorker(QThread):
             from tempo_firmware import verify_firmware
             if self.service:
                 self.service.close().result(timeout=3)
-            sketch = Path(__file__).resolve().parent/'firmware'/'tempo_pacer'
-            self.verified_port = self.installer.install(self.port, sketch,
-                lambda port: verify_firmware(port,serial_number=self.installer.serial_number))
+            verify = lambda port: verify_firmware(port, serial_number=self.installer.serial_number,
+                                                  investigation=self.investigation)
+            if self.investigation:
+                from tempo_optional_packages import INVESTIGATION, load
+                with load(INVESTIGATION, 'firmware').development_sketch() as sketch:
+                    self.verified_port = self.installer.install(self.port, sketch, verify)
+            else:
+                sketch = Path(__file__).resolve().parent/'firmware'/'tempo_pacer'
+                self.verified_port = self.installer.install(self.port, sketch, verify)
             self.outcome.emit(None)
         except Exception as exc:
             self.outcome.emit(exc)
 
 
 class FirmwareDialog(QDialog):
-    def __init__(self, tools, section='outputs'):
+    def __init__(self, tools, section='outputs', investigation=False):
         super().__init__(tools)
         self.tools = tools
+        self.investigation = investigation
         self.worker = None
         self._close_after_cancel = False
-        self.setWindowTitle('TEMPO · Install / Update Firmware')
+        self.setWindowTitle(f'{APP_DISPLAY_NAME} · Install / Update Firmware')
+        if investigation:
+            self.setWindowTitle(f'{APP_DISPLAY_NAME} · Install Investigation Firmware')
         self.resize(470,300)
         layout = QVBoxLayout(self)
         instruction = QLabel('Connect the Uno R4 Minima by USB. Installation replaces its current sketch. Keep it connected until verification finishes.')
@@ -191,8 +206,12 @@ class FirmwareDialog(QDialog):
         self.status.setWordWrap(True); layout.addWidget(self.status)
         self.error = ErrorDetails(); layout.addWidget(self.error)
         self.install_button = QPushButton('Install / Update Firmware'); self.install_button.clicked.connect(self.install)
+        if investigation:
+            self.install_button.setText('Install Development Firmware')
         layout.addWidget(self.install_button)
         self.close_button = QPushButton('Close'); self.close_button.clicked.connect(self.close); layout.addWidget(self.close_button)
+        if investigation:
+            self.close_button.hide()
 
     def install(self):
         if self.worker and not self.worker.wait(0): return
@@ -200,18 +219,26 @@ class FirmwareDialog(QDialog):
             self.status.setText('Close this window, refresh the serial ports, and choose the Uno R4 Minima.'); return
         if self.tools.camera_busy() or self.tools.busy() or (self.tools.session and self.tools.session.active):
             self.status.setText('Finish capture and stimulation before updating firmware.'); return
-        self.worker = FirmwareWorker(self.tools.service,self.port.currentData(),self)
+        service = self.tools.service
+        status = service.status if service and service.connected else None
+        workspace = getattr(self.tools.capture, 'investigation_workspace', None)
+        if (status and status.mode not in ('REST_DISCHARGE', 'DISCONNECTED_HIZ')) or (workspace and workspace.capturing):
+            self.status.setText('Stop stimulation and Arduino capture before updating firmware.'); return
+        self.worker = FirmwareWorker(self.tools.service,self.port.currentData(),self, investigation=self.investigation)
         self.worker.progress.connect(self.progress)
         self.worker.outcome.connect(self.completed)
         self.worker.finished.connect(self.tools.refresh_controls)
         self.worker.finished.connect(self.finish_cancellation)
         self.install_button.setEnabled(False); self.close_button.setText('Cancel Setup'); self.port.setEnabled(False)
+        self.close_button.show()
         self.error.clear()
         self.worker.start()
         self.tools.refresh_controls()
 
     def completed(self, error):
         self.close_button.setEnabled(True); self.close_button.setText('Close'); self.port.setEnabled(True); self.install_button.setEnabled(True)
+        if self.investigation:
+            self.close_button.hide()
         if error: self.error.set_error(str(error),error)
         else:
             port = self.worker.verified_port
@@ -468,7 +495,9 @@ class FieldCollectionWorker(QThread):
                         continue
                     if self.recording_options is not None:
                         from tempo_quality import assess
-                        assessment=assess(frame,context.get('quality_signature'),self.recording_options.get('focus_profile'),sensor_bits=context.get('sensor_bits'))
+                        signature = context.get('quality_signature')
+                        profile = recording_focus_profile(self.recording_options, signature)
+                        assessment = assess(frame, signature, profile, sensor_bits=context.get('sensor_bits'))
                         if assessment['focus']!='sharp':
                             self._review_focus(field_id,counts,assessment)
                             frame=fresh_frame(self.core)
@@ -476,7 +505,9 @@ class FieldCollectionWorker(QThread):
                             if not self.calibration.matches(context['signature'],context['image_size']):
                                 raise RuntimeError('Optical configuration changed during focus review. Recalibrate before restarting.')
                             counts=count_frame(frame,self.model,self.confidence)
-                            assessment=assess(frame,context.get('quality_signature'),self.recording_options.get('focus_profile'),sensor_bits=context.get('sensor_bits'))
+                            signature = context.get('quality_signature')
+                            profile = recording_focus_profile(self.recording_options, signature)
+                            assessment = assess(frame, signature, profile, sensor_bits=context.get('sensor_bits'))
                             assessment['flags'].append('focus_override')
                             if counts['live_count'] < self.threshold:
                                 self.session.document['fields'].append(dict(field_id=field_id,path=None,counts=counts,
@@ -495,6 +526,7 @@ class FieldCollectionWorker(QThread):
                     if options is not None:
                         options.setdefault('metadata',{}).update(optical_signature=context['signature'],
                             quality_signature=context.get('quality_signature'),protocol_flags=list(self.protocol_flags),quality_assessments=[counts['quality']])
+                        options['focus_profile'] = recording_focus_profile(options, context.get('quality_signature'))
                     native_options = dict(native=True,recording_options=options,duration_s=self.duration) if options is not None else {}
                     acq = self.acquisition_factory(core=self.core, output_path=path, target_fps=self.fps,
                                                   max_frames=0 if options is not None else max(1, int(self.duration * self.fps)),**native_options)
@@ -551,7 +583,8 @@ class CaptureSetupDialog(QDialog):
     def __init__(self, tools, section='outputs'):
         super().__init__(tools)
         self.tools = tools
-        self.setWindowTitle('TEMPO · ' + ('Output Assignments' if section == 'outputs' else 'Field Calibration'))
+        title = 'Output Assignments' if section == 'outputs' else 'Field Calibration'
+        self.setWindowTitle(f'{APP_DISPLAY_NAME} · {title}')
         self.resize(510, 460)
         outer = QVBoxLayout(self)
         scroll = QScrollArea(); scroll.setWidgetResizable(True)
@@ -643,6 +676,7 @@ class CaptureTools(QWidget):
         self._count_generation = 0
         self._focus_resume_pending=False
         self._focus_flash=False
+        self.focus_dialog = None
         self.focus_warning_timer=QTimer(self)
         self.focus_warning_timer.setInterval(500)
         self.focus_warning_timer.timeout.connect(self.update_focus_warning)
@@ -704,14 +738,23 @@ class CaptureTools(QWidget):
         self._parameter_columns = None
         box.addWidget(self.values_widget)
         self.channel_label = QLabel('Single output'); self.channel_label.setWordWrap(True)
-        output_row = QHBoxLayout(); output_row.addWidget(self.channel_label,1); output_row.addWidget(self.information)
+        output_row = self.channel_layout = QHBoxLayout(); output_row.addWidget(self.channel_label,1); output_row.addWidget(self.information)
         box.addLayout(output_row)
         self.pre_mode = SlidingChoice(('Manual','Timed'),('manual','timed'))
         self.pre_mode.setAccessibleName('Pre-pacing mode')
         self.pre_duration = QDoubleSpinBox(); self.pre_duration.setRange(0,86400); self.pre_duration.setSuffix(' s'); self.pre_duration.setSpecialValueText('Enter duration')
         self.pre_duration.setAccessibleName('Pre-pacing duration')
         self.pre_duration.setVisible(False); self.pre_mode.currentIndexChanged.connect(self.refresh_controls)
-        pre_heading = QLabel('Pre-pacing'); box.addWidget(pre_heading)
+        pre_heading = self.pre_heading = QLabel('Pre-pacing'); box.addWidget(pre_heading)
+        self.investigation_output_row = QWidget()
+        output_layout = self.investigation_output_layout = QHBoxLayout(self.investigation_output_row); output_layout.setContentsMargins(0, 0, 0, 0)
+        output_layout.addWidget(QLabel('Output'))
+        self.investigation_output = QComboBox()
+        self.investigation_output.setAccessibleName('Stimulation output')
+        for number in range(1, 9): self.investigation_output.addItem(str(number), number - 1)
+        output_layout.addWidget(self.investigation_output)
+        box.addWidget(self.investigation_output_row)
+        self.investigation_output_row.hide()
         pre_controls = QVBoxLayout(); pre_controls.addWidget(self.pre_mode); pre_controls.addWidget(self.pre_duration)
         box.addLayout(pre_controls)
         from tempo_stimulation_scope import ScopePreview
@@ -724,7 +767,7 @@ class CaptureTools(QWidget):
         self.setup_button = QPushButton('Setup')
         menu = QMenu(self.setup_button)
         self.output_setup_action = menu.addAction('Output assignments…', lambda: self.open_setup('outputs'))
-        self.firmware_action = menu.addAction('Install / update firmware…', self.open_firmware)
+        self.firmware_action = menu.addAction('Install / update firmware…', lambda: self.open_firmware())
         self.diagnostics_action = menu.addAction('Advanced diagnostics…', self.diagnostics)
         menu.addAction('Stimulation Guide', self.stimulation_help)
         self.setup_button.setMenu(menu)
@@ -743,15 +786,12 @@ class CaptureTools(QWidget):
         self.focus_label.setWordWrap(True);fields.addWidget(self.focus_label)
         self.focus_warning=QLabel();self.focus_warning.setWordWrap(True)
         self.focus_warning.hide();fields.addWidget(self.focus_warning)
-        self.focus_profile = None
         self.quality_signature = None
         self.quality_sensor_bits = None
-        profile_path = Path(get_config_dir())/'focus_profile.json'
-        if profile_path.is_file():
-            try:
-                self.focus_profile = json.loads(profile_path.read_text())
-            except (OSError,ValueError):
-                self.focus_label.setText('Focus: Unavailable · Beta — profile could not be read')
+        from tempo_focus_calibration import load_profiles
+        self.focus_profiles, errors = load_profiles(get_config_dir())
+        if errors:
+            self.focus_label.setToolTip('\n'.join(errors))
         count_row = FlowRow()
         self.count_button = QPushButton('Count Field'); self.count_button.clicked.connect(self.count_current)
         count_row.flow.addWidget(self.count_button)
@@ -767,7 +807,7 @@ class CaptureTools(QWidget):
         self.history_summary = QLabel('No fields recorded.'); fields.addWidget(self.history_summary)
         self.automatic_group = QGroupBox('Automatic Collection'); compact_auto = QVBoxLayout(self.automatic_group)
         self.automatic_dialog = QDialog(self)
-        self.automatic_dialog.setWindowTitle('TEMPO · Automatic Collection')
+        self.automatic_dialog.setWindowTitle(f'{APP_DISPLAY_NAME} · Automatic Collection')
         auto = QVBoxLayout(self.automatic_dialog)
         self.area_label = QLabel('Mark the usable area for this well.'); self.area_label.setWordWrap(True); auto.addWidget(self.area_label)
         corners = FlowRow()
@@ -849,6 +889,9 @@ class CaptureTools(QWidget):
         return super().eventFilter(source,event)
 
     def request_output(self, checked):
+        if getattr(self.capture, 'investigation_mode', False):
+            self.request_investigation_output(checked)
+            return
         if self._starting_output or self._finish_pending:
             self._output_requested = False
             self.finish_well(interrupted=True,reason='Stimulation start cancelled.')
@@ -869,6 +912,37 @@ class CaptureTools(QWidget):
         self._latest_quality_at=''
         self.focus_label.setText('Focus: Unavailable · Beta')
 
+    def request_investigation_output(self, checked):
+        if not checked or self._starting_output or self._finish_pending:
+            self.finish_well(interrupted=True, reason='Investigation stimulation stopped.')
+            return
+        try:
+            if self.busy() or self.camera_busy() or self.firmware_busy(): return
+            if self.service is None or not self.service.connected:
+                raise ConnectionError('Connect the stimulator before starting output.')
+            parameters = self.parameters()
+            if not self._confirm(parameters): return
+            service = self.service
+            cancelled = self._session_cancel = threading.Event()
+            self._starting_output = self._output_requested = True
+            self.error.clear()
+            def start():
+                service.submit('stop').result(2)
+                if cancelled.is_set(): raise InterruptedError('Stimulation start cancelled.')
+                service.submit(parameters.command(parameters.needs_confirmation)).result(2)
+                if cancelled.is_set(): raise InterruptedError('Stimulation start cancelled.')
+                status = service.submit('pace').result(2)
+                if cancelled.is_set():
+                    service.submit('stop').result(2)
+                    raise InterruptedError('Stimulation start cancelled.')
+                return status
+            def started(_):
+                self._starting_output = False
+                self.refresh_controls()
+            self._async(start, started)
+        except Exception as exc: self.show_error(exc)
+        finally: self.refresh_controls()
+
     def capture_failure(self, message):
         if self._starting_output or (self.session and self.session.active):
             self.finish_well(interrupted=True,reason=message)
@@ -876,21 +950,21 @@ class CaptureTools(QWidget):
     def stimulation_help(self):
         self.show_guide('Stimulation Guide', '''<h2>Capture while pacing one well</h2>
 <p>Select the experiment, well, and field in the Camera panel. With a multiplexer, assign that well to exactly one output in Setup → Output assignments. These assignments describe wiring, not microscope positions.</p>
-<h3>Pre-pacing</h3><p>Set voltage, frequency, and pulse width before switching Stimulation on. The defaults for new profiles are 0.6 V, 1 Hz, and 2 ms. Timed mode requires a duration: Record can queue the first field until that duration has elapsed. Manual mode keeps pacing until you choose Begin Imaging in the Camera panel. That action starts the first recording.</p>
+<h3>Pre-pacing</h3><p>Set voltage, frequency, and pulse width before switching Stimulation on. The defaults for new profiles are 0.6 V, 1 Hz, and 2 ms. In Timed mode, enter a duration and choose <b>Record After Pre-pacing</b> to queue the first recording. In Manual mode, choose <b>Begin Imaging</b> in the Camera panel to end pre-pacing and start the first recording.</p>
 <h3>More than one field</h3><p>Stop Recording ends only the current field; stimulation continues. Move to another field and assign its field identifier before recording again. Settings remain fixed until stimulation is switched off. Switching off between recordings completes the well. Switching off during recording interrupts that field. Stop Stimulation interrupts the workflow and prioritizes stopping output.</p>
-<h3>Counting and automatic collection</h3><p>Healthy individual-cell estimates contribute to the target only after a recording succeeds. Dead cells and groups remain visible but do not independently qualify a field. Repeated identifiers and calibrated overlaps do not add credit. Without stage coordinates, field identities are operator assigned and counts remain estimates. Recording History shows the full field list and any failed or excluded fields.</p>
+<h3>Counting and automatic collection</h3><p>Healthy individual-cell estimates contribute to the target only after a recording succeeds. Dead cells and groups remain visible but do not independently qualify a field. Repeated identifiers and calibrated overlaps do not add credit. Without stage coordinates, assign a new field identifier after moving to another field. Choose <b>History…</b> to see the field list.</p>
 <p>Automatic Collection requires a connected XY stage, a detector, calibrated field scale and orientation, and two marked corners inside each selected well. Set the healthy-cell target, maximum inspected fields, minimum cells per field, and recording duration. If the search ends below target, completed recordings are retained and the shortfall is reported.</p>
 <h3>Output state and saved data</h3><p>Starting and Stopping mean TEMPO is waiting for the controller. Output unconfirmed must not be read as output off. Loss of valid communication triggers the firmware watchdog; reconnecting never restarts stimulation automatically. Requested and acknowledged settings, counts, field positions when available, and interruption status are saved beside recordings.</p>
 <p>The DAC request is not a measured electrode voltage. Device confirmation thresholds are not verified biological safety limits. Host timestamps do not measure pulse-to-frame synchronization. Use the oscilloscope guide for interpreting the expected-signal drawing and setting up a physical instrument.</p>''')
 
     def show_guide(self, title, html):
-        dialog = QDialog(self.capture); dialog.setWindowTitle('TEMPO · ' + title)
+        dialog = QDialog(self.capture); dialog.setWindowTitle(f'{APP_DISPLAY_NAME} · {title}')
         layout = QVBoxLayout(dialog); text = QTextBrowser(); text.setHtml(html); layout.addWidget(text)
         QShortcut(QKeySequence.StandardKey.Close, dialog, activated=dialog.close)
         dialog.resize(600,560); dialog.show(); self._guide_dialog = dialog
 
     def show_history(self):
-        dialog = QDialog(self.capture); dialog.setWindowTitle('TEMPO · Recording History')
+        dialog = QDialog(self.capture); dialog.setWindowTitle(f'{APP_DISPLAY_NAME} · Recording History')
         layout = QVBoxLayout(dialog); history = QListWidget(); history.setWordWrap(True)
         for row in range(self.history.count()): history.addItem(self.history.item(row).clone())
         layout.addWidget(history)
@@ -914,12 +988,16 @@ class CaptureTools(QWidget):
         dialog = self._firmware_dialog
         return dialog is not None and dialog.worker is not None and not dialog.worker.wait(0)
 
-    def open_firmware(self):
+    def open_firmware(self, *, investigation=False):
         if self.busy() or self.camera_busy() or (self.session and self.session.active): return
         if self._firmware_dialog and self._firmware_dialog.isVisible():
             self._firmware_dialog.raise_(); return
+        status = self.service.status if self.service and self.service.connected else None
+        workspace = getattr(self.capture, 'investigation_workspace', None)
+        if (status and status.mode not in ('REST_DISCHARGE', 'DISCONNECTED_HIZ')) or (workspace and workspace.capturing):
+            self.show_error(ValueError('Stop stimulation and Arduino capture before installing firmware.')); return
         def show():
-            self._firmware_dialog = FirmwareDialog(self)
+            self._firmware_dialog = FirmwareDialog(self, investigation=investigation)
             self._firmware_dialog.show()
         if not self.port.count():
             from tempo_stimulation import serial_ports
@@ -944,6 +1022,9 @@ class CaptureTools(QWidget):
 
     def parameters(self, well=None):
         channel = 0
+        if getattr(self.capture, 'investigation_mode', False):
+            channel = self.investigation_output.currentData() if self.profile.get('multiplexer') else 0
+            return StimulusParameters(self.amplitude.value(), self.frequency.value(), self.width.value(), channel)
         if self.profile.get('multiplexer'):
             well = well or self.capture.well_id.currentText()
             channels = [int(ch) for ch,name in self.profile.get('channels',{}).items() if name == well]
@@ -1233,6 +1314,49 @@ class CaptureTools(QWidget):
         if self.capture.acq_worker and self.capture.is_recording: self.capture.acq_worker.stop()
         self.finish_well(interrupted=True,reason='Stop Stimulation requested.')
 
+    def focus_calibration_available(self):
+        return not (self._shutdown_requested or getattr(self.capture, 'investigation_mode', False)
+                    or self.camera_busy() or self.automatic_running() or self.busy()
+                    or self._starting_output or self._finish_pending or self.firmware_busy()
+                    or self.diagnostics_open() or getattr(self.capture, '_camera_task_busy', False)
+                    or getattr(self.capture, '_feed_stop_pending', False)
+                    or (self.session and self.session.active and self.session.document['stimulated']))
+
+    def focus_camera_available(self):
+        return self.focus_calibration_available() and (self.capture.core is not None or self.capture.cv_cap is not None)
+
+    def open_focus_calibration(self):
+        if not self.focus_calibration_available():
+            return
+        if self.focus_dialog is None:
+            from tempo_focus_calibration_ui import FocusCalibrationDialog
+            self.focus_dialog = FocusCalibrationDialog(self.capture, data_dir=get_data_dir(), config_dir=get_config_dir(),
+                camera_action=self.focus_camera_action, camera_available=self.focus_camera_available,
+                current_well=self.capture.well_id.currentText, current_z=self.capture.z_index.value,
+                profile_for=self.focus_profiles.get, can_apply=self.focus_calibration_available,
+                on_profile=self.activate_focus_profile)
+        self.focus_dialog.update_actions()
+        self.focus_dialog.show()
+        self.focus_dialog.raise_()
+        self.focus_dialog.activateWindow()
+
+    def focus_camera_action(self, title, operation):
+        if not self.focus_camera_available():
+            raise ValueError('Stop recording, collection, and stimulation before capturing calibration planes.')
+        core, cap = self.capture.core, self.capture.cv_cap
+        def work():
+            frame = self.capture.read_snapshot_frame(core, cap)
+            return operation(frame, optical_context(core, cap))
+        return self.capture.run_camera_task(title, work)
+
+    def activate_focus_profile(self, profile):
+        self.focus_profiles[profile['signature']] = profile
+        if profile['signature'] == self.quality_signature:
+            self._count_generation += 1
+            self._latest_quality_at = ''
+            self._last_quality_check = 0.
+            self.focus_label.setText('Focus: Unavailable · Beta')
+
     def count_current(self):
         try:
             if self.camera_busy() or self.busy(): return
@@ -1243,7 +1367,8 @@ class CaptureTools(QWidget):
             def inspect():
                 frame=fresh_frame(core,cap)
                 context=optical_context(core,cap)
-                return check_field(frame,model,confidence,context.get('quality_signature'),self.focus_profile,context.get('sensor_bits'))
+                signature = context.get('quality_signature')
+                return check_field(frame, model, confidence, signature, self.focus_profiles.get(signature), context.get('sensor_bits'))
             self._async(inspect,self._show_field_check,camera=True)
         except Exception as exc: self.show_error(exc)
 
@@ -1263,7 +1388,8 @@ class CaptureTools(QWidget):
         result = []
         signature=self.quality_signature
         bits=self.quality_sensor_bits
-        task = self._count_task = TaskThread(lambda: check_field(frame,model,confidence,signature,self.focus_profile,bits), self)
+        profile = self.focus_profiles.get(signature)
+        task = self._count_task = TaskThread(lambda: check_field(frame,model,confidence,signature,profile,bits), self)
         task.completed.connect(lambda value,error: result.append(value) if error is None else None)
         def finished():
             if result and not self._shutdown_requested and not self.camera_busy() and identity == (self.capture.well_id.currentText(),self.capture.fov_id.value(),self._count_generation):
@@ -1281,7 +1407,8 @@ class CaptureTools(QWidget):
         signature=self.quality_signature
         result=[]
         bits=self.quality_sensor_bits
-        task=self._quality_task=TaskThread(lambda:assess(frame,signature,self.focus_profile,
+        profile = self.focus_profiles.get(signature)
+        task=self._quality_task=TaskThread(lambda:assess(frame,signature,profile,
             'preview-'+str(time.monotonic_ns()),bits),self)
         task.completed.connect(lambda value,error:result.append(value) if error is None else None)
         def finished():
@@ -1559,7 +1686,7 @@ class CaptureTools(QWidget):
         self.refresh_controls()
 
     def show_collection_results(self):
-        dialog = QDialog(self); dialog.setWindowTitle('TEMPO · Collection Results')
+        dialog = QDialog(self); dialog.setWindowTitle(f'{APP_DISPLAY_NAME} · Collection Results')
         layout = QVBoxLayout(dialog)
         label = QLabel(self._last_collection_result); label.setWordWrap(True); layout.addWidget(label)
         close = QPushButton('Close'); close.clicked.connect(dialog.close); layout.addWidget(close)
@@ -1569,7 +1696,7 @@ class CaptureTools(QWidget):
         if self.session and self.session.active or self.camera_busy(): return
         if self.service is None or not self.service.connected:
             self.show_error(ValueError('Connect the stimulator before opening diagnostics.')); return
-        dialog = QDialog(self); dialog.setWindowTitle('TEMPO · Stimulation Diagnostics')
+        dialog = QDialog(self); dialog.setWindowTitle(f'{APP_DISPLAY_NAME} · Stimulation Diagnostics')
         layout = QVBoxLayout(dialog)
         mode = QComboBox(); mode.addItem('Constant output','constant'); mode.addItem('Scope test · 10 Hz, 50% duty','square')
         if self.profile.get('multiplexer'): mode.addItem('Cycle eight channels','cycle')
@@ -1646,7 +1773,8 @@ class CaptureTools(QWidget):
                 self._finish_pending = False
             else:
                 self.finish_well()
-        if time.monotonic() - self._last_stage_probe > 2 and not self.camera_busy() and not self.busy():
+        if (time.monotonic() - self._last_stage_probe > 2 and not self.camera_busy() and not self.busy()
+                and not getattr(self.capture, '_camera_task_busy', False)):
             self._last_stage_probe = time.monotonic()
             core = self.capture.core
             if core is None:
@@ -1659,6 +1787,9 @@ class CaptureTools(QWidget):
         self.refresh_controls()
 
     def refresh_controls(self):
+        investigation = getattr(self.capture, 'investigation_mode', False)
+        workspace = getattr(self.capture, 'investigation_workspace', None)
+        raw_capture = workspace is not None and workspace.capturing
         active = self.session is not None and self.session.active
         automatic = self.automatic_running()
         busy = self.busy()
@@ -1667,16 +1798,28 @@ class CaptureTools(QWidget):
         camera = self.capture.core is not None or self.capture.cv_cap is not None
         pre = active and self.session.phase == 'pre_pacing'
         manual = pre and self.pre_mode.currentData() == 'manual'
-        stimulated = active and self.session.document['stimulated']
-        locked = stimulated or automatic or busy or self._finish_pending or self.firmware_busy() or self.diagnostics_open()
+        stimulated = (active and self.session.document['stimulated']) or bool(investigation and status and status.mode == 'PACING')
+        locked = stimulated or automatic or busy or raw_capture or self._finish_pending or self.firmware_busy() or self.diagnostics_open()
         self.update_scope()
         for control in (self.amplitude,self.frequency,self.width,self.pre_mode,self.pre_duration):
             control.setEnabled(not locked)
-        self.pre_duration.setVisible(self.pre_mode.currentData() == 'timed')
+        self.pre_heading.setVisible(not investigation)
+        self.pre_mode.setVisible(not investigation)
+        self.pre_duration.setVisible(not investigation and self.pre_mode.currentData() == 'timed')
+        self.investigation_output_row.setVisible(investigation)
+        multiplexer = bool(self.profile.get('multiplexer'))
+        self.investigation_output.setEnabled(not locked and multiplexer)
+        if not multiplexer:
+            self.investigation_output.setCurrentIndex(0)
+        self.channel_label.setVisible(not investigation)
+        if investigation and self.information.parentWidget() is not self.investigation_output_row:
+            self.investigation_output_layout.addWidget(self.information)
+        elif not investigation and self.information.parentWidget() is self.investigation_output_row:
+            self.channel_layout.addWidget(self.information)
         output_on = bool(status and status.mode == 'PACING' and stimulated and not self._starting_output)
         self.enabled.setChecked(output_on)
         self.enabled.setEnabled(bool(output_on or self._starting_output or self._finish_pending or
-            (connected and not self.camera_busy() and not busy and not automatic and not self.firmware_busy() and not self.diagnostics_open())))
+            (connected and not raw_capture and not self.camera_busy() and not busy and not automatic and not self.firmware_busy() and not self.diagnostics_open())))
         self.enabled.setAccessibleDescription('Requests stimulation on or off. Output state is shown separately.')
         self.setup_button.setEnabled(not self._shutdown_requested)
         self.output_setup_action.setEnabled(not locked)
@@ -1685,7 +1828,10 @@ class CaptureTools(QWidget):
         for control in (self.capture.well_id,self.capture.exp_id): control.setEnabled(not locked and not self.capture.is_recording)
         self.capture.fov_id.setEnabled(not self.capture.is_recording and not automatic and not busy)
         self.stop_button.setEnabled(bool(connected or active or automatic or self._starting_output))
-        self.field_group.setVisible(camera or self.session is not None)
+        self.field_group.setVisible(not investigation and (camera or self.session is not None))
+        self.capture.focus_calibration_button.setEnabled(self.focus_calibration_available())
+        if self.focus_dialog is not None and self.focus_dialog.isVisible():
+            self.focus_dialog.update_actions()
         self.history.setVisible(self.history.count() > 0)
         rows = min(3 if self.capture.height() >= 900 else 1, self.history.count())
         self.history.setFixedHeight(sum(max(self.fontMetrics().height()+6,self.history.sizeHintForRow(i)) for i in range(max(0,self.history.count()-rows),self.history.count()))+6)
@@ -1708,7 +1854,7 @@ class CaptureTools(QWidget):
             elif not self.camera_busy():
                 self.capture.btn_record.setText('Record Field')
         if feed_unconfirmed: self.count_button.setEnabled(False)
-        self.automatic_group.setVisible(self._stage_present)
+        self.automatic_group.setVisible(not investigation and self._stage_present)
         self.auto_button.setText('Stopping…' if automatic and self._collection_stopping else ('Stop Automatic Collection' if automatic else 'Automatic Collection…'))
         collection_available = self._stage_present and camera and not busy and not self.camera_busy() and not self._finish_pending and not self.firmware_busy() and not self.diagnostics_open() and not feed_unconfirmed
         self.auto_button.setEnabled((automatic and not self._collection_stopping) or collection_available)
@@ -1737,6 +1883,8 @@ class CaptureTools(QWidget):
             confirmed_focus_stop=(getattr(collection,'focus_timed_out',False) is True and
                                   status is not None and status.mode=='REST_DISCHARGE')
             self.status.setText('Focus timeout · pacing stopped' if confirmed_focus_stop else 'Output unconfirmed')
+        elif stimulated and investigation:
+            self.status.setText('Pacing')
         elif stimulated:
             phase = 'Pre-pacing' if pre else 'Pacing'
             epoch=getattr(self.session,'pacing_epoch_at',None)
@@ -1766,6 +1914,8 @@ class CaptureTools(QWidget):
     def shutdown(self):
         """Requested before dashboard thread guards; never wait on the GUI thread."""
         self._shutdown_requested = True
+        if self.focus_dialog is not None and not self.focus_dialog.operation_in_progress:
+            self.focus_dialog.close()
         self._session_cancel.set()
         self.poll_timer.stop()
         self.focus_warning_timer.stop()
@@ -1775,7 +1925,10 @@ class CaptureTools(QWidget):
         if self.service:
             self.service.close()
         # Camera ownership is settled separately by CaptureTab.cleanup().
-        if self.busy() or self._count_task is not None or self._quality_task is not None or self.automatic_running() or self.firmware_busy() or (self.service and self.service.running): return False
+        if (self.busy() or self._count_task is not None or self._quality_task is not None or self.automatic_running()
+                or self.firmware_busy() or (self.focus_dialog is not None and self.focus_dialog.operation_in_progress)
+                or (self.service and self.service.running)):
+            return False
         if self.session and self.session.active:
             session = self.session
             status = self.service.status if self.service else None

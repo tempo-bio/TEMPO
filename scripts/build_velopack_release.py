@@ -10,6 +10,7 @@ import tempfile
 from types import SimpleNamespace
 import zipfile
 
+import tempo_release
 from scripts.build_velopack_candidate import (ROOT, VPK_SHA256, check_payload,
     file_record, folder_inventory)
 from scripts.configure_windows_updates import candidate, stage
@@ -30,6 +31,8 @@ def build(bundle, build_contract, verification, runtime_report, vpk_archive, set
     if bundle == output or bundle in output.parents:
         raise ValueError('Release outputs must be outside the verified input bundle.')
     contract = json.loads(Path(build_contract).read_bytes())
+    # The workflow can run this assembler against an older checkout and bundle.
+    title = getattr(tempo_release, 'APP_DISPLAY_NAME', 'TEMPO')
     commit = contract.get('source_commit')
     if not isinstance(commit, str) or not COMMIT.fullmatch(commit):
         raise ValueError('The full application build commit is required.')
@@ -72,7 +75,7 @@ def build(bundle, build_contract, verification, runtime_report, vpk_archive, set
         result = work / 'release'
         result.mkdir()
         command = ['dotnet', str(vpk / 'tools/net8.0/any/vpk.dll'), '[win]', 'pack',
-                   '--packId', PACKAGE_ID, '--packTitle', 'TEMPO', '--packVersion', VERSION,
+                   '--packId', PACKAGE_ID, '--packTitle', title, '--packVersion', VERSION,
                    '--packDir', str(payload), '--mainExe', 'TEMPO.exe', '--runtime', ARCHITECTURE,
                    '--outputDir', str(packages), '--noPortable', '--noDefaultExclude', '--exclude', '(?!)',
                    '--skip-updates', '--yes', '--legacyConsole']
@@ -95,7 +98,7 @@ def build(bundle, build_contract, verification, runtime_report, vpk_archive, set
         for name in ('verify_velopack_install.ps1', 'windows_installer_helpers.ps1'):
             shutil.copyfile(ROOT / 'scripts' / name, result / name)
         release = dict(schema_version=1, purpose='stable-prerelease', source_commit=commit,
-                       package_id=PACKAGE_ID, title='TEMPO', release_certified=False,
+                       package_id=PACKAGE_ID, title=title, release_certified=False,
                        updater_sha256=config['updater_sha256'], repair=file_record(repair),
                        revisions=[dict(version=VERSION, installer=file_record(installer), full=file_record(full),
                                        installed_inventory=[vars(row) for row in installed])])

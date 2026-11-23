@@ -136,8 +136,12 @@ class PreviewShutdownTests(unittest.TestCase):
             entered.set(); gate.wait(2)
             return True
         cap.isOpened.side_effect = opened
-        dialog = gui.CameraIndexDialog(); dialog.show()
-        with patch.object(gui.cv2, 'VideoCapture', return_value=cap):
+        missing = Mock(); missing.isOpened.return_value = False
+        with patch.object(gui.platform, 'system', return_value='Darwin'):
+            dialog = gui.CameraIndexDialog()
+        dialog.show()
+        with patch.object(gui.cv2, 'VideoCapture',
+                          side_effect=lambda index, _: cap if index == 0 else missing):
             dialog.autodetect_cameras()
             try:
                 self.assertTrue(entered.wait(1))

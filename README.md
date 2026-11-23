@@ -1,81 +1,44 @@
-# TEMPO
+# TEMPO-C
 
-TEMPO is a desktop application for microscopy acquisition and cell-motion analysis. Use it to annotate cells, process recordings, inspect contraction traces and measurements, and train detection and segmentation models from reviewed annotations.
+TEMPO-C is a desktop application for microscopy acquisition and cell-motion analysis. Use it to annotate cells, process recordings, inspect contraction traces and measurements, and train detection and segmentation models from reviewed annotations.
 
-Camera control supports Micro-Manager and USB cameras; motorized stages use Micro-Manager.
-
-Shared images, reservations, annotations, and training records are stored in a private Hugging Face workspace. Access to TEMPO's source code does not grant access to that workspace.
+Use Micro-Manager to control compatible cameras and motorized stages. Windows also supports compatible USB cameras and video capture adapters through DirectShow.
 
 ## Install on Windows
 
 Download the 64-bit Windows installer from the [latest release](https://github.com/tempo-bio/TEMPO/releases/latest). Python and the application libraries are included.
 
-### First launch
+Open the app and follow Guided Setup to connect your account and install the models. If TEMPO is already installed, follow the upgrade instructions. [Getting started](docs/GETTING_STARTED.md) · [Upgrade and recovery](docs/GETTING_STARTED.md#upgrade-tempo-c) · [Uninstall TEMPO-C](docs/GETTING_STARTED.md#uninstall-tempo-c)
 
-1. Run the installer. The default location is `%LOCALAPPDATA%\Programs\TEMPO`.
-2. Open TEMPO from the Start menu or desktop shortcut.
-3. Follow Guided Setup to connect your Hugging Face account and install the models.
-
-Optional NVIDIA acceleration for Cellpose outlining is available during setup. You can add it later through **Settings → Application Tools → Guided Setup**.
-
-See [Getting started](docs/GETTING_STARTED.md) for workspace access, model installation, and your first shared annotation. If Windows shows an unsigned-publisher warning, see [Unsigned Windows installer](docs/GETTING_STARTED.md#unsigned-windows-installer).
-
-### Updating TEMPO
-
-Moving from v1.0.1 to v1.0.2 requires a migration before removing the old installation. Follow the version-specific procedure, including its NVIDIA or add-on steps if applicable. Once you have a release with in-app updates, use **Settings → Application Tools → Check Software Updates**. [Upgrade and recovery instructions](docs/GETTING_STARTED.md#upgrade-tempo)
-
-### Uninstall TEMPO
-
-Use **Settings → Application Tools → Uninstall TEMPO…**, Windows **Settings → Apps → Installed apps**, or the **Uninstall TEMPO** Start menu entry. The in-app dialog lets you choose whether to remove saved preferences and Hugging Face sign-in details.
-
-Recordings and analysis outputs in your data folder are retained. Check that annotation drafts have synced before uninstalling. See [Uninstall TEMPO](docs/GETTING_STARTED.md#uninstall-tempo) for the available methods and data-removal choices.
+If you are taking over an existing workspace, start with the administration handoff, then use the training guide to verify the shared Colab notebook. [Workspace handoff](docs/WORKSPACE_ADMINISTRATION.md#hand-off-workspace-responsibilities) · [Training workflow](docs/TRAINING_WORKFLOW.md)
 
 ## Start annotating
 
-Ask the workspace administrator to grant your Hugging Face account access to the shared dataset and model repositories. Your token must permit the operations you will perform; it cannot grant more access than your account has.
-
-1. Open **Segmentation Annotation → Shared Annotation Pool**.
-2. Select an image to preview it. Checkboxes select a batch without changing that preview.
-3. Choose **Reserve Image** or **Reserve Selected** before editing shared images.
-4. Annotate the cells and save. Partially annotated images can remain drafts.
-5. Check the fully annotated images and choose **Submit Selected** for maintainer review.
-
-Check the sync indicator before closing TEMPO. A local save and a successful cloud sync are different states; unsynced changes remain on that computer. Reservations last seven days, after which another collaborator can adopt the last successfully synced draft.
-
-See the [collaboration guide](docs/COLLABORATION_WORKFLOW.md) for reservations, review, adoption, and shared settings.
+Ask the workspace administrator to invite your own Hugging Face account to the private workspace. In **Segmentation Annotation → Shared Annotation Pool**, reserve images, save your outlines, and submit complete annotations for review. [Connect your account](docs/GETTING_STARTED.md#connect-your-workspace) · [Shared annotation and review](docs/COLLABORATION_WORKFLOW.md)
 
 ## Acquisition and analysis
 
-The acquisition view provides camera controls and an XY-stage plate scout. Acquisition needs compatible hardware, drivers, and Micro-Manager adapters. Existing recordings can be processed without connecting a camera.
+The acquisition view provides camera controls and an XY-stage plate scout. Use a compatible Micro-Manager adapter or, on Windows, a camera or capture device that appears in DirectShow. Motorized XY control requires a Micro-Manager stage adapter. Existing recordings can be processed without connecting a camera. [Camera setup](docs/GETTING_STARTED.md#connect-a-camera) · [Analyze a recording](docs/GETTING_STARTED.md#analyze-a-recording)
 
 Processing outputs retain recording and field identity; registered fields can be explored together. See [spatial metadata](docs/SPATIAL_METADATA.md) for registration and coordinate conventions.
 
 Acquisition includes stimulation, pre-pacing across multiple fields, and
-calibrated automatic field collection. Firmware can be installed from TEMPO;
+calibrated automatic field collection. Firmware can be installed from TEMPO-C;
 see [stimulation setup and capture](docs/STIMULATION_SETUP.md).
 
-Choose where new recordings and results are saved in **Settings → Data Folder**
-(default **Documents/TEMPO**). Capture saves videos only when their retention
-options are selected; successful processing keeps measurements and quality
-evidence. See [recording storage, focus and quality review](docs/CAPTURE_QUALITY.md).
+Choose where new recordings and results are saved in **Settings → Optical Acquisition → Data Folder**
+(default **Documents/TEMPO**). The retention options control which videos are
+kept after successful processing. Failed or interrupted captures can leave
+recoverable footage. Successful processing keeps measurements and quality
+evidence. [Recording storage, focus and quality review](docs/CAPTURE_QUALITY.md)
 
 ## Maintainer training workflow
 
-Maintainers train detection and segmentation models in Colab using approved annotations. Training requires maintainer access to the workspace and its configured notebook; progress and results are available in TEMPO.
-
-The [training guide](docs/TRAINING_WORKFLOW.md) documents setup, dataset selection, model comparisons, cancellation, and recovery for current and future maintainers.
-
-## Settings and local work
-
-**Save Personal Settings** saves your profile and personal preferences. The notebook link, HF organization, dataset repository, and model repository are shared settings managed by the administrator. TEMPO checks shared settings at launch; **Refresh Shared Settings** retries the check. Repository changes received during a session take effect after restarting.
-
-Windows preferences are stored in `%LOCALAPPDATA%\TEMPO\config\tempo_preferences.json`; tokens use Windows Credential Manager. Local images, drafts, queues, and processing outputs are separate stores. Read [data locations](docs/COLLABORATION_WORKFLOW.md#local-files-and-connectivity) before moving an installation or removing local work.
-
-Cloud collaboration, model downloads, and status refreshes need a network connection.
+Maintainers use their own Google and Hugging Face accounts to train in the shared Colab notebook from approved annotations. Review progress and results in TEMPO-C. [Training workflow](docs/TRAINING_WORKFLOW.md) · [Model Evaluation](docs/MODEL_EVALUATION_WORKFLOW.md)
 
 ## Problems and development
 
-Report problems through [GitHub Issues](https://github.com/tempo-bio/TEMPO/issues). Include the TEMPO version, Windows version, the action that failed, and error details. Remove tokens, private images, personal paths, and research identifiers before sharing logs or screenshots. The project is maintained by the [TEMPO organization](https://github.com/tempo-bio).
+Include your TEMPO-C version, operating system and version, the action that failed, and error details. Remove tokens, private images, personal paths, and research identifiers before sharing logs or screenshots. [TEMPO-C issue tracker](https://github.com/tempo-bio/TEMPO/issues)
 
 - [Development and verification](docs/DEVELOPMENT_AND_RELEASE_GUIDE.md)
 - [Credential storage](docs/CREDENTIAL_SECURITY.md)
@@ -84,6 +47,6 @@ Report problems through [GitHub Issues](https://github.com/tempo-bio/TEMPO/issue
 
 ## Attribution and licensing
 
-TEMPO's motion-analysis work draws on the [MUSCLEMOTION ImageJ macro](https://github.com/l-sala/MUSCLEMOTION), developed by Luca Sala, Berend J. van Meer, Francis L. Burton, and colleagues. See [scientific credit and third-party software](docs/THIRD_PARTY_SOFTWARE.md#musclemotion) for the original publication and software attribution.
+TEMPO-C's motion-analysis work draws on the [MUSCLEMOTION ImageJ macro](https://github.com/l-sala/MUSCLEMOTION), developed by Luca Sala, Berend J. van Meer, Francis L. Burton, and colleagues. See [scientific credit and third-party software](docs/THIRD_PARTY_SOFTWARE.md#musclemotion) for the original publication and software attribution.
 
-TEMPO is licensed under the GNU Affero General Public License version 3 (AGPL-3.0-only). See [LICENSE](LICENSE). Third-party software and bundled reference images retain their own licenses; see [third-party software](docs/THIRD_PARTY_SOFTWARE.md).
+TEMPO-C is licensed under the GNU Affero General Public License version 3 (AGPL-3.0-only). See [LICENSE](LICENSE). Third-party software and bundled reference images retain their own licenses; see [third-party software](docs/THIRD_PARTY_SOFTWARE.md).

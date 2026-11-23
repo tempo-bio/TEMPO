@@ -42,12 +42,13 @@ EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
 MAX_PUBLIC = 2 * 1024**3  # Release assets must be strictly below this limit.
 ROLES = frozenset({'installer', 'repair', 'updater', 'patch', 'certification',
     'native_certification', 'acceptance', 'provenance', 'verification_contract', 'dependency_sources'})
-CHECKS = frozenset({'fresh_install', 'legacy_cpu_migration', 'two_successive_releases',
+CHECKS = frozenset({'fresh_install', 'two_successive_releases',
     'skipped_release', 'delta_full_fallback', 'interrupted_replacement', 'offline_recovery',
     'state_preservation', 'uninstall_repair', 'concurrent_process_refusal',
     'hardware_shutdown', 'optional_package_transition', 'code_signing_review',
     'source_regressions', 'repository_privacy', 'dependency_sources', 'frozen_runtime', 'interface_review',
     'trust_bootstrap_and_rotation'})
+LAST_INNO_ACCEPTANCE_VERSION = '1.0.4'
 HARDWARE_DEFERRED_RELEASE = ('1.0.2', '4dc336fc8b655ed347a6a1e37a0ae944bf3502e3', 'stable')
 
 
@@ -95,7 +96,12 @@ def _acceptance(path, artifacts, release):
     value = _read_json(path)
     hashes = {role: _digest(artifacts[role]) for role in ('installer', 'repair', 'updater')}
     hashes['full_package'] = release.full.sha256
-    required = CHECKS | ({'legacy_nvidia_migration', 'matching_worker_inference'} if release.nvidia_descriptor else set())
+    required = CHECKS | ({'matching_worker_inference'} if release.nvidia_descriptor else set())
+    if _version(release.version) <= _version(LAST_INNO_ACCEPTANCE_VERSION):
+        # Retained releases are still verified against their original evidence.
+        required |= {'legacy_cpu_migration'}
+        if release.nvidia_descriptor:
+            required |= {'legacy_nvidia_migration'}
     if (release.version, release.commit, release.channel) == HARDWARE_DEFERRED_RELEASE:
         if not isinstance(value, dict) or value.get('deferred_checks') != {'hardware_shutdown': 'v1.0.3'}:
             raise ValueError('Record the v1.0.2 physical shutdown test deferral to v1.0.3.')

@@ -14,3 +14,4 @@ installer/velopack/LICENSE -text
 
 # Archived repair fixtures must retain their registered source hashes.
 tests/fixtures/legacy_training/*.txt -text
+tests/fixtures/stimulation-investigation-v1/**/*.csv -text

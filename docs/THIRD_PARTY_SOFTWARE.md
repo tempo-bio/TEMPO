@@ -1,6 +1,6 @@
 # Third-party software
 
-Third-party licenses and notices remain applicable when distributing TEMPO's source or installer. This document does not assign a license to TEMPO itself.
+Keep the applicable third-party licenses and notices with any distribution of TEMPO-C's source or installer.
 
 | Component | Declared licensing | Reference |
 | --- | --- | --- |

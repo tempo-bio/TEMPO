@@ -7,6 +7,7 @@ from pathlib import Path
 import sys
 import traceback
 
+APP_DISPLAY_NAME = 'TEMPO-C'
 VERSION = '1.0.5'
 
 
@@ -359,6 +360,21 @@ def probe_action(name):
     if name in RUNTIME_IMPORTS:
         module = importlib.import_module(name)
         return dict(origin=module_origin(module), **runtime_operation(name, module))
+    if name == 'stimulation investigation workflow':
+        import tempfile
+        from unittest.mock import patch
+        from tempo_optional_packages import INVESTIGATION, install, is_installed, load, remove
+        if getattr(sys, 'frozen', False) and importlib.util.find_spec(INVESTIGATION) is not None:
+            raise RuntimeError('The optional toolkit was bundled into the base executable.')
+        with tempfile.TemporaryDirectory(prefix='tempo-package-verification-') as directory:
+            with patch('tempo_optional_packages.package_root', return_value=Path(directory)):
+                assert not is_installed(INVESTIGATION)
+                archive = os.environ['TEMPO_VERIFY_OPTIONAL_PACKAGE']
+                assert install(archive)[0] == INVESTIGATION
+                details = load(INVESTIGATION, 'verify').verify_workflow()
+                remove(INVESTIGATION)
+                assert not is_installed(INVESTIGATION)
+                return details
     if name == 'bundled payload':
         from tempo_cloud import BUNDLE_FILES
         root = Path(getattr(sys, '_MEIPASS', Path(__file__).resolve().parent))
@@ -370,7 +386,7 @@ def probe_action(name):
             if not (root/'assets'/asset).is_file(): raise RuntimeError(f'Required bundled asset is missing: {asset}')
         if not (root/'docs/TRAINING_WORKFLOW.md').is_file():
             raise RuntimeError('Bundled training workflow is missing.')
-        for relative in ('docs/STIMULATION_SETUP.md','firmware/tempo_pacer/tempo_pacer.ino'):
+        for relative in ('docs/STIMULATION_SETUP.md', 'firmware/tempo_pacer/tempo_pacer.ino'):
             if not (root/relative).is_file():
                 raise RuntimeError('Bundled stimulation setup is missing: ' + relative)
         identity = build_identity()

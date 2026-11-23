@@ -24,6 +24,10 @@ Use a separate software-check dataset when testing new training or scoring code.
 
 ## Evaluation protocols
 
+Put `protocol.json`, its Python entry point, and the source files listed in the descriptor in one folder. In **Maintainer → Model Evaluation**, load that descriptor. On creation, TEMPO freezes the selected files into a private source archive. The protocol folder can stay local and ignored. Use the descriptor and execution contracts below to add a study through the existing interface.
+
+### Model publication and training settings
+
 A passing decision may include `model_release` with format `tempo-evaluated-model-release-v1`, a `models` object keyed by TEMPO model role, and optional `training_receipt` settings. Each model declares its workspace-relative `artifact` and its evaluation `metrics`. For example, `models.cellpose.artifact` can identify a frozen Cellpose bundle; its exact nuclear helper must also be proposed when the bundle depends on one. The saved artifact inventory supplies the authoritative checksums. Keep study-specific paths and selection logic in the protocol, rather than adding branches to the application.
 
 For an unassisted Cellpose condition using normalization, the optional proposal has this structure:
@@ -49,11 +53,13 @@ An evaluation that only adopts training settings can still use `decision.trainin
 
 Recording a decision and publishing its model release are separate maintainer actions. Publication checks the approved report, downloads and verifies the proposed artifacts, preserves unrelated models, and commits the coupled weights, recipe and provenance together. Regular cloud training uses the recipe pinned in that model release, with the older dataset receipt retained as a compatibility fallback. Approved evaluations in the protected repository can attach an explicit selection through `tempo_model_adoption.save_proposal` without editing their frozen report. `prepare_adoption` is read-only; `publish_adoption` performs publication and records its resulting revision. Previous model revisions remain available for rollback.
 
-A protocol is a folder containing `protocol.json`, its Python entry point and the source files explicitly listed in the descriptor. The folder can remain local and ignored. TEMPO freezes the selected files into a private source archive when creating an evaluation. No permanent GUI edit, built-in study branch or application rebuild is needed to load another protocol using this interface.
+### Workspace storage and older evaluations
 
-Evaluation format `tempo-model-evaluation-v3` keeps the queue, plan, source/protocol archives, artifacts, reports and approval receipts in the protected model repository. Its repository revisions are distinct from the dataset revision used for annotations and images. Image-role reservations and compatibility training-setting mirrors remain in the dataset. Reserve image exposure before publishing the protected evaluation; if publication fails, reservations remain conservative and the evaluation must be prepared again. No evaluation content is automatically trusted from older dataset-side archives. Recreate an older evaluation from reviewed local sources, and replace uploaded notebooks with the regenerated maintained notebook. See [execution security](CREDENTIAL_SECURITY.md#executable-content-and-downloads) for the required permissions and trust assumptions.
+Evaluation format `tempo-model-evaluation-v3` keeps the queue, plan, source archives, artifacts, reports, and approvals in the model repository. The dataset stores image-role reservations and the compatibility copy of training settings. Create the image-role reservations before publishing the plan. If publication fails, keep the reservations and prepare the evaluation again. To rerun an evaluation that exists only in an older dataset archive, create it from reviewed local sources and use a notebook matching the application. [Execution security](CREDENTIAL_SECURITY.md#executable-content-and-downloads) · [Notebook replacement](TRAINING_WORKFLOW.md#replace-the-notebook-when-needed)
 
-Example descriptor structure:
+### Protocol descriptor
+
+Define the protocol identity, entry point, files, settings, and stages in `protocol.json`.
 
 ```json
 {

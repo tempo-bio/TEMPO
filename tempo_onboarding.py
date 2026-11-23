@@ -3,10 +3,11 @@ from pathlib import Path
 import re
 
 from PyQt6.QtCore import Qt, QUrl, pyqtSignal
-from PyQt6.QtGui import QColor, QDesktopServices, QKeySequence, QPalette, QShortcut, QTextCharFormat, QTextCursor
+from PyQt6.QtGui import QColor, QDesktopServices, QKeySequence, QPalette, QShortcut, QTextCharFormat, QTextCursor, QTextOption
 from PyQt6.QtWidgets import (QBoxLayout, QDialog, QFrame, QHBoxLayout, QLabel,
                             QPushButton, QTextBrowser, QVBoxLayout, QWidget)
 
+from tempo_release import APP_DISPLAY_NAME
 from tempo_logo import AnimatedTempoWordmark
 
 
@@ -37,6 +38,7 @@ class SetupGuide(QDialog):
         self.browser = QTextBrowser()
         self.browser.setOpenLinks(False)
         self.browser.setOpenExternalLinks(False)
+        self.browser.setWordWrapMode(QTextOption.WrapMode.WrapAtWordBoundaryOrAnywhere)
         palette = self.browser.palette()
         palette.setColor(QPalette.ColorRole.Link, QColor('#79c0ff'))
         palette.setColor(QPalette.ColorRole.LinkVisited, QColor('#a8cfff'))
@@ -74,7 +76,7 @@ class SetupGuide(QDialog):
         try:
             content = path.read_text(encoding='utf-8')
         except OSError:
-            self.browser.setPlainText('This guide is unavailable. Reinstall TEMPO to restore the bundled documentation.')
+            self.browser.setPlainText(f'This guide is unavailable. Reinstall {APP_DISPLAY_NAME} to restore the bundled documentation.')
             return
         self.current_path = path
         self.browser.document().setBaseUrl(QUrl.fromLocalFile(str(path.parent) + '/'))
@@ -88,6 +90,10 @@ class SetupGuide(QDialog):
         anchors = []
         block = document.begin()
         while block.isValid():
+            formatting = block.blockFormat()
+            if formatting.nonBreakableLines():
+                formatting.setNonBreakableLines(False)
+                QTextCursor(block).setBlockFormat(formatting)
             iterator = block.begin()
             while not iterator.atEnd():
                 fragment = iterator.fragment()

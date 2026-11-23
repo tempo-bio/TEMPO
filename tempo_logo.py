@@ -8,6 +8,8 @@ from PyQt6.QtCore import QEvent, QEasingCurve, QElapsedTimer, QPointF, QRect, QR
 from PyQt6.QtGui import QColor, QFontMetrics, QImage, QKeySequence, QLinearGradient, QPainter, QPainterPath, QPen, QShortcut, QPalette, QTextOption
 from PyQt6.QtWidgets import QApplication, QDialog, QFrame, QLabel, QPlainTextEdit, QSizePolicy, QVBoxLayout, QWidget
 
+from tempo_release import APP_DISPLAY_NAME
+
 
 _ASSETS = Path(__file__).resolve().parent / 'assets'
 _VIEW = QRect(160, 425, 940, 410)
@@ -85,7 +87,7 @@ class AnimatedTempoLogo(QWidget):
     def __init__(self, parent=None, *, width=320, version_text=None):
         super().__init__(parent)
         self._preferred_width = width
-        self.setAccessibleName('TEMPO')
+        self.setAccessibleName(APP_DISPLAY_NAME)
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
         self.setMaximumSize(width, math.ceil(width * _VIEW.height() / _VIEW.width()))
@@ -103,7 +105,7 @@ class AnimatedTempoLogo(QWidget):
         if version_text is not None:
             self.version_label = QLabel(version_text, self)
             self.version_label.setTextFormat(Qt.TextFormat.PlainText)
-            self.version_label.setAccessibleName('TEMPO version ' + version_text)
+            self.version_label.setAccessibleName(f'{APP_DISPLAY_NAME} version {version_text}')
             self._position_version()
 
     def sizeHint(self):
@@ -263,7 +265,7 @@ class AboutTempoDialog(QDialog):
         from PyQt6.QtCore import QT_VERSION_STR
         from tempo_release import VERSION
         from tempo_ui import UI_REVISION
-        self.setWindowTitle('About TEMPO')
+        self.setWindowTitle(f'About {APP_DISPLAY_NAME}')
         self.resize(620, 360)
         self.setMinimumSize(360, 260)
         layout = QVBoxLayout(self)

@@ -71,7 +71,7 @@ class UpdateDialogTests(unittest.TestCase):
     def test_check_download_and_install_use_coordinator(self):
         service = coordinator()
         dialog = self.make(service)
-        self.assertIn('TEMPO 1.0.2', dialog.log_view.toPlainText())
+        self.assertIn('Version 1.0.2', dialog.log_view.toPlainText())
         self.assertIn('4.3 MB', dialog.log_view.toPlainText())
         QTest.mouseClick(dialog.btn_update, Qt.MouseButton.LeftButton)
         until(lambda: dialog._state == 'ready')
@@ -291,7 +291,7 @@ class UpdateDialogTests(unittest.TestCase):
         output = os.environ.get('TEMPO_UPDATE_PREVIEW_DIR')
         for status, screenshot, next_gate in (
             ('Verifying downloaded files…', 'download-finished', verifying),
-            ('Verifying the TEMPO update…', 'verifying-update', unpacking),
+            ('Verifying the TEMPO-C update…', 'verifying-update', unpacking),
             ('Unpacking NVIDIA support…', 'unpacking-nvidia', finish),
         ):
             until(lambda: dialog.status.text() == status)
@@ -370,7 +370,7 @@ class UpdateDialogTests(unittest.TestCase):
                             until(lambda: dialog.progress.maximum() == 100)
                             self.assertEqual(dialog.progress.value(), 42)
                             self.assertEqual(dialog.progress.format(), '%p%')
-                            self.assertEqual(dialog.status.text(), 'Downloading the TEMPO update…')
+                            self.assertEqual(dialog.status.text(), 'Downloading the TEMPO-C update…')
                         else:
                             until(lambda: dialog._state == state)
                     QTest.qWait(50)

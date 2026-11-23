@@ -28,7 +28,6 @@ from scripts.windows_release_checks import isolated_environment, run_logged
 from tempo_update_manifest import (ARCHITECTURE, PACKAGE_ID, FileRecord,
                                    load_verified_manifest, validate_path, verify_zip)
 from tempo_update_recovery import _application_inventory
-from tempo_legacy_migration import SUPPORTED_LEGACY
 
 ROOT = Path(__file__).resolve().parents[1]
 VPK_SHA256 = '2b56ce117f803fc70c103cb423bd040e395e40370f6ff6e10818e9ff9c26a323'
@@ -138,8 +137,6 @@ def build(bundle, vpk_archive, updater, native_evidence, output, commit, *, setu
                     setup_sha256=setup_hash,
                     packager_sha256=VPK_SHA256, native_evidence=evidence,
                     bundle_inventory=source_inventory, revisions=[])
-    contract['legacy_source'] = dict(SUPPORTED_LEGACY['1.0.1'], version='1.0.1',
-        url='https://github.com/tempo-bio/TEMPO/releases/download/v1.0.1/TEMPO_Setup_v1.0.1.exe')
     key = Ed25519PrivateKey.generate()  # Never saved or exported.
     public = key.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
     keys_path = output / 'acceptance-public-keys.json'

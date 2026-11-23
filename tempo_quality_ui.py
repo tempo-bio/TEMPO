@@ -5,6 +5,7 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QKeySequence,QShortcut
 from PyQt6.QtWidgets import (QDialog,QVBoxLayout,QHBoxLayout,QLabel,QTableWidget,
     QTableWidgetItem,QHeaderView,QCheckBox,QLineEdit,QPushButton)
+from tempo_release import APP_DISPLAY_NAME
 from tempo_ui import ErrorDetails, confirm_action
 from tempo_quality import dataset_decisions,decide_dataset
 from tempo_recording import sha256
@@ -20,7 +21,7 @@ class QualityReviewDialog(QDialog):
         super().__init__(parent)
         self.csv_path=str(csv_path)
         self.source_digest=sha256(csv_path)
-        self.setWindowTitle('TEMPO · Recording quality')
+        self.setWindowTitle(f'{APP_DISPLAY_NAME} · Recording quality')
         self.resize(920,480)
         layout=QVBoxLayout(self)
         note=QLabel('Flagged recordings are included unless you exclude them. Double-click any row or click Inspect to view that field on the map.')

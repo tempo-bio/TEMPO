@@ -75,7 +75,7 @@ class SoftwareUpdatePathTests(unittest.TestCase):
         coordinator.service.probe.return_value = '1.0.4'
         with patch.object(updates.sys, 'frozen', True, create=True), \
              patch('tempo_update_coordinator.configured_coordinator', return_value=coordinator):
-            self.assertEqual(updates.software_release(), (True, 'TEMPO 1.0.4 is available.'))
+            self.assertEqual(updates.software_release(), (True, 'Version 1.0.4 is available.'))
         coordinator.service.probe.assert_called_once_with(
             installed_version='1.0.3', installed_commit='a'*40, timeout=1.2)
         coordinator.check.assert_not_called()

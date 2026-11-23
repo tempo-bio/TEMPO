@@ -9,6 +9,7 @@ import urllib.request
 from PyQt6.QtCore import Qt, QObject, pyqtSignal, QTimer, QUrl
 from PyQt6.QtWidgets import QApplication, QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QProgressBar, QTextEdit, QMessageBox, QSizePolicy
 from PyQt6.QtGui import QDesktopServices
+from tempo_release import APP_DISPLAY_NAME
 from tempo_hub import tempo_hub
 from tempo_tasks import run_read_task, run_task, run_background
 from tempo_ui import format_model_metric, ErrorDetails
@@ -35,9 +36,9 @@ def checked_command(command):
 
 def perform_software_update():
     if getattr(sys, 'frozen', False):
-        raise RuntimeError('Packaged TEMPO uses the release installer. Download it from GitHub Releases, close TEMPO, then run the installer.')
+        raise RuntimeError(f'Packaged {APP_DISPLAY_NAME} uses the release installer. Download it from GitHub Releases, close {APP_DISPLAY_NAME}, then run the installer.')
     if sys.prefix == sys.base_prefix:
-        raise RuntimeError('Restart TEMPO from its virtual environment before updating.')
+        raise RuntimeError(f'Restart {APP_DISPLAY_NAME} from its virtual environment before updating.')
     branch = checked_command(['git','branch','--show-current'])
     if branch != 'main':
         raise RuntimeError('Automatic updates require the main branch. Your checkout was left unchanged.')
@@ -76,8 +77,8 @@ def software_release(timeout=1.2):
         if coordinator is not None:
             version = coordinator.service.probe(installed_version=coordinator.version,
                                                 installed_commit=coordinator.commit, timeout=timeout)
-            return (True, f'TEMPO {version} is available.') if version else (False, 'TEMPO is up to date.')
-        raise RuntimeError('Check GitHub Releases for a TEMPO installer update.')
+            return (True, f'Version {version} is available.') if version else (False, f'{APP_DISPLAY_NAME} is up to date.')
+        raise RuntimeError(f'Check GitHub Releases for a {APP_DISPLAY_NAME} installer update.')
     # Use the same authenticated remote as the update itself, including SSH remotes.
     env = dict(os.environ, GIT_TERMINAL_PROMPT='0', GCM_INTERACTIVE='Never')
     branch = subprocess.run(['git', 'branch', '--show-current'], cwd=BASE_DIR,
@@ -241,7 +242,7 @@ class SplashScreen(QDialog):
         layout = QVBoxLayout(self)
         self.logo = AnimatedTempoLogo(self, width=280)
         layout.addWidget(self.logo, alignment=Qt.AlignmentFlag.AlignHCenter)
-        self.lbl_status = QLabel('Starting TEMPO…'); layout.addWidget(self.lbl_status)
+        self.lbl_status = QLabel(f'Starting {APP_DISPLAY_NAME}…'); layout.addWidget(self.lbl_status)
         progress = QProgressBar(); progress.setRange(0,0); layout.addWidget(progress)
         self.update_check = StartupUpdateCheck(self)
         self.update_check.check_finished.connect(self._finished)
@@ -295,7 +296,7 @@ class LegacySoftwareUpdateWizard(QDialog):
     def check_release(self):
         self.error_details.clear(); self.log_view.show()
         if getattr(sys, 'frozen', False):
-            self.log_view.setPlainText('Check GitHub Releases for the latest TEMPO installer. Sign in to GitHub if the repository is private.\n\nDownload the installer, close TEMPO, then run it.')
+            self.log_view.setPlainText(f'Check GitHub Releases for the latest {APP_DISPLAY_NAME} installer. Sign in to GitHub if the repository is private.\n\nDownload the installer, close {APP_DISPLAY_NAME}, then run it.')
             self.btn_update.setText('Open Releases')
             self.btn_update.setEnabled(True)
             self.retry.hide()
@@ -327,7 +328,7 @@ class LegacySoftwareUpdateWizard(QDialog):
                 self.check_release()
                 return
             self.log_view.setPlainText(message)
-            recovery = 'Software was updated, but TEMPO could not restart. Close TEMPO and open it again to use the update.'
+            recovery = f'Software was updated, but {APP_DISPLAY_NAME} could not restart. Close {APP_DISPLAY_NAME} and open it again to use the update.'
             os.execl(sys.executable,sys.executable,*sys.argv)
         except Exception as exc:
             self.log_view.hide()
@@ -341,7 +342,7 @@ class ModelWeightsUpdateWizard(QDialog):
 
     def __init__(self,parent=None):
         super().__init__(parent)
-        self.setWindowTitle('TEMPO · Update Models'); self.resize(620,430)
+        self.setWindowTitle(f'{APP_DISPLAY_NAME} · Update Models'); self.resize(620,430)
         layout = QVBoxLayout(self)
         heading = QLabel('Published model release')
         heading.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)

@@ -200,7 +200,7 @@ class PackagedWizardTests(IsolatedSetupState, unittest.TestCase):
             view.btn_open.click()
         self.assertTrue(view.isVisible())
         self.assertIs(view.stack.currentWidget(), view.ready_page)
-        self.assertIn('choose Open TEMPO again', view.ready_error.summary.text())
+        self.assertIn('choose Open TEMPO-C again', view.ready_error.summary.text())
         self.assertNotEqual(first_run.setup_stage(), 'complete')
         view.btn_open.click()
         self.assertEqual(first_run.setup_stage(), 'complete')

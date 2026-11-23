@@ -50,7 +50,7 @@ def features(frame, sensor_bits=None):
         dark_fraction=float(np.mean(gray<=full*.005)),regions=len(regions))
 
 
-def fit_profile(records, signature):
+def fit_profile(records, signature, *, sensor_bits=None):
     """Fit only declared development fields; evaluate on separate reviewed fields."""
     train=[row for row in records if row['partition']=='train']
     test=[row for row in records if row['partition']=='test']
@@ -66,23 +66,36 @@ def fit_profile(records, signature):
     for rows in (train,test):
         if {row['label'] for row in rows}!={'sharp','out_of_focus'}:
             raise ValueError('Both sharp and out-of-focus examples are required in each partition.')
-    values=np.asarray([np.median(features(row['frame'])[0],axis=0) for row in train])
-    if not np.isfinite(values).all():
-        raise ValueError('Development images must contain assessable intracellular detail.')
+    values = []
+    for row in train:
+        try:
+            regions, _ = features(row['frame'], sensor_bits)
+        except ValueError as exc:
+            raise ValueError(f"Development field {row['field']}: {exc}") from exc
+        if not regions.size or not np.isfinite(regions).all():
+            raise ValueError(f"Development field {row['field']} must contain assessable image detail.")
+        values.append(np.median(regions, axis=0))
+    values = np.asarray(values)
     center=values.mean(axis=0);scale=np.maximum(values.std(axis=0),1e-8)
     design=np.column_stack((np.ones(len(values)),(values-center)/scale))
     target=np.asarray([1. if row['label']=='sharp' else -1. for row in train])
     penalty=np.eye(design.shape[1])*.1;penalty[0,0]=0
-    weights=np.linalg.solve(design.T@design+penalty,design.T@target)
+    fitted, weights = cv2.solve(design.T @ design + penalty, design.T @ target, flags=cv2.DECOMP_CHOLESKY)
+    if not fitted:
+        raise ValueError('Could not fit the focus profile from the selected examples.')
+    weights = weights.ravel()
     reference=[dict(field=row['field'],partition=row['partition'],label=row['label'],
                     pixels_sha256=hashlib.sha256(np.asarray(row['frame']).tobytes()).hexdigest()) for row in records]
     profile=dict(version=1,method=METHOD,signature=signature,center=center.tolist(),scale=scale.tolist(),
                  weights=weights.tolist(),reference=reference,beta=True)
+    if sensor_bits is not None:
+        profile['sensor_bits'] = sensor_bits
     profile['id']=hashlib.sha256(json.dumps(profile,sort_keys=True).encode()).hexdigest()
     outcomes=[]
     for row in test:
-        assessment=assess(row['frame'],signature,profile)
-        outcomes.append(dict(field=row['field'],expected=row['label'],actual=assessment['focus']))
+        assessment=assess(row['frame'],signature,profile,sensor_bits=sensor_bits)
+        outcomes.append(dict(field=row['field'],expected=row['label'],actual=assessment['focus'],
+                             flags=assessment['flags'],reason=assessment['reason']))
     profile['validation']=outcomes
     return profile
 

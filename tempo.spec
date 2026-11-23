@@ -49,6 +49,7 @@ datas = [
     (str(root / 'assets'), 'assets'),
     (str(root / 'README.md'), '.'),
     (str(root / 'docs/GETTING_STARTED.md'), 'docs'),
+    (str(root / 'docs/WINDOWS_MIGRATION.md'), 'docs'),
     (str(root / 'docs/CREDENTIAL_SECURITY.md'), 'docs'),
     (str(root / 'docs/COLLABORATION_WORKFLOW.md'), 'docs'),
     (str(root / 'docs/WORKSPACE_ADMINISTRATION.md'), 'docs'),
@@ -56,6 +57,7 @@ datas = [
     (str(root / 'docs/SPATIAL_METADATA.md'), 'docs'),
     (str(root / 'docs/CAPTURE_QUALITY.md'), 'docs'),
     (str(root / 'docs/DEVELOPMENT_AND_RELEASE_GUIDE.md'), 'docs'),
+    (str(root / 'docs/WINDOWS_UPDATE_RELEASE.md'), 'docs'),
     (str(root / 'docs/THIRD_PARTY_SOFTWARE.md'), 'docs'),
     (str(root / 'docs/MODEL_EVALUATION.md'), 'docs'),
     (str(root / 'installer/windows-native-runtime.json'), 'assets'),
@@ -171,6 +173,7 @@ elif sys.platform == 'darwin':
     hidden_imports += ['keyring.backends.macOS', 'keyring.backends.macOS.api']
 
 excludes = [
+    'stimulation_investigation_1',
     'pytest',
     'tkinter',
     'PyQt5', 'PySide2', 'PySide6',

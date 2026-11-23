@@ -1,6 +1,7 @@
 import sys
 import os
 import platform
+from tempo_release import APP_DISPLAY_NAME
 
 if __name__ == '__main__':
     from tempo_update_installation import initialize_velopack, prepare_packaged_startup
@@ -11,9 +12,8 @@ if __name__ == '__main__':
     except Exception as error:
         if sys.platform == 'win32':
             import ctypes
-            ctypes.windll.user32.MessageBoxW(None, str(error), 'TEMPO could not start', 0x10)
+            ctypes.windll.user32.MessageBoxW(None, str(error), f'{APP_DISPLAY_NAME} could not start', 0x10)
         raise
-
 if __name__ == '__main__' and len(sys.argv) > 1 and sys.argv[1] in ('--assist-model', '--assist-model-cuda'):
     if len(sys.argv) != 8:
         sys.exit(2)
@@ -123,6 +123,8 @@ from tempo_annotations import (normalize_record, validate_annotations, pixel_rec
                                merge_image_records, canonical_image_name)
 from tempo_regions import object_type, region_counts, scout_qualifies
 from tempo_tasks import run_read_task, run_task, run_background, TaskThread, pending_task_titles
+from tempo_usb_camera import (DIRECTSHOW_CAMERA_LIMIT, directshow_devices,
+                              open_directshow_camera, reported_camera_fps)
 from tempo_ui import confirm_action, FilenameLabel, ErrorDetails, InformationButton, InformationSlot, FilePickerRow, set_button_color, FlowLayout, FlowRow, SettingRow, MetricForm, StatisticsTabs, statistic_description, InlineNotice, ContentTabs, CompactWorkspace, SelectorRow, install_help, ContainedToolsMenu, ACTION_GREEN, DESCRIPTION_BLUE, GUIDANCE_MINT, ThemeSegmentedChoice, description_color, guidance_color, apply_theme, get_current_theme
 from tempo_ui import PreviewStatusLabel
 from tempo_plot import LifecycleAxisItem, PlotWidget, ColorBarItem, add_plot, add_item
@@ -825,11 +827,7 @@ class CameraIndexDialog(QDialog):
         
         layout = QVBoxLayout(self)
         
-        instructions = (
-            "Choose a camera number and requested resolution. Use Autodetect to find available cameras. "
-            "If the wrong camera opens, try another number."
-        )
-        lbl = QLabel(instructions)
+        lbl = QLabel("Use Autodetect to find available camera numbers.")
         lbl.setWordWrap(True)
         layout.addWidget(lbl)
         
@@ -837,7 +835,8 @@ class CameraIndexDialog(QDialog):
         
         idx_layout = QHBoxLayout()
         self.cam_index = QSpinBox()
-        self.cam_index.setRange(0, 10)
+        self.camera_api = cv2.CAP_DSHOW if platform.system() == "Windows" else cv2.CAP_ANY
+        self.cam_index.setRange(0, DIRECTSHOW_CAMERA_LIMIT - 1 if self.camera_api == cv2.CAP_DSHOW else 10)
         self.cam_index.setValue(0)
         
         self.btn_autodetect = QPushButton("Autodetect")
@@ -848,7 +847,11 @@ class CameraIndexDialog(QDialog):
         idx_layout.addWidget(self.btn_autodetect)
         
         self.res_combo = QComboBox()
-        self.res_combo.addItems(["Default (Auto)", "1920x1080 (HD)", "3840x2160 (4K)", "4000x3000 (12MP)"])
+        self.res_combo.addItem("Default (Auto)")
+        for label, size in (("640 × 480", (640, 480)), ("1280 × 720", (1280, 720)),
+                            ("1920 × 1080 (HD)", (1920, 1080)), ("3840 × 2160 (4K)", (3840, 2160)),
+                            ("4000 × 3000 (12 MP)", (4000, 3000))):
+            self.res_combo.addItem(label, size)
         
         form.addRow("Camera number:", idx_layout)
         form.addRow("Requested resolution:", self.res_combo)
@@ -856,10 +859,13 @@ class CameraIndexDialog(QDialog):
         
         self.status_lbl = QLabel("")
         self.status_lbl.setWordWrap(True)
+        self.status_lbl.setTextFormat(Qt.TextFormat.PlainText)
         layout.addWidget(self.status_lbl)
         self.scan_error = ErrorDetails()
         layout.addWidget(self.scan_error)
         self._scan_busy = False
+        self._directshow_devices = {}
+        self.cam_index.valueChanged.connect(self.show_directshow_devices)
         
         self.btn_connect = QPushButton("Connect Camera")
         set_button_color(self.btn_connect, ACTION_GREEN)
@@ -870,22 +876,39 @@ class CameraIndexDialog(QDialog):
         if self._scan_busy:
             return
         self._scan_busy = True
+        self._directshow_devices.clear()
         self.scan_error.clear()
         self.btn_autodetect.setEnabled(False)
         self.btn_connect.setEnabled(False)
         self.cam_index.setEnabled(False)
-        self.status_lbl.setText("Checking camera numbers 0–5…")
-        api_preference = cv2.CAP_DSHOW if platform.system() == "Windows" else cv2.CAP_ANY
+        first_index = self.cam_index.minimum()
+        last_index = self.cam_index.maximum()
+        self.status_lbl.setText(f"Checking camera numbers {first_index}–{last_index}…")
+        api_preference = self.camera_api
 
         def scan():
-            for i in range(6):
-                cap = cv2.VideoCapture(i, api_preference)
+            if api_preference == cv2.CAP_DSHOW:
                 try:
+                    return directshow_devices()
+                except OSError:
+                    pass  # The numbered probe also works when device metadata is unavailable.
+            found = []
+            first_error = None
+            for index in range(first_index, last_index + 1):
+                cap = None
+                try:
+                    cap = cv2.VideoCapture(index, api_preference)
                     if cap.isOpened():
-                        return i
+                        found.append(index)
+                except (cv2.error, RuntimeError, OSError) as error:
+                    if first_error is None:
+                        first_error = error
                 finally:
-                    cap.release()
-            return -1
+                    if cap is not None:
+                        cap.release()
+            if not found and first_error is not None:
+                raise first_error
+            return found
 
         self._scan_result = None
         self._scan_worker = TaskThread(scan, self)
@@ -915,7 +938,7 @@ class CameraIndexDialog(QDialog):
             return
         super().closeEvent(event)
 
-    def on_camera_scan_finished(self, found_idx, error):
+    def on_camera_scan_finished(self, found, error):
         self._scan_busy = False
         self.btn_autodetect.setEnabled(True)
         self.btn_connect.setEnabled(True)
@@ -923,14 +946,37 @@ class CameraIndexDialog(QDialog):
         if error is not None:
             self.status_lbl.clear()
             self.scan_error.set_error("Camera scan failed. Check the camera connection and retry Autodetect, or enter its camera number.", error)
-        elif found_idx != -1:
-            self.cam_index.setValue(found_idx)
-            self.status_lbl.setText(f"Camera {found_idx} is available.")
+        elif isinstance(found, dict) and found:
+            self._directshow_devices = found
+            if len(found) == 1:
+                self.cam_index.setValue(next(iter(found)))
+            self.show_directshow_devices()
+        elif len(found) == 1:
+            self.cam_index.setValue(found[0])
+            self.status_lbl.setText(f"Camera {found[0]} is available.")
+        elif found:
+            numbers = ", ".join(str(index) for index in found)
+            self.status_lbl.setText(f"Cameras found at numbers {numbers}. Choose a number to connect.")
         else:
-            self.status_lbl.setText("No camera found at numbers 0–5. Check its connection and camera permissions, or enter another camera number.")
+            self.status_lbl.setText("No camera found. Check the connection and camera permissions.")
+
+    def show_directshow_devices(self):
+        devices = self._directshow_devices
+        if not devices:
+            return
+        if len(devices) <= 3:
+            self.status_lbl.setText("\n".join(
+                f"{index} · {device.name or 'Unnamed camera'}" for index, device in devices.items()))
+        else:
+            index = self.cam_index.value()
+            device = devices.get(index)
+            numbers = ", ".join(map(str, devices))
+            name = f"\n{index} · {device.name}" if device and device.name else ""
+            self.status_lbl.setText(f"Detected camera numbers {numbers}.{name}")
 
     def get_settings(self):
-        return self.cam_index.value(), self.res_combo.currentText()
+        index = self.cam_index.value()
+        return index, self.res_combo.currentData(), self._directshow_devices.get(index)
 
 
 class HardwareWizardDialog(QDialog):
@@ -1125,7 +1171,7 @@ class CustomPopup(QDialog):
     def __init__(self, title, message, parent=None):
         super().__init__(parent)
         from tempo_ui import DIALOG_STYLE
-        self.setWindowTitle('TEMPO · ' + title)
+        self.setWindowTitle(f'{APP_DISPLAY_NAME} · {title}')
         self.setMinimumWidth(350)
         
         layout = QVBoxLayout(self)
@@ -1255,9 +1301,15 @@ class CameraAcquisitionWorker(QThread):
             os.makedirs(os.path.dirname(os.path.abspath(self.output_path)), exist_ok=True)
             if uses_core:
                 w, h = self.core.getImageWidth(), self.core.getImageHeight()
+                stream_fps = None
             else:
                 w = int(self.cv_cap.get(cv2.CAP_PROP_FRAME_WIDTH))
                 h = int(self.cv_cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                if w <= 0 or h <= 0:
+                    ok, sample = self.cv_cap.read()
+                    if ok and sample is not None and sample.size:
+                        h, w = sample.shape[:2]
+                stream_fps = reported_camera_fps(self.cv_cap)
             if w <= 0 or h <= 0:
                 raise RuntimeError('The camera returned invalid image dimensions.')
             if self.native:
@@ -1265,7 +1317,8 @@ class CameraAcquisitionWorker(QThread):
                 from tempo_recording import NativeWriter,probe_storage
                 if self.duration_s is not None and (not np.isfinite(self.duration_s) or self.duration_s<=0):
                     raise ValueError('Recording duration must be positive.')
-                expected = self.max_frames or int(self.target_fps*(self.duration_s or 5))
+                storage_fps = stream_fps or self.target_fps
+                expected = self.max_frames or int(storage_fps*(self.duration_s or 5))
                 required = max(64*1024*1024,w*h*(2 if uses_core else 3)*max(10,expected))
                 if shutil.disk_usage(os.path.dirname(self.output_path)).free < required:
                     raise OSError('Insufficient space for recoverable temporary footage. Choose another output location.')
@@ -1273,9 +1326,11 @@ class CameraAcquisitionWorker(QThread):
                 if uses_core and hasattr(self.core,'getImageBitDepth'):
                     retention['sensor_bits']=int(self.core.getImageBitDepth())
                 pixel_bytes=2 if retention.get('sensor_bits',8)>8 else 1
-                throughput=probe_storage(os.path.dirname(self.output_path),w*h*(pixel_bytes if uses_core else 3)*self.target_fps)
+                throughput=probe_storage(os.path.dirname(self.output_path),w*h*(pixel_bytes if uses_core else 3)*storage_fps)
                 writer = NativeWriter(self.output_path,self.target_fps,**retention)
                 writer.metadata.update(self.recording_options.get('metadata',{}))
+                if stream_fps is not None:
+                    writer.metadata['source_fps'] = stream_fps
                 writer.metadata['requested_duration_s']=self.duration_s
                 writer.metadata['duration_basis']='camera_elapsed_time_when_available_otherwise_host_receipt'
                 writer.metadata['storage_write_check']=throughput
@@ -1407,11 +1462,19 @@ class CaptureTab(QWidget):
         self.video_writer = None
         self.acq_worker = None
         self.scout_worker = None
+        self.investigation_mode = False
+        self.investigation_workspace = None
         self.setup_ui()
 
     def setup_ui(self):
-        layout = QHBoxLayout(self)
+        layout = QVBoxLayout(self)
         layout.setSizeConstraint(QLayout.SizeConstraint.SetNoConstraint)
+        from tempo_ui import SlidingChoice
+        from tempo_optional_packages import INVESTIGATION, is_installed
+        self.capture_mode = SlidingChoice(('Imaging', 'Stimulation Investigation 1'), ('imaging', 'investigation'))
+        self.capture_mode.setAccessibleName('Acquisition mode')
+        layout.addWidget(self.capture_mode, 0, Qt.AlignmentFlag.AlignLeft)
+        self.capture_mode.setVisible(is_installed(INVESTIGATION))
         self.capture_splitter = QSplitter(Qt.Orientation.Horizontal)
         self.capture_splitter.setChildrenCollapsible(False)
         layout.addWidget(self.capture_splitter)
@@ -1452,7 +1515,7 @@ class CaptureTab(QWidget):
         self.btn_cam.clicked.connect(self.toggle_camera)
 
         self.camera_settings_dialog = QDialog(self)
-        self.camera_settings_dialog.setWindowTitle('TEMPO · Camera Connection and Properties')
+        self.camera_settings_dialog.setWindowTitle(f'{APP_DISPLAY_NAME} · Camera Connection and Properties')
         self.camera_settings_dialog.setWindowFlags(self.camera_settings_dialog.windowFlags() | Qt.WindowType.WindowStaysOnTopHint)
         self.camera_settings_dialog.resize(440, 200)
         settings_layout = QVBoxLayout(self.camera_settings_dialog)
@@ -1610,9 +1673,11 @@ class CaptureTab(QWidget):
         cap_layout.removeWidget(self.btn_snap); cap_layout.removeWidget(self.btn_record)
         capture_actions.flow.addWidget(self.btn_snap); capture_actions.flow.addWidget(self.btn_record)
         sidebar_layout.addWidget(capture_actions)
+        self.focus_calibration_button = QPushButton('Focus Calibration…')
+        cap_layout.addWidget(self.focus_calibration_button, 0, Qt.AlignmentFlag.AlignLeft)
         self.capture_splitter.addWidget(camera_sidebar)
 
-        center = QWidget()
+        center = self.imaging_center = QWidget()
         feed_panel = QVBoxLayout(center)
         feed_panel.setContentsMargins(0, 0, 0, 0)
         self.feed_label = QLabel("No camera connected.\nLoad a hardware configuration or connect a USB camera.")
@@ -1630,6 +1695,7 @@ class CaptureTab(QWidget):
 
         from tempo_capture_ui import CaptureTools
         self.capture_controls = CaptureTools(self)
+        self.focus_calibration_button.clicked.connect(self.capture_controls.open_focus_calibration)
         for button in (self.btn_flir_preset,self.btn_wizard,self.btn_cv_fallback):
             button.setProperty('actionColor',None)
         self.btn_record.setProperty('primary',True)
@@ -1660,14 +1726,62 @@ class CaptureTab(QWidget):
             saved_sizes = [300, 650, 320]
         self.capture_splitter.setSizes(saved_sizes)
         self.capture_splitter.splitterMoved.connect(self.capture_panels_resized)
+        self.capture_mode.currentIndexChanged.connect(self.set_capture_mode)
         QTimer.singleShot(0, self.align_capture_forms)
 
     @property
     def firmware_notice(self):
         return getattr(self.capture_controls, 'firmware_notice', None)
 
+    def set_capture_mode(self, *_):
+        requested = self.capture_mode.currentData() == 'investigation'
+        if requested == self.investigation_mode: return
+        tools = self.capture_controls
+        status = tools.service.status if tools.service and tools.service.connected else None
+        workspace = self.investigation_workspace
+        if (self.is_recording or self.timer.isActive() or self._preview_pending or getattr(self, '_camera_setup_busy', False) or
+                getattr(self, '_feed_stop_pending', False) or tools.camera_busy() or tools.busy() or
+                tools.automatic_running() or tools._starting_output or tools._finish_pending or tools.firmware_busy() or
+                tools.diagnostics_open() or (tools.session and tools.session.active) or
+                (workspace and workspace.capturing) or
+                (status and status.mode not in ('REST_DISCHARGE', 'DISCONNECTED_HIZ'))):
+            self.capture_mode.blockSignals(True)
+            self.capture_mode.setCurrentIndex(1 if self.investigation_mode else 0)
+            self.capture_mode.blockSignals(False)
+            tools.show_error(ValueError('Stop imaging, stimulation, and Arduino capture before switching Acquisition modes.'))
+            return
+        if requested and workspace is None:
+            from tempo_optional_packages import INVESTIGATION, load
+            try:
+                workspace = load(INVESTIGATION, 'ui').InvestigationWorkspace(tools)
+            except (ImportError, OSError, ValueError) as error:
+                self.capture_mode.setCurrentIndex(0)
+                tools.show_error(error)
+                return
+            self.investigation_workspace = workspace
+            workspace.capture_changed.connect(tools.refresh_controls)
+        if requested:
+            if tools.focus_dialog is not None:
+                tools.focus_dialog.close()
+            self._imaging_panel_sizes = self.capture_splitter.sizes()
+            left, center = workspace.sidebar, workspace
+        else:
+            self._investigation_panel_sizes = self.capture_splitter.sizes()
+            left, center = self.camera_panel, self.imaging_center
+        for index, widget in enumerate((left, center)):
+            old = self.capture_splitter.replaceWidget(index, widget)
+            old.setParent(self); old.hide(); widget.show()
+        self.investigation_mode = requested
+        sizes = (getattr(self, '_investigation_panel_sizes', [280, 650, 320]) if requested
+                 else getattr(self, '_imaging_panel_sizes', [300, 650, 320]))
+        self.capture_splitter.setSizes(sizes)
+        self.align_capture_forms(); tools.refresh_controls()
+
     def capture_panels_resized(self, *args):
         self.align_capture_forms()
+        if self.investigation_mode:
+            self._investigation_panel_sizes = self.capture_splitter.sizes()
+            return
         tempo_preferences.set('capture', 'panel_widths', self.capture_splitter.sizes())
         if not hasattr(self, '_panel_save_timer'):
             self._panel_save_timer = QTimer(self)
@@ -1677,6 +1791,10 @@ class CaptureTab(QWidget):
 
     def align_capture_forms(self):
         if not hasattr(self, '_capture_forms'):
+            return
+        if self.investigation_mode:
+            desired = self.capture_controls.minimum_stimulation_width()
+            self.capture_inspector.setMinimumWidth(min(max(270, desired), max(270, self.width() - 560)))
             return
         if hasattr(self, 'capture_inspector'):
             available = self.width() - self.capture_inspector.minimumWidth() - 240
@@ -1978,7 +2096,8 @@ class CaptureTab(QWidget):
             dialog = CameraIndexDialog(self)
             if dialog.exec() != QDialog.DialogCode.Accepted:
                 return
-            cam_idx, res_str = dialog.get_settings()
+            cam_idx, resolution, expected_device = dialog.get_settings()
+            api_preference = dialog.camera_api
             self.camera_error.clear()
             try:
                 self.timer.stop()
@@ -1987,7 +2106,6 @@ class CaptureTab(QWidget):
                 self.feed_label.setText("Connecting...")
                 old_core, old_cap = self.core, self.cv_cap
                 acquired = {}
-                api_preference = cv2.CAP_DSHOW if platform.system() == "Windows" else cv2.CAP_ANY
                 def connect():
                     if old_core is not None:
                         if old_core.isSequenceRunning():
@@ -1997,18 +2115,25 @@ class CaptureTab(QWidget):
                     if old_cap is not None:
                         old_cap.release()
                         acquired['cap_released'] = True
-                    cap = cv2.VideoCapture(cam_idx, api_preference)
+                    if api_preference == cv2.CAP_DSHOW:
+                        cap, width, height = open_directshow_camera(cam_idx, resolution, expected_device)
+                    else:
+                        cap = cv2.VideoCapture(cam_idx, api_preference)
+                        try:
+                            if not cap.isOpened():
+                                raise RuntimeError(f'Camera index {cam_idx} did not open.')
+                            if resolution:
+                                cap.set(cv2.CAP_PROP_FRAME_WIDTH, resolution[0])
+                                cap.set(cv2.CAP_PROP_FRAME_HEIGHT, resolution[1])
+                            width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+                            height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                        except BaseException:
+                            cap.release()
+                            raise
                     acquired['cap'] = cap
-                    if not cap.isOpened():
-                        raise RuntimeError(f'Camera index {cam_idx} did not open.')
-                    for resolution, width, height in (('1920x1080', 1920, 1080), ('3840x2160', 3840, 2160), ('4000x3000', 4000, 3000)):
-                        if resolution in res_str:
-                            cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
-                            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
-                            break
-                    return cap, int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)), int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                    return cap, width, height, reported_camera_fps(cap)
                 try:
-                    self.cv_cap, w, h = self.run_camera_task('Connecting camera', connect)
+                    self.cv_cap, w, h, fps = self.run_camera_task('Connecting camera', connect)
                 finally:
                     if acquired.get('core_released'):
                         self.core = None
@@ -2026,7 +2151,13 @@ class CaptureTab(QWidget):
                 
                 self.btn_cam.setEnabled(True)
                 CaptureTab.confirm_camera_stop(self)
-                self.lbl_acq_status.setText(f'USB camera connected · {w} × {h}. Exposure control is unavailable for this connection.')
+                camera_name = expected_device.name if expected_device and expected_device.name else 'USB camera'
+                actual_mode = f'{camera_name} · {w} × {h}'
+                if fps is not None:
+                    actual_mode += f' · {fps:g} fps reported'
+                if resolution and (w, h) != resolution:
+                    actual_mode += f' (requested {resolution[0]} × {resolution[1]})'
+                self.lbl_acq_status.setText(actual_mode)
                 self.lbl_acq_status.show()
                 
                 # Start feed automatically
@@ -2034,7 +2165,12 @@ class CaptureTab(QWidget):
                     self.toggle_camera()
 
             except Exception as e:
-                self.camera_error.set_error('The USB camera connection did not finish. Review the details and retry DirectShow.', e)
+                self.btn_cam.setEnabled(self.core is not None or self.cv_cap is not None)
+                self.feed_label.setText('Camera Feed Offline')
+                message = 'Could not start camera video. Check the connection and close other camera apps.'
+                if api_preference == cv2.CAP_DSHOW:
+                    message += ' For HDMI capture, check that the camera is sending a live picture.'
+                self.camera_error.set_error(message, e)
         except Exception as exc:
             self.camera_error.set_error('Camera selection could not finish. Check the connection and retry DirectShow.', exc)
         finally:
@@ -2122,6 +2258,9 @@ class CaptureTab(QWidget):
                 context=getattr(self,'_preview_quality_context',None)
                 if context is not None:self.capture_controls.preview_context(context)
                 self.capture_controls.preview_for_counting(frame)
+                dialog = self.capture_controls.focus_dialog
+                if dialog is not None:
+                    dialog.observe_preview(frame, context)
             
             if len(frame.shape) == 2:
                 h, w = frame.shape
@@ -2200,6 +2339,22 @@ class CaptureTab(QWidget):
         if worker is not None and worker.is_running:
             worker.start()
 
+    @staticmethod
+    def read_snapshot_frame(core, cap):
+        if core is not None:
+            if core.isSequenceRunning():
+                frame = core.getLastImage()
+            else:
+                core.snapImage()
+                frame = core.getImage()
+        else:
+            ok, frame = cap.read()
+            if not ok:
+                frame = None
+        if frame is None:
+            raise RuntimeError('The camera did not return a frame.')
+        return frame.copy()
+
     def capture_snapshot(self):
         self.camera_error.clear()
         if self.core is None and self.cv_cap is None:
@@ -2208,21 +2363,7 @@ class CaptureTab(QWidget):
             return
         try:
             core, cap = self.core, self.cv_cap
-            def read():
-                if core:
-                    if core.isSequenceRunning():
-                        frame = core.getLastImage()
-                    else:
-                        core.snapImage()
-                        frame = core.getImage()
-                else:
-                    ret, frame = cap.read()
-                    if not ret:
-                        frame = None
-                if frame is None:
-                    raise RuntimeError('The camera did not return a frame.')
-                return frame.copy()
-            frame = self.run_camera_task('Taking snapshot', read)
+            frame = self.run_camera_task('Taking snapshot', lambda: CaptureTab.read_snapshot_frame(core, cap))
             # Ensure memory contiguity before handing to OpenCV's C++ writer
             frame = np.ascontiguousarray(frame)
             
@@ -2394,11 +2535,13 @@ class CaptureTab(QWidget):
     def recording_options(self):
         controls = getattr(self,'capture_controls',None)
         context = getattr(controls,'_record_context',None) or {}
+        profiles = dict(getattr(controls, 'focus_profiles', {}))
+        signature = context.get('quality_signature')
         return dict(retention=dict(retain_original=self.save_original.isChecked(),
             retain_cells=self.save_cell_videos.isChecked(),export_format=self.retained_format.currentData(),
             owned=True,z_index=self.z_index.value()),
-            metadata=dict(optical_signature=context.get('signature'),quality_signature=context.get('quality_signature')),
-            focus_profile=getattr(controls,'focus_profile',None))
+            metadata=dict(optical_signature=context.get('signature'),quality_signature=signature),
+            focus_profile=profiles.get(signature), focus_profiles=profiles)
 
     def on_acq_error(self, err_msg):
         self.is_recording = False
@@ -6774,10 +6917,11 @@ class SettingsTab(QWidget):
         self.tools_menu = ContainedToolsMenu(self.btn_tools, [
             ('Update Models', self.sync_model_weights),
             ('Check Software Updates', self.check_software_updates),
-            ('About TEMPO', self.show_application_details),
+            (f'About {APP_DISPLAY_NAME}', self.show_application_details),
             ('Account Setup', self.run_account_setup),
             ('Guided Setup', self.run_guided_setup),
-            ('Uninstall TEMPO...', lambda: self.run_uninstall())])
+            ('Optional Packages…', self.open_optional_packages),
+            (f'Uninstall {APP_DISPLAY_NAME}…', lambda: self.run_uninstall())])
         self.btn_tools.clicked.connect(self.tools_menu.toggle)
         if getattr(tempo_preferences, 'load_error', ''):
             self.lbl_save_status.setText('Saved settings could not be loaded. Defaults are shown; review them before saving. ' + tempo_preferences.load_error)
@@ -6785,6 +6929,10 @@ class SettingsTab(QWidget):
         btn_bar.addWidget(self.btn_save)
         btn_bar.addWidget(self.btn_reset)
         main_layout.addWidget(button_row)
+
+    def open_optional_packages(self):
+        from tempo_optional_packages import show_package_manager
+        show_package_manager(self).exec()
 
     def preference_values(self):
         values = {}
@@ -7119,7 +7267,7 @@ class TempoDashboard(QMainWindow):
         super().__init__()
         from tempo_ui import install_ui
         install_ui()
-        self.setWindowTitle("TEMPO")
+        self.setWindowTitle(APP_DISPLAY_NAME)
         self.setGeometry(100, 100, 960, 620)
 
         # Set Window Icon
@@ -7944,6 +8092,10 @@ class TempoDashboard(QMainWindow):
             self._quit_annotation_confirmation=confirmation
         # Capture includes a persistent serial service. Request its stop before
         # the generic thread guard; otherwise collection can keep that guard busy.
+        investigation = getattr(self.tab_capture, 'investigation_workspace', None)
+        if investigation is not None and not investigation.prepare_close(confirm_once=True):
+            self.tabs.setCurrentWidget(self.tab_capture)
+            event.ignore(); return
         capture_tools = getattr(self.tab_capture, 'capture_controls', None)
         if capture_tools is not None and not capture_tools.shutdown():
             self.statusBar().showMessage('Stopping capture and stimulation before closing…')
@@ -8062,8 +8214,8 @@ if __name__ == "__main__":
     from tempo_ui import install_ui
     install_ui(app)
     app.setStyle("Fusion")
-    app.setApplicationName("TEMPO")
-    app.setApplicationDisplayName("TEMPO")
+    app.setApplicationName(APP_DISPLAY_NAME)
+    app.setApplicationDisplayName(APP_DISPLAY_NAME)
 
     icon_path = application_icon_path()
     if os.path.exists(icon_path):

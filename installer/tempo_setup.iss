@@ -1,7 +1,7 @@
-; Inno Setup Script for TEMPO
+; Inno Setup Script for TEMPO-C
 ; Builds the Windows installer for the version passed by the release build.
 
-#define MyAppName "TEMPO"
+#define MyAppName "TEMPO-C"
 #ifndef MyAppVersion
   #error Pass the TEMPO application version with /DMyAppVersion.
 #endif
@@ -17,7 +17,7 @@ AppPublisher={#MyAppPublisher}
 AppPublisherURL={#MyAppURL}
 AppSupportURL={#MyAppURL}
 AppUpdatesURL={#MyAppURL}
-DefaultDirName={localappdata}\Programs\{#MyAppName}
+DefaultDirName={localappdata}\Programs\TEMPO
 DefaultGroupName={#MyAppName}
 AllowNoIcons=yes
 InfoBeforeFile=prerequisites_notice.txt

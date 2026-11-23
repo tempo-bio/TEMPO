@@ -1,39 +1,28 @@
 # Training workflow
 
-This guide is for maintainers with access to the private dataset, model repository, and Colab notebook. Annotation access alone does not grant training access.
+Maintainers run training in Colab using approved images from the shared dataset. Regular training saves its results to the model repository and can automatically replace the models offered to the whole workspace.
 
-Training runs in Colab. TEMPO opens the notebook, displays reported progress and provides cancellation. Approved images remain available for later runs.
+## Verify the notebook before starting
 
-## Where actions happen
+1. Sign in to Colab with your own Google account. In TEMPO, choose **Maintainer → Cloud training → Open Notebook** to open the shared notebook in your system's default browser. If access is denied, ask the notebook owner to share it. If you land on the Colab homepage, check the shared notebook URL with the workspace administrator.
+2. Open **Secrets** in the Colab sidebar. Add your own Hugging Face token as `HF_TOKEN` and enable **Notebook access** for it. Use an account authorized as a dataset maintainer and a token with read/write access to both the dataset and model repositories. The token in Colab is configured separately from the TEMPO-C desktop sign-in.
+3. In Colab, choose **Runtime → Change runtime type** and select a GPU. The notebook defaults to **Required GPU** set to **A100**. **Any CUDA GPU** permits another assigned CUDA GPU. GPU availability depends on your Colab account.
+4. For a handoff or a new notebook, run only the code cell under **Settings**. Check **Assigned GPU**, **Dataset repository**, **Model repository**, and **Workflow** in the cell output. Compare the repository IDs with **Settings → Account and Shared Data** in TEMPO-C. The cell checks the notebook configuration and the evaluation assignment without starting training or writing to Hugging Face. Verify repository write access separately.
 
-| Component | Responsibilities |
-| --- | --- |
-| TEMPO | Annotation approval, Open Notebook, reported progress, Cancel Run, model installation and this guide. |
-| Colab | GPU runtime, training settings, package checks, training, evaluation and saving results. |
-| Hugging Face | Approved images and annotations, run status, saved training results and current model files. |
-
-**Open Notebook** opens the saved URL in the system's default browser. With no saved link, it opens Colab to choose a saved notebook or upload one. TEMPO does not embed the browser, read its page, allocate a Colab GPU or remotely start notebook execution.
-
-## Setup
-
-1. Upload `notebooks/TEMPO_Colab_Trainer.ipynb` to Colab and save the notebook for reuse.
-   Windows builds also provide a `TEMPO_Colab_Trainer` download in their GitHub Actions artifacts. Upload the matching notebook when updating TEMPO; an older saved Colab copy keeps its original training code.
-2. In **Maintainer → Cloud training**, choose **Edit Notebook URL** to open **Settings → Account and Shared Data → Colab Notebook**. As the administrator, enter its URL and choose **Update Shared Settings**. **Open Notebook** opens the saved link. Collaborators receive the updated link at launch.
-3. Add `HF_TOKEN` in Colab Secrets and enable notebook access. The token must permit reading the private dataset, writing training records and updating the model repository. Training requires maintainer access.
-4. Select a GPU runtime in Colab. The notebook defaults to **Required GPU: A100**. **Any CUDA GPU** permits another assigned CUDA GPU; availability is controlled by Colab.
+If the IDs differ, refresh the app's shared settings and check that you opened the intended notebook. A notebook keeps the repository IDs it was created with. Export a matching notebook if the workspace repositories changed.
 
 ## Run training
 
-1. Finish annotating and approve the intended images in TEMPO.
-2. Open the notebook and set **Maximum epochs** and **Required GPU** before execution.
-3. Choose **Run all** in Colab.
-4. Inspect the results after execution finishes. Each model reports its new score, previous model score and replacement outcome. The previous model score comes from evaluating the weights that were current before replacement on the same comparison images.
+1. In TEMPO-C, review annotations and approve the intended images. Check that the approved inputs have healthy and dead targets for Cellpose and reviewed nuclei for StarDist, with enough independent groups for nuclear-helper cross-fitting.
+2. Check **Maintainer → Model Evaluation** for an evaluation assignment. A queued stage takes precedence over regular training and uses its own saved settings. To switch back, coordinate with the evaluation maintainer. Finish or cancel the queued stage, then choose **Return to Regular Training**.
+3. In the notebook, set **Maximum epochs** and **Required GPU**, then choose **Runtime → Run all**. Check that the **Settings** output shows **Regular training** for an ordinary run.
+4. After execution finishes, inspect the **Results** cell for its run ID, dataset revision, evaluation basis and model outcomes. Each model reports its score and the previous model's score when available. The current weights are evaluated using the same comparison images.
 
-Run all performs setup, GPU checks, approved-image selection, training, comparison and saving in order. A failed check stops execution. No manual choice of notebook sections is required.
+Run all checks the runtime, selects approved images, trains and compares the models, then saves the results. A failed check stops execution.
 
-The default maximum is 150 epochs. An epoch is a training cycle; image and patch sampling differ between model libraries. Early stopping can end a model before its maximum.
+**Maximum epochs** accepts whole numbers from 1 to 10,000 and defaults to 150. An epoch is a training cycle. Image and patch sampling differ between model libraries, and early stopping can end a model before its maximum.
 
-For requests longer than one epoch, a one-epoch trial runs automatically before full training. Its temporary weights are separate from the full run and cannot replace current models. Setting **Maximum epochs** to **1** requests an optional one-epoch training run that includes saved-weight and evaluation checks. No separate preliminary run is required in that case.
+For requests longer than one epoch, a one-epoch trial runs automatically before full training. Its temporary weights are separate from the full run and cannot replace current models. Setting **Maximum epochs** to **1** starts a regular run that can save weights and replace current models. For an end-to-end training rehearsal, use a separate private software-check dataset, model repository, and notebook configured for those repositories.
 
 Each trial includes model initialization, an epoch, checkpoint saving and evaluation. Elapsed time covers all these steps; it is not an epoch counter. Training workers have no fixed time limit and remain cancellable. A failed trial stops execution before the next model or full training. Logs, produced weights and partial check results remain in the run folder.
 
@@ -55,7 +44,7 @@ For a study across biological preparations, verified preparation or animal IDs k
 
 Fresh training assignments target approximately 70% training, 15% validation and 15% comparison while keeping verified groups indivisible. Exact image proportions vary with preserved roles and coverage requirements. In Model Evaluation, the selected protocol determines grouping and assignments while preserving prior training and validation exposure.
 
-Assisted training needs enough groups and reviewed nuclear examples to train the helper without using the images it will assist. The validated training configuration determines whether these groups represent fields or biological preparations. Scores on training images are labelled as diagnostics and cannot establish architecture adoption.
+Assisted training uses at least four units assigned to training, with reviewed nuclei in at least three of them. Cross-fitting trains the helper without using the images it will assist. The validated training configuration determines whether those units are fields or biological preparations. Scores on training images are labelled as diagnostics and cannot establish architecture adoption.
 
 Assignments persist between runs, including runs that update no models. Previously used training images remain training images. New images fill missing roles first, then follow the same proportions. A dataset with preserved assignments may lack a comparison role until additional images are approved; training and saving remain available.
 
@@ -77,9 +66,9 @@ Cellpose reports **detection and class F1 at IoU 0.5**, with separate scores for
 
 Each new model and its current counterpart are scored on identical comparison images and annotations. Higher scores are better within that model and metric. Scores from different metrics cannot be compared directly. A higher score on a small image set does not establish broad scientific usefulness.
 
-Cellpose trains one specialist for each represented target class: healthy cells, dead cells, healthy groups and dead groups. Each starts independently from CPDINO pretrained weights and sees the same approved training images. Only its target outlines receive foreground instance labels; other objects remain visible as background. Images with no target outlines are retained as negative examples. Training must include both healthy and dead targets, which may be individual cells or groups. Classes without training examples receive no specialist. Only the healthy individual-cell specialist receives the predicted nuclear helper. Dead and group specialists keep microscopy-image input. Helper training uses preparation-grouped cross-fitting, training-only helper dropout and explicit channel normalization. The configured epoch count applies to each specialist; a dataset with all four classes requires four sequential training passes.
+Cellpose trains one specialist for each represented target class: healthy cells, dead cells, healthy groups and dead groups. Each initializes independently and sees the same approved training images. Only its target outlines receive foreground instance labels; other objects remain visible as background. Images with no target outlines are retained as negative examples. Training must include both healthy and dead targets, which may be individual cells or groups. Classes without training examples receive no specialist. Only the healthy individual-cell specialist receives the predicted nuclear helper. Dead and group specialists keep microscopy-image input. Helper training uses grouped cross-fitting, training-only helper dropout and explicit channel normalization. The configured epoch count applies to each specialist; a dataset with all four classes requires four sequential training passes.
 
-The Cellpose results identify each specialist's actual backbone, initial weights and training outline count. Controlled training stops if CPDINO cannot initialize, keeping the backbone consistent between experiment arms. StarDist helper generation runs before Cellpose in an isolated process; helper caches remain outside the frozen compiled dataset. Cross-class predictions covering at least half the smaller mask are combined into an amber unclassified outline for manual review; confidence values from independent models are not used to choose a winner.
+The Cellpose results identify each specialist's actual backbone, initial weights and training outline count. Regular training can fall back to Cellpose-SAM if CPDINO cannot initialize. Controlled CPDINO evaluations stop on initialization failure to keep the backbone consistent between experiment arms. StarDist helper generation runs before Cellpose in an isolated process; helper caches remain outside the frozen compiled dataset. Cross-class predictions covering at least half the smaller mask are combined into an amber unclassified outline for manual review; confidence values from independent models are not used to choose a winner.
 
 ## Saved weights, current models and installed models
 
@@ -91,6 +80,7 @@ A **saved training run** contains all three successfully trained model artifacts
 - **Kept current model:** the new score was equal or lower, or no held-out comparison images were available. The trained weights remain saved with the run.
 - **First model saved:** no current model existed and the architecture passed its required experiment gate, so verified weights became current.
 - **Awaiting experiment validation:** candidate weights are archived while the first centroid scout or nuclear-assisted release waits for a passing architecture receipt.
+- **Updated together** or **Kept coupled models:** the StarDist helper and Cellpose bundle share one replacement decision. The run records both outcomes against the same matched bundle.
 
 Training-image diagnostic scores cannot justify replacing an existing model. Missing comparison images do not prevent training or saving. Authentication, download and evaluation errors stop the update; they are not interpreted as an absent model.
 
@@ -102,7 +92,7 @@ All three model roles must finish successfully before current models change. Qua
 
 Initial package setup and GPU checks appear in Colab. TEMPO begins showing a run after Colab registers it, before dataset compilation and model training.
 
-The runner writes progress to Hugging Face at most once per minute. Cancellation checks continue approximately every 10 seconds; TEMPO reads progress approximately every 15 seconds. Checkpoint saves can also update progress. Network delays and server cooldowns can increase the visible delay. Progress does not depend on reading the browser.
+During steady training, the runner attempts a status upload about once a minute. Phase changes and checkpoint saves can send additional updates. The runner checks for cancellation about every 10 seconds, and TEMPO checks saved progress about every 15 seconds. Network delays and server cooldowns can increase those intervals.
 
 Failed status uploads retry at increasing intervals, respecting the server's retry interval. Training can continue while TEMPO progress is stale. Cancellation checks retry separately; if those checks also fail, stop execution in Colab. Colab output identifies the failed operation and includes available HTTP error details with tokens removed.
 
@@ -124,11 +114,26 @@ After two minutes without a heartbeat, **Resolve Disconnected Run** can clear th
 
 Choose **Clear Run Record** to confirm that execution has stopped. A confirmed clear immediately updates TEMPO and permits another notebook run. If the run has already finished or the active run has changed, TEMPO displays the latest record without clearing it. Recovery and cancellation require a successful server write; authentication, access and rate-limit errors remain visible. Failed or uncertain writes do not establish that a record was cleared.
 
-An existing active run blocks another registration. Inspect its status and Colab execution before retrying. Rerunning a training cell belonging to a completed run must not repeat training or saving; use Run all to create a new run when appropriate.
+An existing active run blocks another registration. Inspect its status and Colab execution before retrying. To start another run after completion, use **Run all** with the intended settings.
 
 Change settings before starting a run. Avoid editing its extracted code, labels, settings or weight files during execution. Verification checks reject changed files. Preserve useful logs and weights before deleting or resetting the Colab runtime; local Colab files can be lost when the runtime ends.
 
 Keep tokens in Secrets. Do not place them in notebook code, saved outputs, screenshots or shared logs. A failed final status update can leave saved models with an uncertain completion state; inspect the run and model records before repeating writes.
+
+## Replace the notebook when needed
+
+Keep using the shared notebook while its training code and repository IDs match the active TEMPO-C workspace and the maintainers can access it. Replace it when those change or when the incoming team needs a copy it controls.
+
+1. In the matching TEMPO-C build, refresh the workspace settings and restart if the repository IDs changed. Choose **Maintainer → Model Evaluation → Save Colab Notebook**. The export embeds the active dataset and model repository IDs.
+2. From the Google account that will own the replacement, use Colab's **File → Upload notebook** to open the export. Save it to Drive if needed and share it with the maintainers who will run it. Before sharing, clear prior cell output if you reused an existing copy.
+3. Have the workspace administrator enter the new **Colab Notebook** URL in **Settings → Account and Shared Data**, then choose **Update Shared Settings**. **Maintainer → Cloud training → Edit Notebook URL** also opens that field.
+4. Have a maintainer refresh shared settings, choose **Open Notebook**, enable their own `HF_TOKEN` for the new copy, and run only the **Settings** cell to confirm the new notebook points to the correct repositories.
+
+The source checkout's `notebooks/TEMPO_Colab_Trainer.ipynb` targets the default workspace. To generate a notebook for other repositories, run this command from the matching checkout with the intended IDs. Choose an output path outside version control for a workspace-specific copy.
+
+```sh
+python -m notebooks.build_staged_colab_notebook --dataset-repo ORG/DATASET --models-repo ORG/MODELS --output /path/to/TEMPO_Colab_Trainer.ipynb
+```
 
 ## Controlled model evaluation
 

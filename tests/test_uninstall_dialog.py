@@ -78,7 +78,7 @@ class UninstallDialogTests(unittest.TestCase):
             dlg = UninstallTempoDialog(parent)
             self.addCleanup(close_fixture, dlg)
 
-        self.assertEqual(dlg.windowTitle(), 'Uninstall TEMPO')
+        self.assertEqual(dlg.windowTitle(), 'Uninstall TEMPO-C')
         self.assertFalse(dlg.cb_prefs.isChecked())
         self.assertFalse(dlg.cb_creds.isChecked())
         self.assertIn('All cloud annotations are synchronized', dlg.notice.text())
@@ -246,11 +246,11 @@ class UninstallDialogTests(unittest.TestCase):
         self.addCleanup(close_fixture, settings)
 
         menu_actions = [btn.text() for btn in settings.tools_menu.buttons]
-        self.assertIn('Uninstall TEMPO...', menu_actions)
+        self.assertIn('Uninstall TEMPO-C…', menu_actions)
 
         with patch.object(settings, 'run_uninstall') as mock_run, \
              patch('tempo_uninstall.UninstallTempoDialog.exec'):
-            uninstall_btn = [btn for btn in settings.tools_menu.buttons if btn.text() == 'Uninstall TEMPO...'][0]
+            uninstall_btn = [btn for btn in settings.tools_menu.buttons if btn.text() == 'Uninstall TEMPO-C…'][0]
             uninstall_btn.click()
             mock_run.assert_called_once()
 

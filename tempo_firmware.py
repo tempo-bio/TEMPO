@@ -27,6 +27,10 @@ CLI_DOWNLOADS = {
 }
 
 
+def pacing_sketch_path():
+    return Path(__file__).resolve().parent / 'firmware' / 'tempo_pacer' / 'tempo_pacer.ino'
+
+
 class FirmwareInstaller:
     def __init__(self, root, progress=lambda text: None, cancelled=None, platform_key=None):
         self.root = Path(root)
@@ -181,7 +185,7 @@ class FirmwareInstaller:
         return port
 
 
-def verify_firmware(port, serial_number=None):
+def verify_firmware(port, serial_number=None, investigation=False):
     from tempo_stimulation import PacerService
     last_error = None
     for attempt in range(4):
@@ -195,6 +199,8 @@ def verify_firmware(port, serial_number=None):
                     raise ConnectionError('Waiting for the selected Arduino to reconnect.')
                 current_port = matching[0]
             service.connect(current_port).result(timeout=5)
+            if investigation and service.investigation_protocol != 1:
+                raise ConnectionError('The Arduino did not acknowledge the investigation recording protocol.')
             service.close().result(timeout=3)
             return current_port
         except Exception as exc:

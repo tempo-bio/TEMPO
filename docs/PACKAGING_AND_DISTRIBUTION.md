@@ -1,14 +1,14 @@
 # Windows packaging
 
-TEMPO is bundled as a 64-bit Windows executable with PyInstaller and distributed through an Inno Setup installer. Python and the locked application runtimes are included. Developer preferences and account credentials are not part of the declared payload.
+TEMPO is bundled as a 64-bit Windows executable with PyInstaller. The general build produces an Inno Setup test installer. Published Windows releases use a separately assembled Velopack installer for signed in-app updates. Both include Python and the locked application runtimes.
 
 For installation instructions and unsigned-installer guidance, see [Getting started](GETTING_STARTED.md#install-on-windows).
 
 ## Run a test build
 
-Push the intended revision. In GitHub Actions, select **Build & Package Windows Release → Run workflow**, then select the branch to test.
-
-The workflow accepts manual dispatch only, has read-only repository-content permission, and contains no release-publication step. Successful builds produce workflow artifacts, without creating a release or tag.
+1. In GitHub Actions, open **Build & Package Windows Release → Run workflow** and select the branch with the intended revision.
+2. Enter the application version from `tempo_release.VERSION` as `release_tag`, including the leading `v`. Leave the assembly and signed-trial inputs empty for a test build.
+3. Review the checks and download `Windows_install_payload` before it expires. Keep its checksum and provenance alongside the installer. Use the completed build run ID and full commit for any later stable-channel assembly. [Windows update release procedure](WINDOWS_UPDATE_RELEASE.md)
 
 The runner uses `windows-2025`, Python 3.13.16 x64, hash-pinned dependencies, and a checksum-verified Inno Setup compiler. This is the automated verification platform, not evidence that every collaborator's Windows or camera configuration has been tested.
 
@@ -18,9 +18,33 @@ The build requires repository privacy/file checks, dependency consistency checks
 
 The actual packaged executable repeats the runtime checks. These include native model imports, credential-store write/read/delete with an isolated synthetic entry, offscreen startup and shutdown, plot lifecycle, scientific processing and export, and combined native-library initialization.
 
-A separate Windows runner downloads the exact Inno installer without a source checkout or Python setup. It verifies the checksum, installs in a path containing spaces, checks the installed app offline with an isolated user environment, and uninstalls it.
+The Windows workflow produces a separate **Stimulation Investigation** ZIP. The
+base executable excludes the toolkit. The release check installs the approved ZIP
+into an isolated profile, starts the Investigation mode in the built executable,
+stages the firmware, checks simulated records and export, and removes the package.
+The required workflow in `.github/workflows/stimulation-firmware.yml` compiles
+standard pacing and investigation firmware for the Uno R4 Minima using TEMPO's
+pinned toolchain.
 
-The release workflow also requires the [disabled full-app Velopack candidate checks](../installer/velopack/README.md#full-application-candidate-automation). It packages the complete tested CPU folder, verifies native delta reconstruction against full inventories, and transfers the exact artifacts to another fresh runner. That runner checks installation, same-source replacements, simulated independent recovery, published v1.0.1 CPU migration, component refusal and uninstall. Its report binds the accepted artifact hashes. All existing build gates and both installer paths must succeed for the final build check. This is not Velopack release-adoption certification: signing/trust, distinct releases, component compatibility, the complete update transaction matrix and hardware acceptance still apply, and in-app updates remain disabled.
+### Optional package compatibility
+
+Packages use a versioned host interface and live in the user profile across
+application updates. Preserve support for existing package API versions and their
+approved archive hashes when shipping a new TEMPO version. Changes to Acquisition,
+serial transport, and the pacing sketch must pass the same package verification
+before release. Keep existing investigation JSON and attachment folders readable.
+
+Build the reproducible ZIP with
+`python -m scripts.build_optional_package --output Output/optional-packages`.
+If the package source changes, review the diff, increment its release version,
+and use `--print-hash` to obtain the hash for the new version's catalog entry in
+`tempo_optional_packages.py`. Retain prior entries and test an installed earlier
+package before changing the host interface. Distribute the verified ZIP as a
+separate download. The ZIP includes the installation and collection guide.
+
+A separate Windows runner downloads the exact Inno test installer without a source checkout or Python setup. It verifies the checksum, installs in a path containing spaces, checks the installed app offline with an isolated user environment, and uninstalls it.
+
+The workflow also runs the full-app Velopack candidate checks described in `installer/velopack/README.md` in the matching source checkout. It packages the tested CPU folder, verifies native delta reconstruction against full inventories, and transfers the exact artifacts to a fresh runner. That runner checks installation, same-source replacements, simulated independent recovery, and uninstall. The reports bind the tested artifact hashes. Candidate builds use disposable trust. The [release procedure](WINDOWS_UPDATE_RELEASE.md) covers production signing, update acceptance, and verification of the published installer.
 
 These checks do not connect to microscope hardware, use real collaborator accounts, or run Colab GPU training.
 
@@ -30,6 +54,7 @@ These checks do not connect to microscope hardware, use real collaborator accoun
 | --- | --- | --- |
 | `Windows_install_payload` | Installer, SHA-256 checksum, source/dependency provenance, dependency source index, verification contract, and installation-check scripts | 3 days |
 | `Windows_NVIDIA_runtime` | Optional CUDA 12.6 runtime parts and the descriptor pinned into the installer | 7 days |
+| `Stimulation_Investigation_Optional_Package` | Installable Stimulation Investigation ZIP and its packaged-executable verification report | 7 days |
 | `TEMPO_Colab_Trainer` | Notebook regenerated from tested training sources | 7 days |
 | `Windows_test_evidence` | Regression output and machine-readable results | 7 days |
 | `Windows_prebuild_evidence` | Source checks and interface captures | 3 days |
@@ -37,9 +62,10 @@ These checks do not connect to microscope hardware, use real collaborator accoun
 | `Windows_release_bundle` | Exact verified CPU folder and versioned verification reports for stable-channel assembly | 7 days |
 | `Windows_build_evidence` | Collected build reports, logs, and captures | 7 days |
 | `Windows_install_evidence` | Fresh-runner installation, runtime, and uninstall reports | 7 days |
-| `velopack-production-feature-candidate` | Production-feature updater, source/patch identity and native fixture linkage; unverified adoption pin | 7 days |
+| `velopack-production-feature-candidate` and `velopack-native-candidate-evidence` | Native updater binaries, source and patch identities, and fixture evidence for release assembly | 7 days |
 | `Windows_velopack_candidate_payload` | Three same-source full-app packaging revisions, original setup executables, deltas, test companion, public test key and exact artifact contract | 7 days |
-| `Windows_velopack_candidate_evidence` | Installed diagnostics, replacement/recovery/migration/uninstall results and exact artifact acceptance gate | 7 days |
+| `Windows_velopack_candidate_evidence` | Installed diagnostics, replacement, recovery, uninstall, and exact artifact acceptance results | 7 days |
+| `Windows_velopack_candidate_replay_evidence` | Independent replay of the same candidate packages on a fresh runner | 7 days |
 
 Download the payload before expiry. Keep the installer, checksum, and provenance together. Identify a test build by its source commit and installer checksum. Publication is a separate step.
 
@@ -59,34 +85,34 @@ After uploading the assets to a public prerelease, verify the published part siz
 python -m scripts.package_nvidia_runtime --verify-published path/to/nvidia-runtime.json --commit FULL_TESTED_COMMIT
 ```
 
-Users of `v1.0.1-preview.1` need one manual installation of the updated installer to receive multipart download support. An existing runtime remains selected only when its identity matches the installed application; setup obtains the runtime built for the new installer. Changing the GitHub prerelease flag does not update an installed application.
+Guided Setup installs the runtime built for the installed application version. When testing an upgrade, check that the new runtime is selected and verify inference on the target GPU.
 
 ## Installation, models, and hardware
 
-The default per-user directory is `%LOCALAPPDATA%\Programs\TEMPO`. The installer can create Start menu and desktop shortcuts. A separate Python installation is unnecessary.
+Published Velopack installers use `%LOCALAPPDATA%\TEMPO.Bio.Desktop`, with the executable under `current`. The Inno test installer defaults to `%LOCALAPPDATA%\Programs\TEMPO`. Both include Python and can create Start menu and desktop shortcuts.
 
 Current packaging includes the runtime libraries needed by the model checks. Project weights are included only when their declared files are present in the build directory. Otherwise TEMPO's authenticated update path obtains them from the configured private model repository. Passing an offline runtime check does not establish that trained project weights are bundled.
 
-Scientific-camera acquisition requires suitable vendor drivers and Micro-Manager adapters. Annotation of existing images needs no connected camera. Check camera compatibility on the actual hardware.
+Scientific-camera acquisition requires a compatible vendor driver and a Micro-Manager adapter or DirectShow connection. Windows also supports compatible USB and HDMI capture devices through DirectShow. Check the intended camera and driver on the actual hardware. [Camera setup](GETTING_STARTED.md#connect-a-camera)
 
 ## Startup diagnostics
 
-For builds containing the startup recorder, run these commands in Command Prompt:
+If the installed application starts slowly or stalls, reproduce the problem with the startup recorder. Run these commands in Command Prompt:
 
 ```bat
-cd /d "%LOCALAPPDATA%\Programs\TEMPO"
+cd /d "%LOCALAPPDATA%\TEMPO.Bio.Desktop\current"
 TEMPO.exe --diagnose-startup "%TEMP%\tempo-startup.json"
 ```
 
-This performs a normal launch with the saved account and preferences. The report records HTTP status and byte counts for shared settings, JSON validation, settings application, and dashboard creation. While startup is pending it captures Python thread locations every ten seconds, for up to ten minutes. It excludes credentials, settings values, response contents, and local variable values. Recording stops when the dashboard is shown. Share the JSON report after a stalled launch; this option is absent from the original v1.0.0 installer.
+For an Inno test build with startup diagnostics, run the same command from its installation directory. The command performs a normal launch with the saved account and preferences. The report records HTTP status and byte counts for shared settings, JSON validation, settings application, and dashboard creation. While startup is pending it captures Python thread locations every ten seconds for up to ten minutes. It omits credentials, settings values, response contents, and local variable values. Recording stops when the dashboard is shown. Share the JSON report after a stalled launch.
 
-The read-only `scripts/collect_windows_settings_cache.ps1` can inspect an existing installation without a new build. It reports the cached settings file's dates, hash, schema checks, and whether the four workspace values match saved preferences. It performs no network requests and never reads credentials. Cache inspection alone cannot establish which launch downloaded or applied a file.
+For workspace access and shared-settings failures, use the refresh and account checks in [Workspace administration](WORKSPACE_ADMINISTRATION.md#change-or-recover-shared-settings).
 
 ## Publication
 
 Review source, licensing, privacy findings, and the exact tested installer before public distribution. Keep publication manual and separate from build certification. Distribute the installer from the approved revision rather than rebuilding a different revision under the same filename.
 
-For Velopack, follow the [Windows update release procedure](WINDOWS_UPDATE_RELEASE.md) to retain signed release sets, verify a copy recovered from durable storage, coordinate signing-key transitions and check served artifacts before advertising the feed. This gate is separate from the disabled candidate workflow and requires reviewed full-app/hardware evidence and a Windows signing decision. The retention and publication-check tools perform no uploads or feed writes.
+Follow the [Windows update release procedure](WINDOWS_UPDATE_RELEASE.md) to retain signed release sets, verify a copy recovered from durable storage, coordinate signing-key transitions and check served artifacts before advertising the feed. Release acceptance requires reviewed full-app and hardware evidence and a Windows signing decision. The automated candidate build has its update feed disabled. The retention and publication-check tools perform no uploads or feed writes.
 
 ### Matching source
 

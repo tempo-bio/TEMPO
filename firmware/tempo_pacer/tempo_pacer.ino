@@ -45,7 +45,11 @@ struct InterruptGuard {
 char input[128];
 size_t inputLength = 0;
 bool inputOverflow = false;
+#ifdef TEMPO_INVESTIGATION_1
+char outgoing[4096];
+#else
 char outgoing[640];
+#endif
 size_t outgoingLength = 0, outgoingOffset = 0;
 
 void recordEdge(uint32_t seq, uint8_t edge, uint32_t tUs) {
@@ -57,6 +61,9 @@ void recordEdge(uint32_t seq, uint8_t edge, uint32_t tUs) {
     eventHead = nextHead;
   }
 }
+#ifdef TEMPO_INVESTIGATION_1
+#include "investigation_1.h"
+#endif
 
 void stimulus(bool high) {
   if (highPhase && !high && pulseSequence > 0) {
@@ -68,6 +75,9 @@ void stimulus(bool high) {
 
 void stopOutput() {
   InterruptGuard guard;
+#ifdef TEMPO_INVESTIGATION_1
+  si1Cancel();
+#endif
   mode = REST;
   stimulus(false);
   digitalWrite(DISABLE_PIN, LOW);
@@ -157,6 +167,9 @@ void reply(uint32_t id, const char *result = "ok", const char *error = "") {
     referenceTenThousandths / 10000, referenceTenThousandths % 10000);
   outgoingOffset = 0;
   outgoingLength = n > 0 && (size_t)n < sizeof(outgoing) ? (size_t)n : 0;
+#ifdef TEMPO_INVESTIGATION_1
+  si1AppendReply();
+#endif
 }
 
 bool parseNumber(const char *token, float &value) {
@@ -188,6 +201,9 @@ void handle(char *line) {
     hostSeen = true;
     return;
   }
+#ifdef TEMPO_INVESTIGATION_1
+  if (!strncmp(command, "si1 ", 4)) { si1Handle((uint32_t)id, command + 4); return; }
+#endif
   bool known = true;
   if (!strcmp(command, "hello")) {
     stopOutput(); // Connecting/reconnecting can never energize an output.
@@ -256,6 +272,11 @@ void setup() {
   digitalWrite(MUX_DISABLE, HIGH); pinMode(MUX_DISABLE, OUTPUT);
   for (uint8_t pin : ADDRESS) { digitalWrite(pin, LOW); pinMode(pin, OUTPUT); }
   analogWriteResolution(12);
+#ifdef TEMPO_INVESTIGATION_1
+  analogReadResolution(14);
+  pinMode(A1, INPUT);
+  pinMode(A2, INPUT);
+#endif
   writeVoltage();
   selectChannel(0);
   stopOutput();
@@ -335,4 +356,8 @@ void loop() {
       outgoingOffset += Serial.write((const uint8_t *)outgoing + outgoingOffset, amount);
     }
   }
+#ifdef TEMPO_INVESTIGATION_1
+  // Acquisition never executes in the pulse/watchdog interrupt.
+  si1Service();
+#endif
 }

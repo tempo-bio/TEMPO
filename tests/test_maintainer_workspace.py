@@ -55,7 +55,7 @@ class TrainingWorkflowTests(unittest.TestCase):
     def test_maintained_guide_distinguishes_notebook_stages_and_preserved_holdouts(self):
         text = self.dialog().reader.toPlainText()
         for phrase in ('Run all','system\'s default browser',
-                       'approximately every 10 seconds','approximately every 15 seconds',
+                       'checks for cancellation about every 10 seconds','checks saved progress about every 15 seconds',
                        'First model saved','Submission has no minimum image, cell or class count'):
             self.assertIn(phrase,text)
 

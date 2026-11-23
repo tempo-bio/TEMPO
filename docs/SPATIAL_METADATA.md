@@ -1,6 +1,6 @@
-# Optional spatial registration, version 1
+# Full-well maps and spatial registration
 
-Image-local centroids do not locate an image inside a well. A full-well map requires a calibrated affine transform into a shared physical coordinate system. Supply a calibrated transform for each field to place it on the full-well map.
+In Physiological Analysis, choose **View → Full Well** to see registered fields on one map. Calibrated automatic collection saves spatial registration with its recordings. For an imported recording with independent field calibration, place that registration next to the video before processing. Every field in the well needs a valid transform into the same physical coordinate system.
 
 For input `recording.avi`, use its sibling `recording.avi.spatial.json`:
 

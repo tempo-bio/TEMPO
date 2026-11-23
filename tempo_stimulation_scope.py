@@ -4,6 +4,7 @@ from PyQt6.QtCore import Qt, QRectF
 from PyQt6.QtGui import QColor, QPainter, QPainterPath, QPen, QKeySequence, QShortcut
 from PyQt6.QtWidgets import (QWidget, QDialog, QVBoxLayout, QHBoxLayout, QFormLayout,
     QComboBox, QPushButton, QLabel, QGroupBox, QSizePolicy, QTextBrowser)
+from tempo_release import APP_DISPLAY_NAME
 from tempo_ui import InformationButton, FlowRow, get_current_theme
 
 TIME_DIVISIONS = (.00002,.00005,.0001,.0002,.0005,.001,.002,.005,.01,.02,.05,.1,.2,.5,1,2,5,10)
@@ -179,7 +180,7 @@ class ScopePreview(QGroupBox):
     def open_view(self):
         if self.dialog is not None:
             self.dialog.show(); self.dialog.raise_(); return
-        self.dialog = QDialog(self); self.dialog.setWindowTitle('TEMPO · Expected Oscilloscope Trace'); self.dialog.resize(650,440)
+        self.dialog = QDialog(self); self.dialog.setWindowTitle(f'{APP_DISPLAY_NAME} · Expected Oscilloscope Trace'); self.dialog.resize(650,440)
         layout = QVBoxLayout(self.dialog)
         self.large_trace = ScopeTrace(); layout.addWidget(self.large_trace,1)
         form = QFormLayout(); form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
@@ -206,7 +207,7 @@ class ScopePreview(QGroupBox):
         layout.addLayout(actions); self._update(); self.dialog.show()
 
     def scope_help(self):
-        dialog = QDialog(self.dialog); dialog.setWindowTitle('TEMPO · Oscilloscope Setup'); layout = QVBoxLayout(dialog)
+        dialog = QDialog(self.dialog); dialog.setWindowTitle(f'{APP_DISPLAY_NAME} · Oscilloscope Setup'); layout = QVBoxLayout(dialog)
         guide = QTextBrowser(); guide.setOpenExternalLinks(False)
         guide.setHtml('''<h2>Viewing stimulation on an oscilloscope</h2>
 <p>TEMPO shows an ideal prediction of the commanded output. Its scale controls change only this drawing; they do not configure an oscilloscope or change stimulation.</p>

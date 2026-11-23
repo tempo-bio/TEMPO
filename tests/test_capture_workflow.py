@@ -48,6 +48,34 @@ class SimulatedService:
 
 
 class NativeAcquisitionTimingTests(unittest.TestCase):
+    def test_usb_recording_uses_reported_stream_rate_before_recording_target(self):
+        from tempo_recording import NativeCapture, read_metadata, timeline
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'usb.tif'
+            camera = Mock()
+            camera.get.side_effect = lambda prop: 29.97 if prop == gui.cv2.CAP_PROP_FPS else 0
+            camera.read.return_value = (True, np.zeros((32, 32), dtype=np.uint8))
+            worker = gui.CameraAcquisitionWorker(cv_cap=camera, output_path=str(path), max_frames=2,
+                                                 target_fps=100, native=True)
+            errors = []
+            worker.error_signal.connect(errors.append)
+            worker.run()
+            self.assertFalse(errors, errors)
+            metadata = read_metadata(path)
+            self.assertEqual(metadata['requested_fps'], 100)
+            self.assertAlmostEqual(metadata['storage_write_check']['required_bytes_per_second'],
+                                   32 * 32 * 3 * 29.97)
+            captured = NativeCapture(path)
+            try:
+                rate = captured.get(gui.cv2.CAP_PROP_FPS)
+                self.assertAlmostEqual(rate, 29.97)
+                stamps, basis = timeline(path, 2, rate)
+                self.assertEqual(basis, 'nominal')
+                self.assertAlmostEqual(stamps[-1], 1000 / 29.97)
+            finally:
+                captured.release()
+
     def test_timing_callback_failure_still_closes_recording_and_releases_owner(self):
         from tempo_recording import NativeCapture, read_metadata
 
@@ -431,11 +459,11 @@ class ManualCaptureTests(unittest.TestCase):
     def test_output_assignments_and_calibration_dialogs(self):
         from tempo_capture_ui import CaptureSetupDialog
         dialog_outputs = CaptureSetupDialog(self.tools, section='outputs')
-        self.assertEqual(dialog_outputs.windowTitle(), 'TEMPO · Output Assignments')
+        self.assertEqual(dialog_outputs.windowTitle(), 'TEMPO-C · Output Assignments')
         self.assertFalse(dialog_outputs.multiplexer.isHidden())
         self.assertEqual(len(dialog_outputs.channels), 8)
         dialog_calib = CaptureSetupDialog(self.tools, section='calibration')
-        self.assertEqual(dialog_calib.windowTitle(), 'TEMPO · Field Calibration')
+        self.assertEqual(dialog_calib.windowTitle(), 'TEMPO-C · Field Calibration')
         self.assertTrue(dialog_calib.multiplexer.isHidden())
 
     def test_chosen_compact_values_are_editable_with_native_arrow_controls(self):

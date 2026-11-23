@@ -267,9 +267,10 @@ class NativeCapture:
 
     def get(self, prop):
         shape = self._file.pages[0].shape
+        nominal_fps = self.metadata.get('source_fps') or self.metadata.get('requested_fps', 0)
         return {cv2.CAP_PROP_FRAME_WIDTH:shape[1], cv2.CAP_PROP_FRAME_HEIGHT:shape[0],
                 cv2.CAP_PROP_FRAME_COUNT:len(self._file.pages), cv2.CAP_PROP_POS_FRAMES:self.index,
-                cv2.CAP_PROP_FPS:self.declared_fps or self.metadata.get('requested_fps',0)}.get(prop,0)
+                cv2.CAP_PROP_FPS:self.declared_fps or nominal_fps}.get(prop,0)
 
     def set(self, prop, value):
         if prop != cv2.CAP_PROP_POS_FRAMES:
@@ -563,6 +564,8 @@ def recover_capture(path,destination,retention=None,cancel=None):
             optical_signature=original.get('optical_signature'),
             protocol_flags=list(set(original.get('protocol_flags',[]))|{'recovered_partial'}),
             quality_assessments=original.get('quality_assessments',[]))
+        if 'source_fps' in original:
+            writer.metadata['source_fps'] = original['source_fps']
         index=0
         while ok:
             cancel.check()

@@ -11,6 +11,7 @@ from PyQt6.QtWidgets import (
     QHBoxLayout, QLabel, QPushButton, QVBoxLayout
 )
 
+from tempo_release import APP_DISPLAY_NAME
 from tempo_config import CONFIG_PATH, get_base_dir
 from tempo_ui import InlineNotice, set_button_color
 from tempo_tasks import run_task
@@ -32,7 +33,7 @@ class UninstallTempoDialog(QDialog):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle('Uninstall TEMPO')
+        self.setWindowTitle(f'Uninstall {APP_DISPLAY_NAME}')
         self.resize(520, 310)
         self.setMinimumSize(480, 280)
 
@@ -49,8 +50,8 @@ class UninstallTempoDialog(QDialog):
         if self.uninstaller:
             install_dir = self.installation.root if self.installation.kind == 'velopack' else self.uninstaller.parent
             intro_text = (
-                'Uninstalling TEMPO will launch the Windows uninstaller to remove '
-                'application files and shortcuts from this computer. TEMPO will close automatically.'
+                f'Uninstalling {APP_DISPLAY_NAME} will launch the Windows uninstaller to remove '
+                f'application files and shortcuts from this computer. {APP_DISPLAY_NAME} will close automatically.'
             )
             location_label = f'<b>Installed location:</b> {install_dir}'
             action_label = 'Uninstall and Exit'
@@ -65,7 +66,7 @@ class UninstallTempoDialog(QDialog):
         else:
             base_dir = Path(get_base_dir()).resolve()
             intro_text = (
-                'TEMPO is running from a source checkout. No Windows installer package was detected. '
+                f'{APP_DISPLAY_NAME} is running from a source checkout. No Windows installer package was detected. '
                 'To uninstall, delete the application folder and its virtual environment.'
             )
             location_label = f'<b>Source location:</b> {base_dir}'
@@ -84,8 +85,8 @@ class UninstallTempoDialog(QDialog):
         opts_layout = QVBoxLayout(opts_box)
         opts_layout.setSpacing(8)
 
-        self.cb_prefs = QCheckBox('Remove user preferences and window configurations')
-        self.cb_creds = QCheckBox('Remove saved Hugging Face authentication tokens')
+        self.cb_prefs = QCheckBox('Remove preferences and layout')
+        self.cb_creds = QCheckBox('Remove Hugging Face sign-in')
         opts_layout.addWidget(self.cb_prefs)
         opts_layout.addWidget(self.cb_creds)
         layout.addWidget(opts_box)
@@ -180,7 +181,7 @@ class UninstallTempoDialog(QDialog):
         self.cb_prefs.setEnabled(False)
         self.cb_creds.setEnabled(False)
         self.btn_uninstall.setEnabled(False)
-        self.notice.setText('Waiting for TEMPO to finish its current work before uninstalling. Cancel keeps TEMPO installed.')
+        self.notice.setText(f'Waiting for {APP_DISPLAY_NAME} to finish its current work before uninstalling. Cancel keeps {APP_DISPLAY_NAME} installed.')
         parent = self.parent()
         if parent is not None and hasattr(parent, 'request_close_action'):
             try:
@@ -197,7 +198,7 @@ class UninstallTempoDialog(QDialog):
         parent = self.parent()
         if parent is not None and hasattr(parent, 'request_close_action'):
             if getattr(parent, '_close_action', None) is not self._exit_action:
-                self._reset_pending('Uninstall cancelled. TEMPO is still installed.')
+                self._reset_pending(f'Uninstall cancelled. {APP_DISPLAY_NAME} is still installed.')
                 return
             parent.close()
         elif parent is None or parent.close():
@@ -219,7 +220,7 @@ class UninstallTempoDialog(QDialog):
             command = None
             if self.installation.kind == 'velopack':
                 if detect_installation() != self.installation:
-                    raise RuntimeError('The installation changed. Reopen TEMPO and retry.')
+                    raise RuntimeError(f'The installation changed. Reopen {APP_DISPLAY_NAME} and retry.')
                 from tempo_update_coordinator import configured_coordinator
                 try:
                     coordinator = configured_coordinator()
@@ -227,7 +228,7 @@ class UninstallTempoDialog(QDialog):
                         raise ValueError('The independent uninstall helper is not certified.')
                     command = coordinator.uninstall_command()
                 except (OSError, ValueError) as error:
-                    raise RuntimeError('Automatic uninstall is unavailable. Use Windows Settings to uninstall TEMPO. '
+                    raise RuntimeError(f'Automatic uninstall is unavailable. Use Windows Settings to uninstall {APP_DISPLAY_NAME}. '
                                        + str(error)) from error
             elif self.uninstaller:
                 if not self.uninstaller.is_file():

@@ -7,6 +7,8 @@ from PyQt6.QtCore import QObject, QEvent, Qt, QSize, QRectF, QPoint, QTimer, pyq
 from PyQt6.QtGui import QPalette, QColor, QTextOption, QPainter, QPen, QBrush, QPainterPath
 from PyQt6.QtWidgets import QApplication, QAbstractButton, QCheckBox, QSlider, QDialog, QMessageBox, QTextEdit, QFrame, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QToolButton, QToolTip, QSizePolicy, QLayout, QGroupBox, QGridLayout, QFormLayout, QLineEdit, QTabWidget, QScrollArea, QProxyStyle, QStyle, QStyleOptionButton
 
+from tempo_release import APP_DISPLAY_NAME
+
 
 class HelpController(QObject):
     """One bounded, widget-anchored help surface for labels and information icons."""
@@ -925,7 +927,7 @@ class InteractionStyle(QObject):
                     if obj.icon() in (QMessageBox.Icon.Information, QMessageBox.Icon.Question):
                         obj.setIcon(QMessageBox.Icon.NoIcon)
                     if not obj.windowTitle().startswith('TEMPO'):
-                        obj.setWindowTitle('TEMPO · ' + obj.windowTitle())
+                        obj.setWindowTitle(f'{APP_DISPLAY_NAME} · {obj.windowTitle()}')
         return False
 
 

@@ -115,8 +115,64 @@ $failed=$false
 try { & $env:TEMPO_INSTALL_FIXTURE -Mode gate -Payload $payload -Evidence $evidence -SourceCommit ('a'*40) }
 catch { $failed=$true }
 $report=Get-Content (Join-Path $evidence 'gate-result.json') -Raw | ConvertFrom-Json
-if (-not $failed -or $report.error -notlike '*original matrix failure*' -or $report.error -like '*migration-result*') {
+if (-not $failed -or $report.error -notlike '*original matrix failure*') {
     throw 'Later missing evidence obscured the first failing stage'
+}
+''')
+
+    def test_candidate_gate_requires_matrix_and_uninstall_evidence_only(self):
+        self.run_shell(r'''
+$payload=Join-Path $env:TEMPO_CLEANUP_TEST_ROOT 'payload'
+$evidence=Join-Path $env:TEMPO_CLEANUP_TEST_ROOT 'evidence'
+New-Item -ItemType Directory -Force $payload,$evidence | Out-Null
+$repair=Join-Path $payload 'repair.exe'
+[IO.File]::WriteAllText($repair,'fixture')
+$commit='a'*40
+$revisions=@(1..3 | ForEach-Object {
+    @{version="1.0.5-test.$_";installer=@{sha256=('b'*64)};full=@{sha256=('c'*64)}}
+})
+$contract=Join-Path $payload 'candidate-contract.json'
+@{schema_version=1;source_commit=$commit;release_certified=$false;purpose='isolated-full-app-acceptance';
+  package_id='TEMPO.CandidateFixture';title='TEMPO Candidate Fixture';revisions=$revisions;
+  repair=@{path='repair.exe';size=(Get-Item $repair).Length;sha256=(Get-FileHash $repair -Algorithm SHA256).Hash.ToLowerInvariant()}} |
+  ConvertTo-Json -Depth 8 | Set-Content $contract -Encoding utf8NoBOM
+$identity=@{schema_version=2;commit=$commit;required_checks=@('bundled payload');lock_sha256=('d'*64)}
+$identity | ConvertTo-Json | Set-Content (Join-Path $payload 'verification-contract.json') -Encoding utf8NoBOM
+$runtime=$identity + @{frozen=$true;success=$true;failures=@();checks=$identity.required_checks;
+    runtime_details=@{'bundled payload'=@{identity=@{lock_sha256=$identity.lock_sha256}}}}
+foreach ($label in @('fresh','replacement-1','replacement-2','skipped-packaging-revision','offline-repaired','after-repair-next-update')) {
+    $runtime | ConvertTo-Json -Depth 8 | Set-Content (Join-Path $evidence "$label-verification.json") -Encoding utf8NoBOM
+}
+'[]' | Set-Content (Join-Path $evidence 'preserved-state.json') -Encoding utf8NoBOM
+$common=@{success=$true;source_commit=$commit;fixture_commit=$env:GITHUB_SHA;release_certified=$false;
+    contract_sha256=(Get-FileHash $contract -Algorithm SHA256).Hash.ToLowerInvariant();
+    fixture_sha256=(Get-FileHash $env:TEMPO_INSTALL_FIXTURE -Algorithm SHA256).Hash.ToLowerInvariant();
+    helper_sha256=(Get-FileHash $env:TEMPO_CLEANUP_HELPERS -Algorithm SHA256).Hash.ToLowerInvariant()}
+$scenarios=@{}
+foreach ($name in @('full_app_fresh_install','same_source_two_replacements','same_source_skipped_replacement',
+    'simulated_missing_current_independent_repair','independent_native_owner_repair','repaired_owner_next_update',
+    'immediate_reinstall_preserves_owner','external_state_bytes_preserved','shortcuts_and_registration')) {
+    $scenarios[$name]=$true
+}
+$artifacts=@($revisions | ForEach-Object {
+    @{version=$_.version;installer_sha256=$_.installer.sha256;full_package_sha256=$_.full.sha256}
+})
+$common + @{scenarios=$scenarios;artifacts=$artifacts} | ConvertTo-Json -Depth 8 |
+  Set-Content (Join-Path $evidence 'matrix-result.json') -Encoding utf8NoBOM
+$reportPath=Join-Path $evidence 'gate-result.json'
+$failed=$false
+try { & $env:TEMPO_INSTALL_FIXTURE -Mode gate -Payload $payload -Evidence $evidence -SourceCommit $commit }
+catch { $failed=$true }
+$report=Get-Content $reportPath -Raw | ConvertFrom-Json
+if (-not $failed -or $report.error -ne 'Candidate uninstall evidence is missing') {
+    throw ('Unexpected gate failure: ' + $report.error)
+}
+$common + @{scenarios=@{uninstall_preserves_external_state=$true}} | ConvertTo-Json -Depth 8 |
+  Set-Content (Join-Path $evidence 'uninstall-result.json') -Encoding utf8NoBOM
+& $env:TEMPO_INSTALL_FIXTURE -Mode gate -Payload $payload -Evidence $evidence -SourceCommit $commit
+$report=Get-Content $reportPath -Raw | ConvertFrom-Json
+if ($report.success -ne $true -or $report.scenarios.uninstall_preserves_external_state -ne $true) {
+    throw ('Gate failed with complete matrix and uninstall evidence: ' + $report.error)
 }
 ''')
 

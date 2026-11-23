@@ -3,14 +3,25 @@
 TEMPO supports the AU26 V2 stimulator: an Uno R4 Minima with the OPA340 buffer,
 CD74HC4053 output switch, and optional CD74HC4051 eight-channel multiplexer.
 
-## Install or update the Arduino
+## Connect the lab's stimulator
 
-1. Connect the Uno R4 Minima by USB. Finish any active capture or stimulation.
-2. In Acquisition's Stimulation panel, choose **Setup → Install / update firmware…**.
-3. Select its port and choose **Install / Update Firmware**. This replaces the
-   Arduino's current sketch. Keep the board connected through verification.
-4. Close setup and choose **Connect**. Connecting leaves the output
-   in resting discharge; starting stimulation is a separate action.
+Connect the Uno R4 Minima by USB. In **Acquisition**, choose **Connect** in
+the Stimulation panel and verify resting discharge before starting a run.
+Use the lab's existing well-to-output assignments and confirm they match the
+connected electrodes.
+
+## Install or update firmware
+
+Use this procedure for a replacement board or when the board is missing the
+compatible TEMPO firmware. Finish any active capture or stimulation first.
+
+1. In Acquisition's Stimulation panel, choose **Setup → Install / update firmware…**.
+2. Select the board's port and choose **Install / Update Firmware**. This replaces
+   its current sketch. Keep the board connected through verification.
+3. Close setup, choose **Connect**, and verify resting discharge.
+
+For v1.0.4, follow the version-specific Arduino IDE instructions if firmware
+times out or fails to apply settings. [v1.0.4 firmware correction](https://github.com/tempo-bio/TEMPO/releases/tag/v1.0.4#stimulation-firmware-fix-for-arduino-uno-r4-minima)
 
 No Arduino IDE or terminal is required for guided setup. Initial setup needs
 internet access. TEMPO downloads checksum-pinned Arduino CLI 1.5.1 and installs
@@ -75,7 +86,7 @@ credit. Without stage coordinates, assign a new FOV identifier only after moving
 to a new field. **History…** opens the full recording history.
 
 **Stimulation Guide** provides workflow, counting, output-state, and
-metadata guidance. **Adjust View → Real Scope Setup…** explains physical scope
+metadata guidance. **Adjust View… → Real Scope Setup…** explains physical scope
 settings, scale examples, trigger choices, and troubleshooting.
 
 ## Automatic field collection
@@ -83,10 +94,8 @@ settings, scale examples, trigger choices, and troubleshooting.
 Choose **Automatic Collection…** to set the collection area and cell target.
 This action is available when TEMPO detects an XY stage.
 
-1. Enter measured pixel size and camera-to-stage rotation/axis reversals in
-   **Field Calibration…** within Automatic Collection, with the intended camera, objective and binning.
-2. For each well, move the stage to two opposite corners of a rectangle entirely
-   inside the usable well area and mark them in **Automatic Collection…**.
+1. In **Field Calibration…**, use the saved pixel size and camera-to-stage orientation if they match the current setup. Measure and update these values if calibration is missing or the camera, objective, binning, or stage alignment has changed.
+2. Check the marked area for each well you plan to collect. To mark a new area, move the stage to two opposite corners of a rectangle entirely inside the usable well area and mark both corners in **Automatic Collection…**.
 3. Enter the healthy-cell target, maximum number of fields to inspect, minimum
    healthy cells per recorded field, and recording duration (initially 15 s).
 4. Choose the current well, all eligible wells, or a row-range preset, then start collection. Only calibrated, assigned wells qualify for stimulated collection.
@@ -126,7 +135,7 @@ V2 requests explicit confirmation above 0.8 V, 3 Hz, 10 ms, or 15% duty cycle.
 These are inherited device confirmation thresholds, not validated biological
 safety limits. Width must always be shorter than the period, and requested
 voltage remains limited to 1 V. Constant output and scope tests are available
-under **Diagnostics…**, outside active well sessions.
+under **Setup → Advanced diagnostics…**, outside active well sessions.
 
 TEMPO sends heartbeats every 250 ms. The firmware returns to resting discharge
 after two seconds without valid communication. Pulse edges and the watchdog are
@@ -142,3 +151,7 @@ Completed automatic recordings are queued after the well's final metadata is
 saved. Processing retains capture provenance and adds stimulation columns to
 cell results. Older recordings remain readable with unavailable capture data.
 Host timestamps do not establish measured pulse-to-frame synchronization.
+
+## Record instrument measurements
+
+To log oscilloscope or raw Arduino readings, use a build with **Settings → Application Tools → Optional Packages…** and obtain the matching approved Stimulation Investigation ZIP from the release maintainer. Install the ZIP there and restart TEMPO-C. Select **Stimulation Investigation 1** in **Acquisition** and open **Guide…**. Open an existing investigation from its JSON file and keep its neighboring attachment folder with it.

@@ -101,12 +101,13 @@ class WindowsReleaseSetTests(unittest.TestCase):
             now=self.now, minimum_updater_version='1.2.161', storage_schema_version=1)
         # Synthetic claims exist only inside this isolated unit fixture. They are
         # never evidence that a real installer or physical hardware was accepted.
+        historical_checks = retention.CHECKS | {'legacy_cpu_migration'}
         acceptance = dict(schema_version=1, release_certified=True, version='1.0.2', source_commit=self.commit,
             artifact_sha256={role: _digest(self.artifacts[role]) for role in ('installer', 'repair', 'updater')},
-            checks={name: True for name in retention.CHECKS}, evidence={},
+            checks={name: True for name in historical_checks}, evidence={},
             code_signing=dict(mode='unsigned-approved', decision_reference='unit-fixture-only'))
         acceptance['artifact_sha256']['full_package'] = self.release.full.sha256
-        for name in retention.CHECKS:
+        for name in historical_checks:
             report = self.put('report-' + name + '.json', _canonical({'fixture': name}))
             self.artifacts['report_' + name] = report
             acceptance['evidence'][name] = {'sha256': _digest(report)}
@@ -168,6 +169,33 @@ class WindowsReleaseSetTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'evidence is missing or changed'):
             self.prepare()
         self.assertFalse(self.options['output'].exists())
+
+    def test_current_release_drops_inno_evidence_and_keeps_worker_inference(self):
+        path = self.artifacts['acceptance']
+        value = json.loads(path.read_bytes())
+        value['checks'].pop('legacy_cpu_migration')
+        value['evidence'].pop('legacy_cpu_migration')
+        self.artifacts.pop('report_legacy_cpu_migration')
+        value['version'] = '1.0.5'
+        path.write_bytes(_canonical(value))
+        release = replace(self.release, version='1.0.5')
+        self.assertEqual(retention._acceptance(path, self.artifacts, release), retention.CHECKS)
+
+        nvidia_release = replace(release, nvidia_descriptor=b'fixture')
+        with self.assertRaisesRegex(ValueError, 'incomplete'):
+            retention._acceptance(path, self.artifacts, nvidia_release)
+        value['checks']['matching_worker_inference'] = True
+        report = self.put('matching-worker-inference.json', b'test fixture')
+        value['evidence']['matching_worker_inference'] = {'sha256': _digest(report)}
+        self.artifacts['report_matching_worker_inference'] = report
+        path.write_bytes(_canonical(value))
+        self.assertEqual(retention._acceptance(path, self.artifacts, nvidia_release),
+                         retention.CHECKS | {'matching_worker_inference'})
+
+        value['version'] = '1.0.4'
+        path.write_bytes(_canonical(value))
+        with self.assertRaisesRegex(ValueError, 'incomplete'):
+            retention._acceptance(path, self.artifacts, replace(release, version='1.0.4'))
 
     def test_v102_deferral_requires_software_shutdown_and_matches_only_published_build(self):
         version, commit, channel = retention.HARDWARE_DEFERRED_RELEASE

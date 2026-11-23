@@ -34,9 +34,14 @@ class Registry:
         return Key(self.entries[identity])
 
     def QueryValueEx(self, key, name):
-        if key.location is None:
+        entry = key.location
+        if isinstance(entry, dict):
+            entry = entry.get(name)
+        elif name != 'InstallLocation':
+            entry = None
+        if entry is None:
             raise FileNotFoundError()
-        return key.location, 1
+        return entry, 1
 
 
 class Key:

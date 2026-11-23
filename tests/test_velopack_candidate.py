@@ -149,6 +149,9 @@ class VelopackCandidateTests(unittest.TestCase):
 
         def pack(command, log, timeout):
             self.assertEqual(command[command.index('--packVersion') + 1], VERSION)
+            self.assertEqual(command[command.index('--packId') + 1], 'TEMPO.Bio.Desktop')
+            self.assertEqual(command[command.index('--packTitle') + 1], 'TEMPO-C')
+            self.assertEqual(command[command.index('--mainExe') + 1], 'TEMPO.exe')
             folder = Path(command[command.index('--packDir') + 1])
             packages = Path(command[command.index('--outputDir') + 1])
             packages.mkdir()
@@ -166,6 +169,7 @@ class VelopackCandidateTests(unittest.TestCase):
                 output, public_keys=keys, native_updater=updater, repair_executable=repair,
                 certification=evidence, pin_path=pin_path, patch_path=pin_path.with_name('0001-tempo-recovery.patch'))
         revision = assembled['revisions'][0]
+        self.assertEqual(assembled['title'], 'TEMPO-C')
         self.assertEqual(revision['installer']['path'], f'TEMPO_Setup_v{VERSION}.exe')
         self.assertFalse(assembled['release_certified'])
         with zipfile.ZipFile(output / revision['full']['path']) as package:

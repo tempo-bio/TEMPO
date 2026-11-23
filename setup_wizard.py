@@ -17,6 +17,7 @@ from PyQt6.QtWidgets import (
     QProgressBar, QLineEdit, QStackedWidget, QFrame, QMessageBox, QScrollArea, QMenu, QBoxLayout, QCheckBox
 )
 
+from tempo_release import APP_DISPLAY_NAME
 from tempo_config import tempo_preferences
 from tempo_credentials import safe_profile_name
 from tempo_secure_store import save_hf_token, CredentialStorageError
@@ -224,7 +225,7 @@ class SetupWizardDialog(QDialog):
         self._models_ready = False
         self._nvidia_ready = False
         self._requirements_ready = False
-        self.setWindowTitle("Account Setup" if account_only else "TEMPO Setup")
+        self.setWindowTitle("Account Setup" if account_only else f"{APP_DISPLAY_NAME} Setup")
         font = self.font()
         font.setPointSizeF(max(10.5, font.pointSizeF()))
         self.setFont(font)
@@ -385,7 +386,7 @@ class SetupWizardDialog(QDialog):
 
     def _build_page1_welcome(self):
         self.welcome_page, layout = self._new_page(
-            'Set up TEMPO', None)
+            f'Set up {APP_DISPLAY_NAME}', None)
         for number, title, detail in (
             (1, 'Check this computer', 'Confirm the app has the packages it needs.'),
             (2, 'Connect your workspace', 'Sign in with your own Hugging Face account.'),
@@ -667,7 +668,7 @@ class SetupWizardDialog(QDialog):
 
     def _build_ready_page(self):
         self.ready_page, layout = self._new_page(
-            'You’re ready to use TEMPO', 'Start annotating, analyze a recording, or connect your hardware in Acquisition.')
+            f'You’re ready to use {APP_DISPLAY_NAME}', 'Start annotating, analyze a recording, or connect your hardware in Acquisition.')
         layout.addWidget(link_button('Your first shared annotation', lambda: self._open_guide('start')),
                          alignment=Qt.AlignmentFlag.AlignLeft)
         layout.addWidget(link_button('Models and hardware guide', lambda: self._open_guide('models')),
@@ -675,7 +676,7 @@ class SetupWizardDialog(QDialog):
         self.ready_error = ErrorDetails()
         layout.addWidget(self.ready_error)
         layout.addStretch()
-        self.btn_open, _, _ = self._footer(self.ready_page, 'Open TEMPO', self._finish_setup)
+        self.btn_open, _, _ = self._footer(self.ready_page, f'Open {APP_DISPLAY_NAME}', self._finish_setup)
 
     def _finish_setup(self):
         if not self._models_ready or self._work_pending():
@@ -687,7 +688,7 @@ class SetupWizardDialog(QDialog):
                 save_setup_stage('complete')
             except OSError as error:
                 self.ready_error.set_error(
-                    'Setup completion could not be saved. Check access to your profile folder, then choose Open TEMPO again.', error)
+                    f'Setup completion could not be saved. Check access to your profile folder, then choose Open {APP_DISPLAY_NAME} again.', error)
                 return
         self.accept()
 
@@ -940,7 +941,7 @@ class SetupWizardDialog(QDialog):
                 self.txt_token.set_saved_present(bool(tempo_hub.token))
                 self._set_oauth_status(f'Sign-in complete as {self._pending_oauth_name}. '
                                        + ('Save Account' if self.account_only else 'Save and continue')
-                                       + ' to connect this account to TEMPO.')
+                                       + f' to connect this account to {APP_DISPLAY_NAME}.')
                 self._refresh_account_identity()
                 self._update_save_action()
             run_background(authenticate, authenticated)
@@ -1153,4 +1154,6 @@ def run_setup_application(app):
 if __name__ == '__main__':
     from PyQt6.QtWidgets import QApplication
     app = QApplication(sys.argv)
+    app.setApplicationName(APP_DISPLAY_NAME)
+    app.setApplicationDisplayName(APP_DISPLAY_NAME)
     sys.exit(run_setup_application(app))

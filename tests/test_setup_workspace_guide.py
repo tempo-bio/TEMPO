@@ -106,7 +106,7 @@ class WorkspaceGuideTests(unittest.TestCase):
                 self.view._open_guide('models'); settle()
                 self.assertTrue(self.view.guide.isVisible())
                 self.assertFalse(self.view.guide.isModal())
-                self.assertIn('Keep TEMPO open', self.view.guide.browser.toPlainText())
+                self.assertIn('Keep TEMPO-C open', self.view.guide.browser.toPlainText())
                 QTest.keyClick(self.view.guide, Qt.Key.Key_Escape)
                 self.assertFalse(self.view.guide.isVisible())
                 self.assertIsNotNone(self.view._model_task)
@@ -161,12 +161,13 @@ class WorkspaceGuideTests(unittest.TestCase):
         guide = self.view.guide
         with patch('tempo_onboarding.QDesktopServices.openUrl', return_value=True) as external:
             self.view._open_guide('account'); settle()
-            self.assertIn('Create your own', guide.browser.toPlainText())
+            self.assertIn('Send your personal Hugging Face username', guide.browser.toPlainText())
             cursor = guide.browser.document().find('Account and credential security')
             self.assertTrue(cursor.charFormat().isAnchor())
             self.assertEqual(cursor.charFormat().foreground().color().name(), '#79c0ff')
             guide.follow_link(QUrl('CREDENTIAL_SECURITY.md'))
-            self.assertIn('TEMPO credential storage', guide.browser.toPlainText())
+            self.assertEqual(guide.current_path, guide.root / 'docs/CREDENTIAL_SECURITY.md')
+            self.assertIn('Save or replace a credential', guide.browser.toPlainText())
             external.assert_not_called()
             before = guide.browser.toPlainText()
             guide.follow_link(QUrl.fromLocalFile('/etc/passwd'))
@@ -215,6 +216,27 @@ class WorkspaceGuideTests(unittest.TestCase):
             block = block.next()
         external.assert_not_called()
 
+    def test_windows_migration_opens_from_a_bundle_without_the_source_tree(self):
+        from shutil import copyfile
+
+        guide = self.view.guide
+        source = guide.root
+        guide.root = Path(self.temp.name).resolve() / 'bundle'
+        (guide.root / 'docs').mkdir(parents=True)
+        for name in ('GETTING_STARTED.md', 'WINDOWS_MIGRATION.md'):
+            copyfile(source / 'docs' / name, guide.root / 'docs' / name)
+        guide.resize(480, 540)
+        self.view._open_guide('start')
+        settle()
+        with patch('tempo_onboarding.QDesktopServices.openUrl') as external:
+            self.click_guide_link('WINDOWS_MIGRATION.md')
+        external.assert_not_called()
+        self.assertEqual(guide.current_path, guide.root / 'docs/WINDOWS_MIGRATION.md')
+        text = guide.browser.toPlainText()
+        for command in ('--legacy-installer', '--legacy-data-only', '--mode finish-migration'):
+            self.assertIn(command, text)
+        self.assertEqual(guide.browser.horizontalScrollBar().maximum(), 0)
+
     def test_section_link_preserves_hyphens_in_heading_words(self):
         original_font = APP.font(); self.addCleanup(APP.setFont, original_font)
         for points in (12, 24):
@@ -223,10 +245,10 @@ class WorkspaceGuideTests(unittest.TestCase):
                 guide = setup.SetupGuide(); self.addCleanup(close_and_dispose, guide)
                 guide.resize(620, 540); guide.show(); settle()
                 guide.follow_link(QUrl.fromLocalFile(str(guide.root/'docs/CREDENTIAL_SECURITY.md')))
-                self.click_guide_link('WORKSPACE_ADMINISTRATION.md#browser-sign-in-application', guide)
+                self.click_guide_link('WORKSPACE_ADMINISTRATION.md#browser-sign-in', guide)
                 cursor = guide.browser.textCursor()
                 self.assertEqual(cursor.blockFormat().headingLevel(), 2)
-                self.assertEqual(cursor.block().text(), 'Browser sign-in application')
+                self.assertEqual(cursor.block().text(), 'Browser sign-in')
                 bounds = guide.browser.document().documentLayout().blockBoundingRect(cursor.block())
                 self.assertGreater(bounds.height(), 0, 'The target heading was omitted from the rendered layout.')
                 self.assertGreaterEqual(guide.browser.cursorRect(cursor).top(), 0)

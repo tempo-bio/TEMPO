@@ -6,6 +6,7 @@ from PyQt6.QtCore import QTimer
 from PyQt6.QtWidgets import (QDialog, QHBoxLayout, QLabel, QProgressBar,
                              QPushButton, QTextEdit, QVBoxLayout)
 
+from tempo_release import APP_DISPLAY_NAME
 from tempo_tasks import run_inline_task
 from tempo_ui import ErrorDetails
 from tempo_update_service import FullDownloadRequired, UpdateCancelled
@@ -15,11 +16,11 @@ _STAGE_TEXT = {
     'checking_base': 'Checking the installed version…',
     'downloading_recovery': 'Downloading a recovery copy…',
     'verifying_recovery': 'Verifying the recovery copy…',
-    'downloading_update': 'Downloading the TEMPO update…',
+    'downloading_update': f'Downloading the {APP_DISPLAY_NAME} update…',
     'rebuilding_update': 'Rebuilding the update from the downloaded changes…',
-    'verifying_update': 'Verifying the TEMPO update…',
-    'nvidia_checking': 'Checking the NVIDIA package for the new TEMPO version…',
-    'nvidia_downloading': 'Downloading NVIDIA support for the new TEMPO version…',
+    'verifying_update': f'Verifying the {APP_DISPLAY_NAME} update…',
+    'nvidia_checking': f'Checking the NVIDIA package for the new {APP_DISPLAY_NAME} version…',
+    'nvidia_downloading': f'Downloading NVIDIA support for the new {APP_DISPLAY_NAME} version…',
     'nvidia_unpacking': 'Unpacking NVIDIA support…',
     'nvidia_checking_gpu': 'Testing NVIDIA support on your GPU…',
     'nvidia_verifying': 'Verifying NVIDIA files…',
@@ -159,9 +160,9 @@ class PackagedSoftwareUpdateDialog(QDialog):
         if details:
             summary += f' (includes {details})'
         if self.coordinator.component_required:
-            summary += ('\n\nYou already have NVIDIA acceleration. TEMPO downloads the NVIDIA '
+            summary += (f'\n\nYou already have NVIDIA acceleration. {APP_DISPLAY_NAME} downloads the NVIDIA '
                         'runtime that matches the new version so GPU processing stays available after the update.')
-        self.log_view.setMarkdown(f'## TEMPO {target.version}\n\n{summary}\n\n{notes}')
+        self.log_view.setMarkdown(f'## Version {target.version}\n\n{summary}\n\n{notes}')
 
     def check_release(self):
         if self._task is not None:
@@ -176,7 +177,7 @@ class PackagedSoftwareUpdateDialog(QDialog):
         if error:
             self._error('Could not check for updates. Check your connection and try again.', error)
         elif plan is None:
-            self.log_view.setPlainText('TEMPO is up to date.')
+            self.log_view.setPlainText(f'{APP_DISPLAY_NAME} is up to date.')
             self._set_state('current')
         else:
             self._display_plan(plan)
@@ -263,7 +264,7 @@ class PackagedSoftwareUpdateDialog(QDialog):
                 self.accept()
                 return
             self._set_state('waiting')
-            self.status.setText('Waiting for TEMPO to finish its current work before restarting.')
+            self.status.setText(f'Waiting for {APP_DISPLAY_NAME} to finish its current work before restarting.')
             self.status.show()
             if self._owned_close_action is not None:
                 self._handoff_timer.start()

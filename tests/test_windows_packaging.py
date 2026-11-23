@@ -268,10 +268,14 @@ class PackagingCommandTests(unittest.TestCase):
             for name in ('tempo_icon.png', 'tempo_icon.ico', 'tempo_shell_icon.png', 'tempo_logo_base.png'):
                 self.assertTrue((root/'assets'/name).is_file(), name)
             self.assertEqual(declared['docs/TRAINING_WORKFLOW.md'], 'docs')
-            for name in ('GETTING_STARTED.md', 'CREDENTIAL_SECURITY.md', 'COLLABORATION_WORKFLOW.md',
-                         'WORKSPACE_ADMINISTRATION.md', 'CAPTURE_QUALITY.md'):
+            for name in ('GETTING_STARTED.md', 'WINDOWS_MIGRATION.md', 'CREDENTIAL_SECURITY.md',
+                         'COLLABORATION_WORKFLOW.md', 'WORKSPACE_ADMINISTRATION.md',
+                         'CAPTURE_QUALITY.md', 'WINDOWS_UPDATE_RELEASE.md'):
                 self.assertEqual(declared['docs/' + name], 'docs')
             self.assertEqual(declared['README.md'], '.')
+            self.assertNotIn('docs/WINDOWS_UPDATE_ADOPTION_PLAN.md', declared)
+            self.assertNotIn('stimulation_investigation_1/guide.md', declared)
+            self.assertNotIn('stimulation_investigation_1/investigation_1.h', declared)
             for source, destination in declarations['datas']:
                 self.assertTrue(Path(source).exists(), source)
 

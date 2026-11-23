@@ -151,6 +151,7 @@ class TempoLogoTests(unittest.TestCase):
         self.addCleanup(self.dispose, dialog)
         dialog.show()
         APP.processEvents()
+        self.assertEqual(dialog.windowTitle(), 'About TEMPO-C')
         self.assertIn(str(path), dialog.details.toPlainText())
         self.assertIn('Python:', dialog.details.toPlainText())
         self.assertIn('Qt:', dialog.details.toPlainText())

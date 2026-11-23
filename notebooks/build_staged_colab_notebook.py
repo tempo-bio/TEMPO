@@ -58,10 +58,11 @@ def build_notebook(dataset_repo=DEFAULT_DATASET_REPO, expected_request_id='', mo
         compile(text, 'tempo-notebook-cell', 'exec')
         cells.append(dict(cell_type='code', metadata={'cellView':'form'} if form else {},
                           execution_count=None, outputs=[], source=text.splitlines(keepends=True)))
-    markdown('''# TEMPO Model Training
+    markdown('''# TEMPO-C Model Training
 
-Enable access to the `HF_TOKEN` Colab secret, select a GPU runtime, and choose **Run all**.
-A queued **Model Evaluation** runs its prepared protocol stage automatically. Choose **Return to Regular Training** in TEMPO when you finish an evaluation. Review evaluation results in **TEMPO → Maintainer → Model Evaluation**.
+Sign in to Colab with your own Google account. Add your own Hugging Face token to Colab Secrets as `HF_TOKEN` and enable notebook access. The token needs read and write access to the workspace's dataset and model repositories. Select a GPU runtime and choose **Run all**.
+
+For a queued **Model Evaluation**, Run all uses the prepared stage and its saved GPU requirement. Review the report in **TEMPO-C → Maintainer → Model Evaluation**. Choose **Return to Regular Training** before starting an ordinary training run.
 ''')
     markdown('''## Settings
 

@@ -4,7 +4,7 @@
 #include <cstdint>
 #include <deque>
 #include <string>
-constexpr int HIGH=1,LOW=0,OUTPUT=1,A0=14;
+constexpr int HIGH=1,LOW=0,OUTPUT=1,INPUT=0,A0=14,A1=15,A2=16;
 inline uint64_t fixtureUs=0;
 inline int fixturePins[32]={};
 inline uint32_t fixtureMask=0;
@@ -17,6 +17,14 @@ inline void pinMode(int,int){}
 inline void digitalWrite(int pin,int value){ fixturePins[pin]=value; }
 inline void analogWrite(int pin,int value){ fixturePins[pin]=value; }
 inline void analogWriteResolution(int){}
+inline int fixtureAdcReads=0;
+inline void (*fixtureAdcTick)()=nullptr;
+inline void analogReadResolution(int){}
+inline int analogRead(int pin){
+  ++fixtureAdcReads; fixtureUs+=70;
+  if(fixtureAdcTick) fixtureAdcTick();
+  return pin==A1 ? 1024 : 64;
+}
 template<typename T> T constrain(T value,T low,T high){ return std::max(low,std::min(value,high)); }
 struct FixtureSerial {
   std::deque<char> input;
