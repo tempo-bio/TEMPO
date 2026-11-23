@@ -457,7 +457,8 @@ class ResponsiveLayoutTests(unittest.TestCase):
         with patch.object(maintainer_tab.TrainingWorkflowDialog, 'exec', inspect_workflow):
             maintainer.training_workflow.click()
         self.assertEqual(len(opened), 1)
-        self.assertIn('Select a GPU runtime in Colab.', opened[0])
+        self.assertIn('Runtime → Change runtime type', opened[0])
+        self.assertIn('Required GPU', opened[0])
         self.assertFalse(maintainer.pending_work())
 
     def test_waveform_axis_titles_fit_the_plot_at_larger_fonts(self):

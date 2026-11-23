@@ -78,7 +78,8 @@ def fit_profile(records, signature, *, sensor_bits=None):
     values = np.asarray(values)
     center=values.mean(axis=0);scale=np.maximum(values.std(axis=0),1e-8)
     design=np.column_stack((np.ones(len(values)),(values-center)/scale))
-    target=np.asarray([1. if row['label']=='sharp' else -1. for row in train])
+    # Pass an explicit column matrix to OpenCV on both 4.x and 5.x.
+    target = np.asarray([1. if row['label'] == 'sharp' else -1. for row in train]).reshape(-1, 1)
     penalty=np.eye(design.shape[1])*.1;penalty[0,0]=0
     fitted, weights = cv2.solve(design.T @ design + penalty, design.T @ target, flags=cv2.DECOMP_CHOLESKY)
     if not fitted:

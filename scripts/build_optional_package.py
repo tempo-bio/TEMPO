@@ -10,7 +10,7 @@ from tempo_optional_packages import INVESTIGATION, PACKAGES
 
 
 ROOT = Path(__file__).resolve().parents[1]
-RELEASE_VERSION = '0.2.2'
+RELEASE_VERSION = '0.2.3'
 
 
 def build(output):

@@ -59,7 +59,7 @@ jobs:
 
   validate-source:
     name: Validate Windows source before packaging
-    needs: [preflight, velopack-native, stimulation-firmware]
+    needs: preflight
     runs-on: windows-2025
     timeout-minutes: 40
     steps:
@@ -124,7 +124,7 @@ jobs:
 
   build-nvidia-runtime:
     name: Build optional NVIDIA inference runtime
-    needs: validate-source
+    needs: [validate-source, velopack-native, stimulation-firmware]
     runs-on: windows-2025
     timeout-minutes: 180
     env:
@@ -575,7 +575,7 @@ jobs:
 
   certify:
     name: Certify every required Windows gate
-    needs: [preflight, validate-source, build-windows, verify-installed, velopack-native, verify-velopack, replay-velopack]
+    needs: [preflight, validate-source, stimulation-firmware, velopack-native, build-nvidia-runtime, build-windows, verify-installed, verify-velopack, replay-velopack]
     if: ${{ always() && inputs.assemble_build_run == '' && inputs.staged_index_sha256 == '' && !inputs.test_signed_updates }}
     runs-on: windows-2025
     steps:
@@ -583,13 +583,28 @@ jobs:
         env:
           PREFLIGHT_RESULT: ${{ needs.preflight.result }}
           SOURCE_RESULT: ${{ needs.validate-source.result }}
+          FIRMWARE_RESULT: ${{ needs.stimulation-firmware.result }}
+          NVIDIA_RESULT: ${{ needs.build-nvidia-runtime.result }}
           BUILD_RESULT: ${{ needs.build-windows.result }}
           INSTALL_RESULT: ${{ needs.verify-installed.result }}
           NATIVE_RESULT: ${{ needs.velopack-native.result }}
           VELOPACK_RESULT: ${{ needs.verify-velopack.result }}
           REPLAY_RESULT: ${{ needs.replay-velopack.result }}
         run: |
-          if ($env:PREFLIGHT_RESULT -ne 'success' -or $env:SOURCE_RESULT -ne 'success' -or $env:BUILD_RESULT -ne 'success' -or $env:INSTALL_RESULT -ne 'success' -or $env:NATIVE_RESULT -ne 'success' -or $env:VELOPACK_RESULT -ne 'success' -or $env:REPLAY_RESULT -ne 'success') { throw 'Windows build acceptance failed or required checks were skipped' }
+          $results = [ordered]@{
+            'preflight' = $env:PREFLIGHT_RESULT
+            'validate-source' = $env:SOURCE_RESULT
+            'stimulation-firmware' = $env:FIRMWARE_RESULT
+            'velopack-native' = $env:NATIVE_RESULT
+            'build-nvidia-runtime' = $env:NVIDIA_RESULT
+            'build-windows' = $env:BUILD_RESULT
+            'verify-installed' = $env:INSTALL_RESULT
+            'verify-velopack' = $env:VELOPACK_RESULT
+            'replay-velopack' = $env:REPLAY_RESULT
+          }
+          $incomplete = $results.GetEnumerator() | Where-Object Value -ne 'success' |
+            ForEach-Object { "$($_.Key)=$($_.Value)" }
+          if ($incomplete) { throw "Windows build gates: $($incomplete -join ', ')" }
           "Windows build checks passed for: $env:GITHUB_SHA. Velopack remains an unpublished, disabled candidate; this does not certify native adoption or rollout." >> $env:GITHUB_STEP_SUMMARY
 
   build-signed-trial:

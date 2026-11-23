@@ -43,14 +43,19 @@ class ReleasePreflightTests(unittest.TestCase):
             return {name.strip() for name in match[1].strip('[]').split(',')}
 
         self.assertIn('uses: ./.github/workflows/windows-preflight.yml', jobs['preflight'])
-        self.assertIn('preflight', dependencies('velopack-native'))
-        self.assertTrue({'preflight', 'velopack-native'} <= dependencies('validate-source'))
+        early_gates = {'velopack-native', 'stimulation-firmware', 'validate-source'}
+        for gate in early_gates:
+            self.assertEqual(dependencies(gate), {'preflight'})
         self.assertIn('Run complete regression and scientific suites', jobs['validate-source'])
+        self.assertTrue(early_gates <= dependencies('build-nvidia-runtime'))
+        self.assertIn('build-nvidia-runtime', dependencies('build-windows'))
         self.assertIn('verify-velopack', dependencies('replay-velopack'))
-        self.assertTrue({'preflight', 'validate-source', 'build-windows', 'verify-installed',
-                         'velopack-native', 'verify-velopack', 'replay-velopack'} <= dependencies('certify'))
-        self.assertIn("$env:PREFLIGHT_RESULT -ne 'success'", jobs['certify'])
-        self.assertIn("$env:REPLAY_RESULT -ne 'success'", jobs['certify'])
+        required = early_gates | {'preflight', 'build-nvidia-runtime', 'build-windows',
+                                  'verify-installed', 'verify-velopack', 'replay-velopack'}
+        self.assertTrue(required <= dependencies('certify'))
+        for gate in required:
+            self.assertIn(f'needs.{gate}.result', jobs['certify'])
+        self.assertIn("Where-Object Value -ne 'success'", jobs['certify'])
         fast = (ROOT / '.github/workflows/windows-preflight.yml').read_text(encoding='utf-8')
         self.assertIn('python -S -m unittest -v tests.test_assistance_launch tests.test_release_preflight', fast)
         self.assertIn('tests.test_nvidia_manifest tests.test_nvidia_runtime_package', fast)

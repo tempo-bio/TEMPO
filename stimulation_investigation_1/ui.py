@@ -42,7 +42,14 @@ class ConditionGroup(QGroupBox):
         super().resizeEvent(event)
         margins = self.grid.contentsMargins()
         available = event.size().width() - margins.left() - margins.right()
-        self.arrange_rows(available >= self.fontMetrics().horizontalAdvance('0' * 24))
+        # Leave room for a label and an editable value at the active font size.
+        required = max((
+            label.fontMetrics().horizontalAdvance(label.text())
+            + field.minimumSizeHint().width()
+            + field.fontMetrics().horizontalAdvance('000000')
+            for label, field in self.rows if label is not None
+        ), default=0)
+        self.arrange_rows(available >= required + self.grid.horizontalSpacing())
 
     def arrange_rows(self, aligned):
         if aligned == self.aligned:

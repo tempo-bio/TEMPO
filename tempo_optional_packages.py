@@ -26,6 +26,7 @@ PACKAGES = {
         '0.2.0': '7347fd3f9e85de6c2bfa5ec32e5a5a85f916e9d93784edaf44272e451cded384',
         '0.2.1': 'c9824af94e08b2876cdeec3bcde0a497c3b0b009745a51503cfb14adb47e8e08',
         '0.2.2': 'a76b343122ee1d56b53b2e7710fe4d2b094140fe10662baea06272d378d6a9a8',
+        '0.2.3': '31566992b6f264bcedf012333dee72598efff1c766fc64ec6bc74130ef7f985d',
     }),
 }
 MAX_PACKAGE_BYTES = 2 * 1024 * 1024

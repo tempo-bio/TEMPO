@@ -7,12 +7,13 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 import cv2
 import numpy as np
 
 from scripts.calibrate_focus import read_reference
-from tempo_quality import assess
+from tempo_quality import assess, fit_profile
 from tempo_recording import NativeWriter, metadata_path
 
 
@@ -88,6 +89,16 @@ class FocusCalibrationTests(unittest.TestCase):
         self.assertIn('field 2, sharp.tif', result.stderr)
         self.assertIn('expected uint16 pixels', result.stderr)
         self.assertFalse(self.profile_path.exists())
+
+    def test_fit_passes_a_column_matrix_to_opencv(self):
+        records = [dict(frame=frame, field=field, partition=partition, label=label)
+                   for field, partition in ((1, 'train'), (2, 'test'))
+                   for label, frame in zip(('sharp', 'out_of_focus'), focal_planes(field))]
+        with patch('tempo_quality.cv2.solve', wraps=cv2.solve) as solve:
+            profile = fit_profile(records, self.signature, sensor_bits=12)
+        matrix, target = solve.call_args.args
+        self.assertEqual(target.shape, (matrix.shape[0], 1))
+        self.assertEqual(len(profile['weights']), 6)
 
     def test_reference_requires_native_16_bit_sensor_depth_and_accepts_legacy_8_bit(self):
         sidecar = metadata_path(self.reference)
