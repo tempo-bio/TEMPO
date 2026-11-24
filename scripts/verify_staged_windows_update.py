@@ -43,7 +43,7 @@ def stop_fixture_desktop(executable, env):
         dict(env, TEMPO_TEST_DESKTOP=str(executable)), timeout=30)
 
 
-def verify(files, evidence, old_service, commit, index_hash, route):
+def verify(files, evidence, old_service, commit, index_hash, target_version, route):
     if sys.platform != 'win32' or os.environ.get('GITHUB_ACTIONS') != 'true':
         raise ValueError('Use a disposable Windows GitHub Actions runner.')
     files, evidence = files.resolve(), evidence.resolve()
@@ -51,17 +51,17 @@ def verify(files, evidence, old_service, commit, index_hash, route):
     index = files / 'tempo-update-index.json'
     if hashlib.sha256(index.read_bytes()).hexdigest() != index_hash:
         raise ValueError('The versioned prerelease serves a different index.')
-    base_version, installer_hash = BASES['1.0.5']
+    base_version, installer_hash = BASES[target_version]
     installer = files / f'TEMPO_Setup_v{base_version}.exe'
     installer_record = file_record(installer)
     if installer_record['sha256'] != installer_hash:
-        raise ValueError('Use the exact public v1.0.4 installer.')
+        raise ValueError(f'Use the exact public v{base_version} installer.')
     # Load just the released transfer service. It will use its own default
     # transport and validation, with a redirect only for the index request.
     spec = spec_from_file_location('release_base_update_service', old_service)
     client = module_from_spec(spec)
     spec.loader.exec_module(client)
-    staged_url = 'https://github.com/tempo-bio/TEMPO/releases/download/v1.0.5/tempo-update-index.json'
+    staged_url = f'https://github.com/tempo-bio/TEMPO/releases/download/v{target_version}/tempo-update-index.json'
     failed_delta = None
     requests = []
 
@@ -102,7 +102,7 @@ def verify(files, evidence, old_service, commit, index_hash, route):
                            base_release=base, base_package=base_full)
             plan = service.plan(**options)
             target = plan.target
-            if (target.version != '1.0.5' or target.commit != commit or plan.kind != 'patch'
+            if (target.version != target_version or target.commit != commit or plan.kind != 'patch'
                     or len(plan.assets) != 1):
                 raise ValueError('The installed client did not select the intended signed delta.')
             repair_hash = next(item.sha256 for item in target.inventory if item.path == 'lib/app/TEMPORepair.exe')
@@ -163,5 +163,6 @@ if __name__ == '__main__':
         parser.add_argument('--' + name, type=Path, required=True)
     parser.add_argument('--commit', required=True)
     parser.add_argument('--index-hash', required=True)
+    parser.add_argument('--target-version', required=True, choices=('1.0.5', '1.0.6'))
     parser.add_argument('--route', choices=('delta', 'full-fallback'), required=True)
     verify(**vars(parser.parse_args()))

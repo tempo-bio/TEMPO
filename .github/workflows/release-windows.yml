@@ -27,7 +27,7 @@ on:
         description: 'SHA-256 of trial-contract.json when reusing signed trial packages'
         type: string
       staged_index_sha256:
-        description: 'Test the signed v1.0.5 prerelease index at this SHA-256 before stable activation'
+        description: 'Test the signed prerelease index at this SHA-256 before stable activation'
         type: string
 
 permissions:
@@ -803,6 +803,8 @@ jobs:
       BUILD_RUN: ${{ inputs.assemble_build_run }}
       BUILD_COMMIT: ${{ inputs.assemble_source_commit }}
       RELEASE_TAG: ${{ inputs.release_tag }}
+      BASE_VERSION: ${{ inputs.release_tag == 'v1.0.4' && '1.0.3' || contains(fromJSON('["v1.0.5","v1.0.6"]'), inputs.release_tag) && '1.0.4' || '' }}
+      BASE_PACKAGE_SHA256: ${{ inputs.release_tag == 'v1.0.4' && '77a72a70fef37bbd8c5b7748da74b2076870877b38280a09e70dd6a565e79ec4' || contains(fromJSON('["v1.0.5","v1.0.6"]'), inputs.release_tag) && 'd763ff116be380b2d14d910645a32f94a9ca043324fa1e223efc0c3e0a70ff77' || '' }}
     runs-on: windows-2025
     timeout-minutes: 65
     steps:
@@ -856,11 +858,11 @@ jobs:
               throw 'Packager checksum mismatch'
           }
       - name: Retrieve the exact published update base and installer
-        if: ${{ inputs.release_tag == 'v1.0.4' || inputs.release_tag == 'v1.0.5' }}
+        if: ${{ env.BASE_VERSION != '' }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $baseVersion = if ($env:RELEASE_TAG -ceq 'v1.0.5') { '1.0.4' } else { '1.0.3' }
+          $baseVersion = $env:BASE_VERSION
           for ($attempt = 1; $attempt -le 3; $attempt++) {
               gh release download "v$baseVersion" --repo $env:GITHUB_REPOSITORY --pattern "TEMPO.Bio.Desktop-$baseVersion-full.nupkg" --dir delta-base --clobber
               if ($LASTEXITCODE -eq 0) { break }
@@ -939,12 +941,9 @@ jobs:
           public.write_bytes(b'{"tempo-stable-1": "4G5Gdmfrxu5bbK14sLuFla3XOGsimiEtFPtQcHqJ28Q="}\n')
           require(digest(public) == "92f5a51b932c66d4b3fc0a4b88491405ea231e83e5167219666433bb0e8d91d7",
                   "Public key file differs from the reviewed release trust map")
-          previous = {
-              "1.0.4": ("1.0.3", "77a72a70fef37bbd8c5b7748da74b2076870877b38280a09e70dd6a565e79ec4"),
-              "1.0.5": ("1.0.4", "d763ff116be380b2d14d910645a32f94a9ca043324fa1e223efc0c3e0a70ff77"),
-          }.get(VERSION)
-          if previous:
-              base_version, base_sha256 = previous
+          base_version = os.environ.get("BASE_VERSION")
+          if base_version:
+              base_sha256 = os.environ["BASE_PACKAGE_SHA256"]
               base = Path(f"delta-base/TEMPO.Bio.Desktop-{base_version}-full.nupkg")
               require(digest(base) == base_sha256
                       and pin["patch_sha256"] == "527806cab5adb9b752209ac109921954e447226958d9f344cae085ab85004026"
@@ -972,7 +971,7 @@ jobs:
                   "source_regressions": digest(source_report),
               },
           }
-          if previous:
+          if base_version:
               evidence["retained_updater_from"] = f"v{base_version}"
               evidence["native_test_updater_sha256"] = identity["updater_sha256"]
           Path("native-evidence.json").write_text(json.dumps(evidence, sort_keys=True), encoding="utf-8")
@@ -985,7 +984,7 @@ jobs:
           $tools = 'inputs/velopack-production-feature-candidate/production-target/x86_64-pc-windows-msvc/release'
           $updater = "$tools/update.exe"
           $tested = @()
-          if ($env:RELEASE_TAG -cin @('v1.0.4','v1.0.5')) {
+          if ($env:BASE_VERSION) {
               # Run the reviewed assembly script from the workflow revision.
               # The source checkout and built payload stay at BUILD_COMMIT.
               git show "${env:GITHUB_SHA}:scripts/build_velopack_release.py" | Set-Content scripts/build_velopack_release.py -Encoding utf8NoBOM
@@ -997,10 +996,11 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Copy-Item stable-public-keys.json,reviewed-pin.json,native-evidence.json,$updater,"$tools/setup.exe" assembled/
       - name: Generate and verify the delta using the installed updater
-        if: ${{ inputs.release_tag == 'v1.0.4' || inputs.release_tag == 'v1.0.5' }}
+        if: ${{ env.BASE_VERSION != '' }}
         run: |
           @'
           import json
+          import os
           from pathlib import Path
           import zipfile
           from scripts.build_velopack_candidate import file_record
@@ -1011,10 +1011,7 @@ jobs:
 
           base, = Path('delta-base').resolve().glob('*-full.nupkg')
           base_record = file_record(base)
-          expected = {
-              '1.0.4': '77a72a70fef37bbd8c5b7748da74b2076870877b38280a09e70dd6a565e79ec4',
-              '1.0.5': 'd763ff116be380b2d14d910645a32f94a9ca043324fa1e223efc0c3e0a70ff77',
-          }[VERSION]
+          expected = os.environ['BASE_PACKAGE_SHA256']
           if base_record['sha256'] != expected:
               raise SystemExit('Published base checksum changed')
           output = Path('assembled').resolve()
@@ -1052,7 +1049,7 @@ jobs:
   verify-release-delta:
     name: Test the Windows update from the published base installer
     needs: assemble
-    if: ${{ (inputs.release_tag == 'v1.0.4' || inputs.release_tag == 'v1.0.5') && needs.assemble.result == 'success' }}
+    if: ${{ contains(fromJSON('["v1.0.4","v1.0.5","v1.0.6"]'), inputs.release_tag) && needs.assemble.result == 'success' }}
     runs-on: windows-2025
     timeout-minutes: 40
     steps:
@@ -1074,7 +1071,8 @@ jobs:
         run: |
           python -m pip install --require-hashes --no-deps -r tests/fixtures/velopack/requirements-windows.lock
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          $baseVersion = if ($env:RELEASE_TAG -ceq 'v1.0.5') { '1.0.4' } else { '1.0.3' }
+          $baseVersion = python -c "import os; from scripts.verify_release_delta import BASES; print(BASES[os.environ['RELEASE_TAG'][1:]][0])"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           for ($attempt = 1; $attempt -le 3; $attempt++) {
               gh release download "v$baseVersion" --repo $env:GITHUB_REPOSITORY --pattern "TEMPO.Bio.Desktop-$baseVersion-full.nupkg" --pattern "TEMPO_Setup_v$baseVersion.exe" --pattern "tempo-update-v$baseVersion.json" --dir base --clobber
               if ($LASTEXITCODE -eq 0) { break }
@@ -1093,7 +1091,7 @@ jobs:
           if-no-files-found: warn
 
   verify-staged-update:
-    name: Verify the signed v1.0.4 to v1.0.5 update (${{ matrix.route }})
+    name: Verify the signed v1.0.4 to ${{ inputs.release_tag }} update (${{ matrix.route }})
     if: ${{ inputs.staged_index_sha256 != '' }}
     runs-on: windows-2025
     timeout-minutes: 55
@@ -1119,13 +1117,13 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if ($env:RELEASE_TAG -cne 'v1.0.5' -or $env:INDEX_SHA256 -cnotmatch '^[0-9a-f]{64}$' -or
-              $env:TARGET_COMMIT -cnotmatch '^[0-9a-f]{40}$') { throw 'Specify v1.0.5, its exact commit and staged index SHA-256' }
-          $target = git rev-parse 'v1.0.5^{commit}'
+          if ($env:RELEASE_TAG -cnotin @('v1.0.5','v1.0.6') -or $env:INDEX_SHA256 -cnotmatch '^[0-9a-f]{64}$' -or
+              $env:TARGET_COMMIT -cnotmatch '^[0-9a-f]{40}$') { throw 'Specify a reviewed prerelease tag, its exact commit and staged index SHA-256' }
+          $target = git rev-parse "${env:RELEASE_TAG}^{commit}"
           if ($LASTEXITCODE -ne 0 -or $target -cne $env:TARGET_COMMIT) { throw 'The prerelease tag points at a different commit' }
-          $state = gh release view v1.0.5 --repo $env:GITHUB_REPOSITORY --json isDraft,isPrerelease | ConvertFrom-Json
+          $state = gh release view $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY --json isDraft,isPrerelease | ConvertFrom-Json
           if ($LASTEXITCODE -ne 0 -or $state.isDraft -ne $false -or $state.isPrerelease -ne $true) { throw 'Expected the versioned public prerelease before stable activation' }
-          gh release download v1.0.5 --repo $env:GITHUB_REPOSITORY --pattern 'tempo-update-index.json' --pattern 'TEMPORepair.exe' --dir staged
+          gh release download $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY --pattern 'tempo-update-index.json' --pattern 'TEMPORepair.exe' --dir staged
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           gh release download v1.0.4 --repo $env:GITHUB_REPOSITORY --pattern 'TEMPO_Setup_v1.0.4.exe' --pattern 'TEMPO.Bio.Desktop-1.0.4-full.nupkg' --dir staged
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -1137,13 +1135,13 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & .\.venv_update\Scripts\python.exe -m pip install --require-hashes --no-deps -r tests/fixtures/velopack/requirements-windows.lock
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          & .\.venv_update\Scripts\python.exe -m scripts.verify_staged_windows_update --files staged --evidence evidence --old-service staged/base-update-service.py --commit "$env:TARGET_COMMIT" --index-hash "$env:INDEX_SHA256" --route "$env:ROUTE"
+          & .\.venv_update\Scripts\python.exe -m scripts.verify_staged_windows_update --files staged --evidence evidence --old-service staged/base-update-service.py --commit "$env:TARGET_COMMIT" --index-hash "$env:INDEX_SHA256" --target-version ($env:RELEASE_TAG.Substring(1)) --route "$env:ROUTE"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Retain the signed update evidence
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
-          name: TEMPO_v1.0.5_signed_update_${{ matrix.route }}
+          name: TEMPO_${{ inputs.release_tag }}_signed_update_${{ matrix.route }}
           path: evidence/
           retention-days: 14
           if-no-files-found: warn

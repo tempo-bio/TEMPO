@@ -8,7 +8,7 @@ import sys
 import traceback
 
 APP_DISPLAY_NAME = 'TEMPO-C'
-VERSION = '1.0.5'
+VERSION = '1.0.6'
 
 
 def configure_verification_environment():

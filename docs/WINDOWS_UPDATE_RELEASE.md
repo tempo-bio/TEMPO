@@ -6,7 +6,7 @@ Use this procedure to turn a reviewed Windows build into an updater-enabled Velo
 
 1. Run **Build & Package Windows Release** on the intended release branch with `release_tag` set to the application version, including its leading `v`. Record the successful build run ID and full source commit.
 2. Dispatch the same workflow on that branch with the same `release_tag`, the completed run ID in `assemble_build_run`, and its full SHA in `assemble_source_commit`. Leave `smoke_source_run` empty for a new assembly. The workflow uses the earlier run's build and native evidence, writes the reviewed pin and certification report, and smoke-tests the exact installer on a clean Windows runner.
-3. Retrieve `TEMPO_<tag>_stable_channel` and `TEMPO_<tag>_release_smoke`. Review the smoke results, including the startup test with files left by an old uninstall. For v1.0.5, also review `TEMPO_v1.0.5_delta_upgrade`, which tests replacement from the published v1.0.4 base. Keep the exact installer, full package, repair companion, matching public keys, reviewed pin, and certification report for signing and retention.
+3. Retrieve `TEMPO_<tag>_stable_channel` and `TEMPO_<tag>_release_smoke`. Review the smoke results, including the startup test with files left by an old uninstall. For v1.0.6, also review `TEMPO_v1.0.6_delta_upgrade`, which tests replacement from the published v1.0.4 base. Keep the exact installer, full package, repair companion, matching public keys, reviewed pin, and certification report for signing and retention.
 4. Sign metadata for those exact packages. After approval, stage the binaries on the versioned prerelease and verify the served assets before advertising the update. [Sign the update metadata](#sign-the-update-metadata)
 
 ## Sign the update metadata
@@ -17,7 +17,9 @@ In the signing environment, run `python -m scripts.package_windows_updates --hel
 
 To advertise a delta, supply the patch specification, the exact base package, and the Windows delta verification report. For NVIDIA support, pass the descriptor from the same build as the runtime parts. Keep the resulting signed release record, index, package, and any deltas together for release-set preparation.
 
-For the v1.0.5 upgrade trial, start from the published v1.0.4 Velopack installation. Exercise the signed update path with the exact candidate packages and verify that the desktop starts and still sees the saved workspace, drafts, recordings, and analysis outputs.
+For the v1.0.6 upgrade trial, start from the published v1.0.4 Velopack installation. Exercise the signed update path with the exact candidate packages and verify that the desktop starts and still sees the saved workspace, drafts, recordings, and analysis outputs.
+
+Use the signed index from the versioned v1.0.5 trial as the previous index for v1.0.6 stable-channel signing. It includes both v1.0.4 and v1.0.5, so the installed v1.0.5 trial can use its own recovery base when downloading the v1.0.6 full package.
 
 ## Review release acceptance
 
@@ -104,7 +106,7 @@ This is a read-only check. It requires the versioned public prerelease, verifies
 
 After all applicable acceptance and durable-retention reviews pass and activation is authorized, publish the exact retained index last. For stable delivery, upload the index to the versioned prerelease after its other assets have passed, then promote the approved release to stable/latest as the final eligibility change. Prerelease delivery uses the separately reserved `updates-prerelease` feed location. Preserve the signed channel in both cases.
 
-For v1.0.5, after uploading the staged index and before promoting the release, run **Build & Package Windows Release** with `release_tag=v1.0.5`, the certified build commit in `assemble_source_commit`, and the exact index SHA-256 in `staged_index_sha256`. Both Windows jobs must succeed. They use the published v1.0.4 installer and update service with the versioned index, exercise the delta and full-download fallback, and check that the updated desktop confirms the signed installation.
+For v1.0.6, after uploading the staged index and before promoting the release, run **Build & Package Windows Release** with `release_tag=v1.0.6`, the certified build commit in `assemble_source_commit`, and the exact index SHA-256 in `staged_index_sha256`. Both Windows jobs must succeed. They use the published v1.0.4 installer and update service with the versioned index, exercise the delta and full-download fallback, and check that the updated desktop confirms the signed installation.
 
 Repeat the read-only check with `--include-feed`. It checks actual served assets first and the configured client feed URL last. Stable verification also requires the exact target to be stable/latest; prerelease verification requires the matching prerelease flag. Expired release metadata cannot pass publication checks. An index mismatch, stale source tag, unsafe redirect or corrupted asset blocks verification. These commands perform no public writes and never enable updates.
 

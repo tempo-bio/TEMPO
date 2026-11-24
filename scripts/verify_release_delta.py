@@ -17,6 +17,7 @@ from tempo_update_recovery import _verify_app, _verify_owner
 BASES = {
     '1.0.4': ('1.0.3', '7072d1ac82c9aa75f93bce3b8365944b24f51871aa991e0109e7c0e83c9d326b'),
     '1.0.5': ('1.0.4', '36a4c591c8921fb9a4d45c7631b2cbaa72a58a5f1c9abeb7d8c82543e0391fcc'),
+    '1.0.6': ('1.0.4', '36a4c591c8921fb9a4d45c7631b2cbaa72a58a5f1c9abeb7d8c82543e0391fcc'),
 }
 
 
